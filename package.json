@@ -5,6 +5,14 @@
   "version": "1.20.1",
   "publisher": "SJZero",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jasonkfirth/fb-vscode-language.git"
+  },
+  "homepage": "https://github.com/jasonkfirth/fb-vscode-language",
+  "bugs": {
+    "url": "https://github.com/jasonkfirth/fb-vscode-language/issues"
+  },
   "main": "./extension.js",
   "icon": "assets/icon.png",
   "extensionKind": [

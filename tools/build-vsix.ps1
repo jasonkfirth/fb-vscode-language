@@ -197,7 +197,7 @@ $manifestText = @"
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
   <Metadata>
-    <Identity Language="en-US" Id="$(Escape-Xml "$($package.publisher).$($package.name)")" Version="$(Escape-Xml $package.version)" Publisher="$(Escape-Xml $package.publisher)" />
+    <Identity Language="en-US" Id="$(Escape-Xml $package.name)" Version="$(Escape-Xml $package.version)" Publisher="$(Escape-Xml $package.publisher)" />
     <DisplayName>$(Escape-Xml $package.displayName)</DisplayName>
     <Description xml:space="preserve">$(Escape-Xml $package.description)</Description>
     <Categories>Programming Languages,Snippets</Categories>
@@ -229,14 +229,30 @@ $contentTypesText = @"
   <Default Extension="js" ContentType="application/javascript" />
   <Default Extension="md" ContentType="text/markdown" />
   <Default Extension="png" ContentType="image/png" />
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />
   <Default Extension="txt" ContentType="text/plain" />
   <Default Extension="xml" ContentType="text/xml" />
+  <Override PartName="/extension.vsixmanifest" ContentType="text/xml" />
   <Override PartName="/extension/LICENSE" ContentType="text/plain" />
 </Types>
 "@
 
+$relationshipsText = @"
+<?xml version="1.0" encoding="utf-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="vsix" Type="http://schemas.microsoft.com/developer/vsx-schema/2011" Target="extension.vsixmanifest" />
+</Relationships>
+"@
+
 Write-Utf8NoBomFile -Path (Join-Path $stagingRoot "extension.vsixmanifest") -Content $manifestText
 Write-Utf8NoBomFile -Path (Join-Path $stagingRoot "[Content_Types].xml") -Content $contentTypesText
+
+$relationshipsDirectory = Join-Path $stagingRoot "_rels"
+if (-not (Test-Path -LiteralPath $relationshipsDirectory)) {
+    New-Item -ItemType Directory -Path $relationshipsDirectory | Out-Null
+}
+
+Write-Utf8NoBomFile -Path (Join-Path $relationshipsDirectory ".rels") -Content $relationshipsText
 
 Add-DirectoryToZipArchive -SourceDirectory $stagingRoot -ArchivePath $vsixPath
 Assert-VsixJsonEntryIsValidUtf8NoBom -ArchivePath $vsixPath -EntryPath "extension/package.json"
