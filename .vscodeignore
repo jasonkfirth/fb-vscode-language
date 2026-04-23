@@ -1,0 +1,10 @@
+.git/
+.vscode/
+.vscode-test/
+node_modules/
+dist/
+tests/
+tools/
+debug.log
+*.vsix
+*.vsix.zip

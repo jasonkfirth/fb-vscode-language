@@ -1,0 +1,488 @@
+{
+  "Function": {
+    "prefix": "function",
+    "body": [
+      "Function ${1:name}(${2}) As ${3:Integer}",
+      "    ${0}",
+      "End Function"
+    ],
+    "description": "Function block"
+  },
+  "Sub": {
+    "prefix": "sub",
+    "body": [
+      "Sub ${1:name}(${2})",
+      "    ${0}",
+      "End Sub"
+    ],
+    "description": "Sub block"
+  },
+  "If": {
+    "prefix": "if",
+    "body": [
+      "If ${1:condition} Then",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "If block"
+  },
+  "For": {
+    "prefix": "for",
+    "body": [
+      "For ${1:i} = ${2:0} To ${3:10}",
+      "    ${0}",
+      "Next ${1:i}"
+    ],
+    "description": "For loop"
+  },
+  "Select Case": {
+    "prefix": "select",
+    "body": [
+      "Select Case ${1:expr}",
+      "Case ${2:value}",
+      "    ${0}",
+      "Case Else",
+      "End Select"
+    ],
+    "description": "Select Case block"
+  },
+  "Select Case As Const": {
+    "prefix": "selectconst",
+    "body": [
+      "Select Case As Const ${1:expr}",
+      "Case ${2:value}",
+      "    ${0}",
+      "Case Else",
+      "End Select"
+    ],
+    "description": "Select Case As Const block"
+  },
+  "Type": {
+    "prefix": "type",
+    "body": [
+      "Type ${1:Name}",
+      "    ${0}",
+      "End Type"
+    ],
+    "description": "Type block"
+  },
+  "Option Explicit": {
+    "prefix": "optionexplicit",
+    "body": [
+      "Option Explicit",
+      "${0}"
+    ],
+    "description": "Require explicit declarations in the current module"
+  },
+  "On Error": {
+    "prefix": "onerror",
+    "body": [
+      "On Error Goto ${1:error_handler}",
+      "${0}",
+      "",
+      "${1:error_handler}:",
+      "    Resume Next"
+    ],
+    "description": "Install a simple error handler with Resume Next recovery"
+  },
+  "Resume Next": {
+    "prefix": "resumenext",
+    "body": [
+      "Resume Next"
+    ],
+    "description": "Resume execution at the next statement from an error handler"
+  },
+  "Line Input": {
+    "prefix": "lineinput",
+    "body": [
+      "Dim As String ${1:text}",
+      "Line Input \"${2:Prompt: }\"; ${1:text}",
+      "${0}"
+    ],
+    "description": "Read a full line from the console"
+  },
+  "Line Input File": {
+    "prefix": "lineinputfile",
+    "body": [
+      "Dim As Integer ${1:file_num} = FreeFile()",
+      "Dim As String ${2:text}",
+      "Open \"${3:data.txt}\" For Input As #${1:file_num}",
+      "Line Input #${1:file_num}, ${2:text}",
+      "Close #${1:file_num}",
+      "${0}"
+    ],
+    "description": "Read a full line from an open file"
+  },
+  "ScreenRes": {
+    "prefix": "screenres",
+    "body": [
+      "ScreenRes ${1:640}, ${2:480}, ${3:32}",
+      "${0}"
+    ],
+    "description": "Open a graphics screen"
+  },
+  "Draw String": {
+    "prefix": "drawstring",
+    "body": [
+      "Draw String (${1:x}, ${2:y}), \"${3:Hello world}\", ${4:RGB(255, 255, 255)}",
+      "${0}"
+    ],
+    "description": "Draw text in a graphics context"
+  },
+  "Palette Using": {
+    "prefix": "paletteusing",
+    "body": [
+      "Dim Shared As UInteger ${1:palette}(0 To ${2:255})",
+      "Palette Using ${1:palette}(0)",
+      "${0}"
+    ],
+    "description": "Apply a palette array to an 8-bit graphics mode"
+  },
+  "ImageCreate": {
+    "prefix": "imagecreate",
+    "body": [
+      "Dim As Any Ptr ${1:image} = ImageCreate(${2:128}, ${3:128}, ${4:RGB(0, 0, 0)})",
+      "If( ${1:image} <> 0 ) Then",
+      "    ${0}",
+      "    ImageDestroy(${1:image})",
+      "End If"
+    ],
+    "description": "Create and clean up an FB.IMAGE buffer"
+  },
+  "ImageInfo": {
+    "prefix": "imageinfo",
+    "body": [
+      "Dim As Any Ptr ${1:image} = ImageCreate(${2:45}, ${3:37})",
+      "Dim As Integer ${4:w}, ${5:h}, ${6:bpp}, ${7:pitch}, ${8:size}",
+      "Dim As Byte Ptr ${9:pixdata}",
+      "Dim As Integer ${10:result}",
+      "",
+      "If( ${1:image} = 0 ) Then",
+      "    Print \"ImageCreate failed\"",
+      "Else",
+      "    ${10:result} = ImageInfo(${1:image}, ${4:w}, ${5:h}, ${6:bpp}, ${7:pitch}, ${9:pixdata}, ${8:size})",
+      "    If( ${10:result} = 0 ) Then",
+      "        ${0}",
+      "    End If",
+      "    ImageDestroy(${1:image})",
+      "End If"
+    ],
+    "description": "Query FB.IMAGE metadata with ImageInfo"
+  },
+  "ScreenLock": {
+    "prefix": "screenlock",
+    "body": [
+      "ScreenLock",
+      "    ${0}",
+      "ScreenUnlock"
+    ],
+    "description": "Lock the graphics framebuffer for direct updates"
+  },
+  "ThreadCreate": {
+    "prefix": "threadcreate",
+    "body": [
+      "Function ${1:worker}(ByVal ${2:userdata} As Any Ptr) As Any Ptr",
+      "    ${0}",
+      "    Return 0",
+      "End Function",
+      "",
+      "Dim As Any Ptr ${3:thread_handle} = ThreadCreate(@${1:worker}, ${4:0})",
+      "If( ${3:thread_handle} <> 0 ) Then",
+      "    ThreadWait(${3:thread_handle})",
+      "End If"
+    ],
+    "description": "Create a worker thread and wait for it to finish"
+  },
+  "Mutex Thread Pair": {
+    "prefix": "mutexthread",
+    "body": [
+      "Declare Sub ${1:worker}(ByVal ${2:param} As Any Ptr)",
+      "",
+      "Dim Shared As Any Ptr ${3:lock}",
+      "Dim As Any Ptr ${4:thread_id}",
+      "",
+      "${3:lock} = MutexCreate()",
+      "If( ${3:lock} = 0 ) Then",
+      "    Print \"Error creating mutex\"",
+      "    End 1",
+      "End If",
+      "",
+      "${4:thread_id} = ThreadCreate(@${1:worker}, 0)",
+      "If( ${4:thread_id} <> 0 ) Then",
+      "    ThreadWait(${4:thread_id})",
+      "End If",
+      "MutexDestroy(${3:lock})",
+      "",
+      "Sub ${1:worker}(ByVal ${2:param} As Any Ptr)",
+      "    MutexLock ${3:lock}",
+      "    ${0}",
+      "    MutexUnlock ${3:lock}",
+      "End Sub"
+    ],
+    "description": "Create a mutex and coordinate a worker thread with it"
+  },
+  "ScreenEvent Loop": {
+    "prefix": "screenevent",
+    "body": [
+      "#include \"fbgfx.bi\"",
+      "Using FB",
+      "",
+      "ScreenRes ${1:640}, ${2:480}, ${3:32}",
+      "",
+      "Dim As EVENT ${4:e}",
+      "Do",
+      "    While( ScreenEvent(@${4:e}) <> 0 )",
+      "        Select Case As Const ${4:e}.type",
+      "        Case EVENT_KEY_PRESS",
+      "            ${0}",
+      "        Case EVENT_WINDOW_CLOSE",
+      "            Exit Do",
+      "        End Select",
+      "    Wend",
+      "",
+      "    Sleep 50, 1",
+      "Loop"
+    ],
+    "description": "Poll the graphics event queue with ScreenEvent"
+  },
+  "GetMouse": {
+    "prefix": "getmouse",
+    "body": [
+      "Dim As Integer ${1:x}, ${2:y}, ${3:z}, ${4:buttons}",
+      "GetMouse ${1:x}, ${2:y}, ${3:z}, ${4:buttons}",
+      "If( ${1:x} <> -1 ) Then",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "Read mouse position, wheel, and button state"
+  },
+  "SetMouse": {
+    "prefix": "setmouse",
+    "body": [
+      "SetMouse ${1:200}, ${2:150}, ${3:1}",
+      "${0}"
+    ],
+    "description": "Set mouse position and visibility"
+  },
+  "MultiKey Loop": {
+    "prefix": "multikey",
+    "body": [
+      "Do",
+      "    If MultiKey(${1:SC_ESCAPE}) Then Exit Do",
+      "    ${0}",
+      "Loop"
+    ],
+    "description": "Poll keyboard state with MultiKey"
+  },
+  "Open TCP Client": {
+    "prefix": "opentcp",
+    "body": [
+      "Dim As Integer ${1:file_num} = FreeFile()",
+      "If( OPEN TCP( \"host=${2:127.0.0.1},port=${3:8080}\" As #${1:file_num} ) <> 0 ) Then",
+      "    Print \"OPEN TCP failed, ERR=\"; Err",
+      "Else",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "Open a TCP client connection with FreeBASIC's OPEN TCP syntax"
+  },
+  "HTTP GET TCP": {
+    "prefix": "httpget",
+    "body": [
+      "Dim As Integer ${1:file_num} = FreeFile()",
+      "If( OPEN TCP( \"host=${2:example.com},port=${3:80}\" As #${1:file_num} ) <> 0 ) Then",
+      "    Print \"OPEN TCP failed, ERR=\"; Err",
+      "Else",
+      "    Print #${1:file_num}, \"GET ${4:/} HTTP/1.0\"",
+      "    Print #${1:file_num}, \"Host: ${2:example.com}\"",
+      "    Print #${1:file_num},",
+      "    While( EOF(${1:file_num}) = 0 )",
+      "        Line Input #${1:file_num}, ${5:line_text}",
+      "        Print ${5:line_text}",
+      "    Wend",
+      "    Close #${1:file_num}",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "Open a TCP connection and issue a simple HTTP GET request"
+  },
+  "Open TCP Server": {
+    "prefix": "opentcpserver",
+    "body": [
+      "Dim As Integer ${1:server_file} = FreeFile()",
+      "If( OPEN TCP SERVER( \"host=${2:127.0.0.1},port=${3:8080},backlog=${4:1}\" As #${1:server_file} ) <> 0 ) Then",
+      "    Print \"OPEN TCP SERVER failed, ERR=\"; Err",
+      "Else",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "Open a listening TCP socket with FreeBASIC's OPEN TCP SERVER syntax"
+  },
+  "HTTP Server TCP": {
+    "prefix": "httpserver",
+    "body": [
+      "Dim As Integer ${1:server_file} = FreeFile()",
+      "Dim As Integer ${2:client_file}",
+      "",
+      "If( OPEN TCP SERVER( \"host=${3:127.0.0.1},port=${4:8080},backlog=${5:5}\" As #${1:server_file} ) <> 0 ) Then",
+      "    Print \"OPEN TCP SERVER failed, ERR=\"; Err",
+      "Else",
+      "    ${2:client_file} = TCP ACCEPT( #${1:server_file} )",
+      "    If( ${2:client_file} <> 0 ) Then",
+      "        Print #${2:client_file}, \"HTTP/1.0 200 OK\"",
+      "        Print #${2:client_file}, \"Content-Type: text/plain\"",
+      "        Print #${2:client_file},",
+      "        Print #${2:client_file}, \"Hello from FreeBASIC\"",
+      "        Close #${2:client_file}",
+      "    End If",
+      "    Close #${1:server_file}",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "Accept one TCP client and return a simple HTTP response"
+  },
+  "TCP Accept": {
+    "prefix": "tcpaccept",
+    "body": [
+      "Dim As Integer ${1:client_file}",
+      "${1:client_file} = TCP ACCEPT( #${2:server_file} )",
+      "If( ${1:client_file} = 0 ) Then",
+      "    Print \"TCP ACCEPT failed, ERR=\"; Err",
+      "Else",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "Accept a client connection from an OPEN TCP SERVER socket"
+  },
+  "Music Play": {
+    "prefix": "musicplay",
+    "body": [
+      "Dim As String ${1:filename} = \"${2:good-morning-to-all.ogg}\"",
+      "Dim As Long ${3:music_id}",
+      "${3:music_id} = MUSIC PLAY( ${1:filename} )",
+      "${0}"
+    ],
+    "description": "Start music playback with the MUSIC command family"
+  },
+  "SFX Load And Play": {
+    "prefix": "sfxplay",
+    "body": [
+      "Dim As String ${1:filename} = \"${2:buzzer.wav}\"",
+      "SFX LOAD ${3:1}, ${1:filename}",
+      "SFX PLAY ${3:1}",
+      "${0}"
+    ],
+    "description": "Load a short sound effect and play it with SFX"
+  },
+  "SFX Loop Channel": {
+    "prefix": "sfxloopchannel",
+    "body": [
+      "SFX LOAD ${1:1}, \"${2:buzzer.wav}\"",
+      "SFX LOOP ${3:2}, ${1:1}",
+      "${0}",
+      "SFX STOP CHANNEL, ${3:2}"
+    ],
+    "description": "Loop a sound effect on a specific channel"
+  },
+  "Audio Play": {
+    "prefix": "audioplay",
+    "body": [
+      "Dim As String ${1:filename} = \"${2:clown-laugh.mp3}\"",
+      "Dim As Long ${3:result}",
+      "${3:result} = AUDIO PLAY( ${1:filename} )",
+      "If( ${3:result} = 0 ) Then",
+      "    ${0}",
+      "    AUDIO STOP",
+      "End If"
+    ],
+    "description": "Play a single audio file with the AUDIO command family"
+  },
+  "Stream Open": {
+    "prefix": "streamopen",
+    "body": [
+      "Dim As String ${1:filename} = \"${2:clown-laugh.mp3}\"",
+      "Dim As Long ${3:result}",
+      "${3:result} = STREAM OPEN( ${1:filename} )",
+      "If( ${3:result} = 0 ) Then",
+      "    STREAM PLAY",
+      "    Print \"STREAM POSITION() =\"; STREAM POSITION()",
+      "    ${0}",
+      "    STREAM STOP",
+      "End If"
+    ],
+    "description": "Open and control an audio stream with STREAM commands"
+  },
+  "Stream Seek": {
+    "prefix": "streamseek",
+    "body": [
+      "Dim As Long ${1:result}",
+      "${1:result} = STREAM OPEN( \"${2:clown-laugh.mp3}\" )",
+      "If( ${1:result} = 0 ) Then",
+      "    STREAM PLAY",
+      "    ${1:result} = STREAM SEEK( ${3:500} )",
+      "    Print \"STREAM SEEK returned\"; ${1:result}",
+      "    ${0}",
+      "    STREAM STOP",
+      "End If"
+    ],
+    "description": "Seek within an open audio stream"
+  },
+  "MIDI Open": {
+    "prefix": "midiopen",
+    "body": [
+      "Dim As Long ${1:result}",
+      "${1:result} = MIDI OPEN( ${2:0} )",
+      "If( ${1:result} = 0 ) Then",
+      "    ${0}",
+      "    MIDI CLOSE",
+      "End If"
+    ],
+    "description": "Open a MIDI output device with MIDI OPEN"
+  },
+  "MIDI Send": {
+    "prefix": "midisend",
+    "body": [
+      "Dim As Long ${1:result}",
+      "${1:result} = MIDI OPEN( ${2:0} )",
+      "If( ${1:result} = 0 ) Then",
+      "    ${1:result} = MIDI SEND( &H90, ${3:60}, ${4:100} )",
+      "    Sleep ${5:250}",
+      "    ${1:result} = MIDI SEND( &H80, ${3:60}, 0 )",
+      "    MIDI CLOSE",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "Open a MIDI device and send note-on/note-off messages"
+  },
+  "Capture Start": {
+    "prefix": "capturestart",
+    "body": [
+      "Dim As Long ${1:result}",
+      "${1:result} = CAPTURE START()",
+      "If( ${1:result} = 0 ) Then",
+      "    ${0}",
+      "    CAPTURE STOP",
+      "End If"
+    ],
+    "description": "Start audio capture with the CAPTURE command family"
+  },
+  "Capture Read": {
+    "prefix": "captureread",
+    "body": [
+      "Dim ${1:buffer}(0 To ${2:1023}) As Single",
+      "Dim As Long ${3:available_frames}, ${4:frames_read}",
+      "",
+      "If( CAPTURE START() = 0 ) Then",
+      "    Sleep ${5:400}",
+      "    ${3:available_frames} = CAPTURE AVAILABLE()",
+      "    If( ${3:available_frames} > ${2:1023} ) Then ${3:available_frames} = ${2:1023}",
+      "    If( ${3:available_frames} > 0 ) Then",
+      "        ${4:frames_read} = CAPTURE READ( @${1:buffer}(0), ${3:available_frames} )",
+      "    End If",
+      "    ${0}",
+      "    CAPTURE STOP",
+      "End If"
+    ],
+    "description": "Start capture and read available frames into a sample buffer"
+  }
+}

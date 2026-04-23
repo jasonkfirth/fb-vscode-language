@@ -1,0 +1,77 @@
+{
+  "name": "fb-vscode-language",
+  "displayName": "FreeBASIC Language",
+  "description": "Language support for FreeBASIC in Visual Studio Code.",
+  "version": "1.20.1",
+  "publisher": "SJZero",
+  "license": "MIT",
+  "main": "./extension.js",
+  "icon": "assets/icon.png",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "This extension provides language metadata, syntax highlighting, snippets, and lightweight IntelliSense helpers."
+    },
+    "virtualWorkspaces": {
+      "supported": true,
+      "description": "This extension does not require local process execution."
+    }
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "scripts": {
+    "build:grammar": "powershell -ExecutionPolicy Bypass -File .\\tools\\build-freebasic-grammar.ps1",
+    "audit:grammar": "powershell -ExecutionPolicy Bypass -File .\\tools\\audit-freebasic-coverage.ps1",
+    "test:smoke": "powershell -ExecutionPolicy Bypass -File .\\tests\\test-smoke.ps1",
+    "test:unit": "powershell -ExecutionPolicy Bypass -File .\\tests\\test-unit.ps1",
+    "test": "npm run test:smoke && npm run test:unit",
+    "build": "npm run build:grammar",
+    "package:vsix": "powershell -ExecutionPolicy Bypass -File .\\tools\\build-vsix.ps1"
+  },
+  "keywords": [
+    "freebasic",
+    "basic",
+    "syntax",
+    "language"
+  ],
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "activationEvents": [
+    "onLanguage:freebasic"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "freebasic",
+        "aliases": [
+          "FreeBASIC",
+          "freebasic"
+        ],
+        "extensions": [
+          ".bas",
+          ".bi"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "freebasic",
+        "scopeName": "source.freebasic",
+        "path": "./syntaxes/freebasic.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "freebasic",
+        "path": "./snippets/freebasic.code-snippets"
+      }
+    ]
+  }
+}
