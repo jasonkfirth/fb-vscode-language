@@ -6,14 +6,14 @@
 
     Purpose:
 
-        Run the JavaScript unit tests for the reusable parser
-        and grammar-data helpers.
+        Run the JavaScript unit tests for parser, editor, workspace,
+        grammar-data, and compiler-diagnostic helpers.
 
     Responsibilities:
 
         * prefer a normal Node.js installation when available
         * fall back to VS Code's bundled Electron runtime in Node mode
-        * execute the parser test entry point with a consistent interface
+        * execute every unit test entry point with a consistent interface
 
     This file intentionally does NOT contain:
 
@@ -26,11 +26,19 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Get-NodeCommand {
+    $testArguments = @(
+        "--test",
+        ".\tests\parser.test.js",
+        ".\tests\compiler-diagnostics.test.js",
+        ".\tests\editor-features.test.js",
+        ".\tests\workspace-index.test.js"
+    )
+
     $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
     if ($nodeCommand) {
         return @{
             FilePath = $nodeCommand.Source
-            Arguments = @("--test", ".\tests\parser.test.js")
+            Arguments = $testArguments
             Description = "system Node.js"
         }
     }
@@ -57,7 +65,7 @@ function Get-NodeCommand {
 
     return @{
         FilePath = $resolvedCodeExePath
-        Arguments = @(".\tests\parser.test.js")
+        Arguments = $testArguments
         Description = "VS Code bundled runtime"
         NodeMode = $true
     }
@@ -65,7 +73,7 @@ function Get-NodeCommand {
 
 $nodeRuntime = Get-NodeCommand
 
-Write-Host ("Running parser unit tests with {0}" -f $nodeRuntime.Description)
+Write-Host ("Running unit tests with {0}" -f $nodeRuntime.Description)
 
 if ($nodeRuntime.ContainsKey("NodeMode")) {
     $env:ELECTRON_RUN_AS_NODE = "1"

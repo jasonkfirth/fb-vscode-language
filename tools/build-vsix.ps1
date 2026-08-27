@@ -159,6 +159,10 @@ $filesToPackage = @(
     "assets/icon.png",
     "lib/grammar-data.js",
     "lib/freebasic-parser.js",
+    "lib/compiler-diagnostics.js",
+    "lib/compiler-service.js",
+    "lib/editor-features.js",
+    "lib/workspace-index.js",
     "snippets/freebasic.code-snippets",
     "syntaxes/freebasic.tmLanguage.json",
     "syntaxes/source/freebasic.grammar-source.json"
@@ -200,7 +204,7 @@ $manifestText = @"
     <Identity Language="en-US" Id="$(Escape-Xml $package.name)" Version="$(Escape-Xml $package.version)" Publisher="$(Escape-Xml $package.publisher)" />
     <DisplayName>$(Escape-Xml $package.displayName)</DisplayName>
     <Description xml:space="preserve">$(Escape-Xml $package.description)</Description>
-    <Categories>Programming Languages,Snippets</Categories>
+    <Categories>$(Escape-Xml ($package.categories -join ","))</Categories>
     <GalleryFlags>Public</GalleryFlags>
     <Properties>
       <Property Id="Microsoft.VisualStudio.Code.Engine" Value="$(Escape-Xml $package.engines.vscode)" />

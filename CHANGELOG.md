@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.20.3
+
+- Aligned the grammar, completions, hovers, and snippets with the FreeBASIC 1.20.3 public language surface
+- Added exact coverage for current preprocessor directives and 97 predefined or compiler-recognized symbols
+- Added `GETTOUCH`, `GETTOUCHCOUNT`, `GETTOUCHHIT`, `GETXPAD`, `VOL`, `builtin.bi`, gfxlib3, `fbcom`, and opt-in sfxlib header APIs
+- Added complete current `fbgfx.bi` constants and types, including screen controls, scan codes, events, and controller values
+- Removed the obsolete `AUDIO`, `STREAM`, and `MUSIC CURRENT` command forms
+- Replaced platform-specific grammar maintenance with cross-platform Node generation and source auditing
+- Added release-tag compatibility checks, exact API-family checks, generated-file consistency tests, and refreshed snippets for current APIs
+- Replaced flat document scanning with a cached workspace index and nested FreeBASIC declaration parser
+- Added hierarchical document symbols, workspace symbols, completions, hover, definition, references, rename safeguards, document highlights, and user-declared signature help
+- Added language-aware folding and clickable `#include` paths with configurable search directories
+- Added trusted, compile-only `fbc` diagnostics on save and on demand, including diagnostics from included `.bi` files
+- Added commands, settings, workspace trust limits, process time and output bounds, and compiler output reporting
+- Added declaration-name syntax scopes plus parser, index, diagnostic, source-audit, and generated-asset regression coverage
+- Improved escaped strings, nested block comments, `REM` comments, anonymous enums, numeric labels, type-suffixed names, and current numeric literal forms
+- Added native Linux VSIX packaging alongside the PowerShell builder, with platform-aware npm dispatch, isolated staging, archive validation, and reproducible Linux output
+
 ## 1.20.1
 
 - Expanded the grammar from a starter stub into a source-backed FreeBASIC language definition aligned with the FB 1.20.1 tree

@@ -1,8 +1,8 @@
 {
   "name": "fb-vscode-language",
   "displayName": "FreeBASIC Language",
-  "description": "Language support for FreeBASIC in Visual Studio Code.",
-  "version": "1.20.1",
+  "description": "Source-backed FreeBASIC 1.20.3 highlighting, navigation, IntelliSense, snippets, and compiler diagnostics for Visual Studio Code.",
+  "version": "1.20.3",
   "publisher": "SJZero",
   "license": "MIT",
   "repository": {
@@ -20,38 +20,51 @@
   ],
   "capabilities": {
     "untrustedWorkspaces": {
-      "supported": true,
-      "description": "This extension provides language metadata, syntax highlighting, snippets, and lightweight IntelliSense helpers."
+      "supported": "limited",
+      "description": "Editing and indexing remain available. Compiler-backed diagnostics are disabled.",
+      "restrictedConfigurations": [
+        "freebasic.compiler.path",
+        "freebasic.compiler.arguments"
+      ]
     },
     "virtualWorkspaces": {
       "supported": true,
-      "description": "This extension does not require local process execution."
+      "description": "Language services remain available. Compiler diagnostics and local include links require files on disk."
     }
   },
   "engines": {
     "vscode": "^1.85.0"
   },
   "scripts": {
-    "build:grammar": "powershell -ExecutionPolicy Bypass -File .\\tools\\build-freebasic-grammar.ps1",
-    "audit:grammar": "powershell -ExecutionPolicy Bypass -File .\\tools\\audit-freebasic-coverage.ps1",
-    "test:smoke": "powershell -ExecutionPolicy Bypass -File .\\tests\\test-smoke.ps1",
-    "test:unit": "powershell -ExecutionPolicy Bypass -File .\\tests\\test-unit.ps1",
-    "test": "npm run test:smoke && npm run test:unit",
+    "build:grammar": "node tools/build-freebasic-grammar.js",
+    "audit:grammar": "node tools/audit-freebasic-coverage.js",
+    "test:smoke": "node --test tests/smoke.test.js",
+    "test:unit": "node --test tests/parser.test.js tests/compiler-diagnostics.test.js tests/editor-features.test.js tests/workspace-index.test.js",
+    "test": "npm run build:grammar && npm run audit:grammar && npm run test:smoke && npm run test:unit",
     "build": "npm run build:grammar",
-    "package:vsix": "powershell -ExecutionPolicy Bypass -File .\\tools\\build-vsix.ps1"
+    "package:vsix": "node tools/run-vsix-builder.js",
+    "package:vsix:linux": "bash ./tools/build-vsix.sh",
+    "package:vsix:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\tools\\build-vsix.ps1"
   },
   "keywords": [
     "freebasic",
     "basic",
+    "intellisense",
+    "linter",
     "syntax",
     "language"
   ],
   "categories": [
     "Programming Languages",
-    "Snippets"
+    "Snippets",
+    "Linters"
   ],
   "activationEvents": [
-    "onLanguage:freebasic"
+    "onLanguage:freebasic",
+    "workspaceContains:**/*.{bas,bi,BAS,BI}",
+    "onCommand:freebasic.checkSyntax",
+    "onCommand:freebasic.rebuildWorkspaceIndex",
+    "onCommand:freebasic.showOutput"
   ],
   "contributes": {
     "languages": [
@@ -63,7 +76,9 @@
         ],
         "extensions": [
           ".bas",
-          ".bi"
+          ".bi",
+          ".BAS",
+          ".BI"
         ],
         "configuration": "./language-configuration.json"
       }
@@ -80,6 +95,122 @@
         "language": "freebasic",
         "path": "./snippets/freebasic.code-snippets"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "freebasic.checkSyntax",
+        "title": "Check Current Module",
+        "category": "FreeBASIC",
+        "icon": "$(check)"
+      },
+      {
+        "command": "freebasic.rebuildWorkspaceIndex",
+        "title": "Rebuild Workspace Index",
+        "category": "FreeBASIC"
+      },
+      {
+        "command": "freebasic.showOutput",
+        "title": "Show Compiler Output",
+        "category": "FreeBASIC"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "freebasic.checkSyntax",
+          "when": "editorLangId == freebasic && resourceScheme == file",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "FreeBASIC",
+      "properties": {
+        "freebasic.compiler.path": {
+          "type": "string",
+          "default": "fbc",
+          "scope": "resource",
+          "description": "Path or command name for the FreeBASIC compiler used by diagnostics."
+        },
+        "freebasic.compiler.arguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Additional arguments passed to fbc before the extension's compile-only arguments."
+        },
+        "freebasic.diagnostics.run": {
+          "type": "string",
+          "enum": [
+            "off",
+            "onSave"
+          ],
+          "enumDescriptions": [
+            "Only run compiler diagnostics with the FreeBASIC: Check Current Module command.",
+            "Run compile-only diagnostics whenever a saved .bas module changes."
+          ],
+          "default": "onSave",
+          "scope": "resource",
+          "description": "Controls automatic compiler-backed diagnostics."
+        },
+        "freebasic.diagnostics.maxErrors": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 1000,
+          "scope": "resource",
+          "description": "Maximum errors requested from fbc for one compiler check."
+        },
+        "freebasic.diagnostics.timeoutMs": {
+          "type": "integer",
+          "default": 30000,
+          "minimum": 1000,
+          "maximum": 300000,
+          "scope": "resource",
+          "description": "Time limit in milliseconds for one compiler check."
+        },
+        "freebasic.includePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Additional directories used to resolve clickable #include paths. ${workspaceFolder} is supported."
+        },
+        "freebasic.index.exclude": {
+          "type": "string",
+          "default": "{**/node_modules/**,**/.git/**,**/dist/**,**/build/**}",
+          "scope": "window",
+          "description": "Glob used to exclude files from the FreeBASIC workspace index."
+        },
+        "freebasic.index.maxFiles": {
+          "type": "integer",
+          "default": 5000,
+          "minimum": 1,
+          "maximum": 100000,
+          "scope": "window",
+          "description": "Maximum number of .bas and .bi files loaded into the workspace index."
+        },
+        "freebasic.index.maxSymbolResults": {
+          "type": "integer",
+          "default": 1000,
+          "minimum": 1,
+          "maximum": 10000,
+          "scope": "window",
+          "description": "Maximum results returned by workspace symbol search."
+        },
+        "freebasic.index.maxCompletionResults": {
+          "type": "integer",
+          "default": 2000,
+          "minimum": 1,
+          "maximum": 20000,
+          "scope": "window",
+          "description": "Maximum indexed workspace declarations added to one completion request."
+        }
+      }
+    }
   }
 }

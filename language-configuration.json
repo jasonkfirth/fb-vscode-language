@@ -14,13 +14,26 @@
     [
       "[",
       "]"
+    ],
+    [
+      "{",
+      "}"
     ]
   ],
-  "wordPattern": "(?:&[Hh][0-9A-Fa-f]+|&[Bb][01]+|&[Oo][0-7]+|\\d+(?:\\.\\d+)?(?:[EeDd][+-]?\\d+)?)|(?:[A-Za-z_][A-Za-z0-9_]*(?:[$%!#&])?)",
+  "wordPattern": "(?<![A-Za-z0-9_])(?:(?:&[Hh][0-9A-Fa-f]+|&[Bb][01]+|&[Oo]?[0-7]+|(?:\\d+\\.\\d*|\\.\\d+|\\d+)(?:[EeDd][+-]?\\d+)?)(?:[Uu](?:[Ll][Ll]?)?|[Ll][Ll]?|[FfDd]|[%!#&])?|[A-Za-z_][A-Za-z0-9_]*(?:[$%!#&])?)(?![A-Za-z0-9_])",
   "indentationRules": {
-    "increaseIndentPattern": "(?i)^\\s*(?:#(?:if|ifdef|ifndef|macro)\\b.*|(?:private|public|protected)?\\s*(?:sub|function|property|constructor|destructor|operator|type|union|class|namespace|scope|with|extern)\\b.*|enum\\b.*|if\\b.*\\bthen\\s*(?:'[^\\n]*)?$|for\\b.*|do\\b.*|while\\b.*|select\\s+case\\b.*)(?:\\s*'[^\\n]*)?$",
-    "decreaseIndentPattern": "(?i)^\\s*(?:#(?:elif|elseif|elseifdef|elseifndef|else|endif|endmacro)\\b|end\\b(?:\\s+(?:if|select|sub|function|property|constructor|destructor|operator|enum|type|union|class|namespace|extern|scope|with|asm|macro))?|loop\\b|next\\b|wend\\b|else(?:if)?\\b|case\\b)",
-    "indentNextLinePattern": "(?i)^\\s*(?:#(?:elif|elseif|elseifdef|elseifndef|else)\\b.*|else(?:if)?\\b.*|case\\b.*)(?:\\s*'[^\\n]*)?$",
+    "increaseIndentPattern": {
+      "pattern": "^\\s*(?:#(?:if|ifdef|ifndef|macro)\\b.*|(?:(?:private|public|protected|abstract|static|virtual|override|export)\\s+)*(?:sub|function|property|constructor|destructor|operator)\\b(?!.*:\\s*end\\b).*|(?:type|union|class|enum)\\b(?!.*\\bas\\b).*|(?:namespace|scope|with|asm)\\b.*|extern\\s+\"[^\"]+\".*|if\\b.*\\bthen\\s*(?:'[^\\n]*)?$|for\\b.*|do\\b.*|while\\b.*|select\\s+case\\b.*)(?:\\s*'[^\\n]*)?$",
+      "flags": "i"
+    },
+    "decreaseIndentPattern": {
+      "pattern": "^\\s*(?:#(?:elseif|elseifdef|elseifndef|else|endif|endmacro)\\b|end\\b(?:\\s+(?:if|select|sub|function|property|constructor|destructor|operator|enum|type|union|class|namespace|extern|scope|with|asm))?|loop\\b|next\\b|wend\\b|else(?:if)?\\b|case\\b)",
+      "flags": "i"
+    },
+    "indentNextLinePattern": {
+      "pattern": "^\\s*(?:#(?:elseif|elseifdef|elseifndef|else)\\b.*|else(?:if)?\\b.*|case\\b.*)(?:\\s*'[^\\n]*)?$",
+      "flags": "i"
+    },
     "unIndentedLinePattern": "^\\s*(?:'|$)"
   },
   "autoClosingPairs": [
@@ -31,6 +44,10 @@
     {
       "open": "[",
       "close": "]"
+    },
+    {
+      "open": "{",
+      "close": "}"
     },
     {
       "open": "\"",
@@ -59,6 +76,10 @@
       "]"
     ],
     [
+      "{",
+      "}"
+    ],
+    [
       "\"",
       "\""
     ],
@@ -69,8 +90,14 @@
   ],
   "folding": {
     "markers": {
-      "start": "^\\s*#region\\b",
-      "end": "^\\s*#endregion\\b"
+      "start": {
+        "pattern": "^\\s*(?:'|REM\\b)\\s*#region\\b",
+        "flags": "i"
+      },
+      "end": {
+        "pattern": "^\\s*(?:'|REM\\b)\\s*#endregion\\b",
+        "flags": "i"
+      }
     }
   }
 }

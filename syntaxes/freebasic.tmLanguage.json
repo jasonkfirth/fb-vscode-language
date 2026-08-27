@@ -1,506 +1,714 @@
 {
-    "$schema":  "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-    "name":  "FreeBASIC",
-    "scopeName":  "source.freebasic",
-    "patterns":  [
-                     {
-                         "include":  "#comments"
-                     },
-                     {
-                         "include":  "#strings"
-                     },
-                     {
-                         "include":  "#preprocessor"
-                     },
-                     {
-                         "include":  "#numbers"
-                     },
-                     {
-                         "include":  "#labels"
-                     },
-                     {
-                         "include":  "#compoundKeywords"
-                     },
-                     {
-                         "include":  "#operators"
-                     },
-                     {
-                         "include":  "#types"
-                     },
-                     {
-                         "include":  "#constants"
-                     },
-                     {
-                         "include":  "#functions"
-                     },
-                     {
-                         "include":  "#keywords"
-                     }
-                 ],
-    "repository":  {
-                       "comments":  {
-                                        "patterns":  [
-                                                         {
-                                                             "name":  "comment.line.apostrophe.freebasic",
-                                                             "match":  "\u0027[^\\n]*"
-                                                         },
-                                                         {
-                                                             "name":  "comment.line.rem.freebasic",
-                                                             "match":  "(?i)\\bREM\\b[^\\n]*"
-                                                         },
-                                                         {
-                                                             "name":  "comment.block.freebasic",
-                                                             "begin":  "/\u0027",
-                                                             "end":  "\u0027/"
-                                                         }
-                                                     ]
-                                    },
-                       "strings":  {
-                                       "patterns":  [
-                                                        {
-                                                            "name":  "string.quoted.double.freebasic",
-                                                            "match":  "([!$]?)(\")(?:(?:\"\")|[^\"\\r\\n])*(\")",
-                                                            "captures":  {
-                                                                             "1":  {
-                                                                                       "name":  "storage.modifier.freebasic"
-                                                                                   },
-                                                                             "2":  {
-                                                                                       "name":  "punctuation.definition.string.begin.freebasic"
-                                                                                   },
-                                                                             "3":  {
-                                                                                       "name":  "punctuation.definition.string.end.freebasic"
-                                                                                   }
-                                                                         }
-                                                        }
-                                                    ]
-                                   },
-                       "preprocessor":  {
-                                            "patterns":  [
-                                                             {
-                                                                 "name":  "meta.preprocessor.freebasic",
-                                                                 "match":  "(?i)^\\s*#(?:assert|cmdline|define|elif|else|elseif|elseifdef|elseifndef|endif|endmacro|error|if|ifdef|ifndef|inclib|include(?:\\s+once)?|lang|libpath|macro|pragma|print|undef)\\b.*$"
-                                                             }
-                                                         ]
-                                        },
-                       "numbers":  {
-                                       "patterns":  [
-                                                        {
-                                                            "name":  "constant.numeric.freebasic",
-                                                            "match":  "(?i)\\b(?:\u0026H[0-9A-F]+|\u0026B[01]+|\u0026O[0-7]+|\\d+(?:\\.\\d+)?(?:[ED][+-]?\\d+)?)\\b"
-                                                        }
-                                                    ]
-                                   },
-                       "labels":  {
-                                      "patterns":  [
-                                                       {
-                                                           "name":  "meta.label.freebasic",
-                                                           "match":  "(?i)^\\s*([A-Z_][A-Z0-9_]*|\\d+)(\\s*:)",
-                                                           "captures":  {
-                                                                            "1":  {
-                                                                                      "name":  "entity.name.label.freebasic"
-                                                                                  },
-                                                                            "2":  {
-                                                                                      "name":  "punctuation.separator.label.freebasic"
-                                                                                  }
-                                                                        }
-                                                       }
-                                                   ]
-                                  },
-                       "compoundKeywords":  {
-                                                "patterns":  [
-                                                                 {
-                                                                     "name":  "meta.select.case.freebasic",
-                                                                     "match":  "(?i)\\b(SELECT)\\s+(CASE)(?:\\s+(AS)\\s+(CONST))?\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "3":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "4":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.case.else.freebasic",
-                                                                     "match":  "(?i)\\b(CASE)\\s+(ELSE)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.end.block.freebasic",
-                                                                     "match":  "(?i)\\b(END)\\s+(IF|SELECT|SUB|FUNCTION|PROPERTY|CONSTRUCTOR|DESTRUCTOR|OPERATOR|ENUM|TYPE|UNION|CLASS|NAMESPACE|EXTERN|SCOPE|WITH|ASM|MACRO)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.exit.block.freebasic",
-                                                                     "match":  "(?i)\\b(EXIT)\\s+(DO|FOR|WHILE|SELECT|SUB|FUNCTION|PROPERTY|CONSTRUCTOR|DESTRUCTOR|OPERATOR)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.continue.block.freebasic",
-                                                                     "match":  "(?i)\\b(CONTINUE)\\s+(DO|FOR|WHILE)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.on.error.freebasic",
-                                                                     "match":  "(?i)\\b(ON)\\s+((?:LOCAL\\s+)?ERROR)\\s+(GOTO|RESUME)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "3":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.resume.next.freebasic",
-                                                                     "match":  "(?i)\\b(RESUME)\\s+(NEXT)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.option.mode.freebasic",
-                                                                     "match":  "(?i)\\b(OPTION)\\s+(BASE|BYVAL|DYNAMIC|EXPLICIT|ESCAPE|GOSUB|PRIVATE)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.line.input.freebasic",
-                                                                     "match":  "(?i)\\b(LINE)\\s+(INPUT)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.view.print.freebasic",
-                                                                     "match":  "(?i)\\b(VIEW)\\s+(PRINT)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.view.screen.freebasic",
-                                                                     "match":  "(?i)\\b(VIEW)\\s+(SCREEN)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.draw.string.freebasic",
-                                                                     "match":  "(?i)\\b(DRAW)\\s+(STRING)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.palette.command.freebasic",
-                                                                     "match":  "(?i)\\b(PALETTE)\\s+(GET)(?:\\s+(USING))?\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            },
-                                                                                      "3":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.palette.command.freebasic",
-                                                                     "match":  "(?i)\\b(PALETTE)\\s+(USING)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.open.device.freebasic",
-                                                                     "match":  "(?i)\\b(OPEN)\\s+(CONS|ERR|PIPE|SCRN|LPT|COM|TCP)(?:\\s+(SERVER))?\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "3":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.tcp.accept.freebasic",
-                                                                     "match":  "(?i)\\b(TCP)\\s+(ACCEPT)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.width.lprint.freebasic",
-                                                                     "match":  "(?i)\\b(WIDTH)\\s+(LPRINT)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.music.command.freebasic",
-                                                                     "match":  "(?i)\\b(MUSIC)\\s+(LOAD|PLAY|LOOP|STOP|PAUSE|RESUME|STATUS|CURRENT|POSITION)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.sfx.status.channel.freebasic",
-                                                                     "match":  "(?i)\\b(SFX)\\s+(STATUS)\\s*(\\()?\\s*(CHANNEL)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            },
-                                                                                      "3":  {
-                                                                                                "name":  "punctuation.section.group.begin.freebasic"
-                                                                                            },
-                                                                                      "4":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.sfx.channel-command.freebasic",
-                                                                     "match":  "(?i)\\b(SFX)\\s+(STOP|PAUSE|RESUME)\\s+(CHANNEL)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            },
-                                                                                      "3":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.sfx.command.freebasic",
-                                                                     "match":  "(?i)\\b(SFX)\\s+(LOAD|PLAY|LOOP|STOP|PAUSE|RESUME|STATUS)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.audio.command.freebasic",
-                                                                     "match":  "(?i)\\b(AUDIO)\\s+(PLAY|LOOP|STOP|PAUSE|RESUME|STATUS)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.stream.command.freebasic",
-                                                                     "match":  "(?i)\\b(STREAM)\\s+(OPEN|PLAY|STOP|PAUSE|RESUME|POSITION|SEEK)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.midi.command.freebasic",
-                                                                     "match":  "(?i)\\b(MIDI)\\s+(OPEN|CLOSE|PLAY|STOP|PAUSE|RESUME|SEND)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.device.command.freebasic",
-                                                                     "match":  "(?i)\\b(DEVICE)\\s+(LIST|SELECT|INFO)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 },
-                                                                 {
-                                                                     "name":  "meta.capture.command.freebasic",
-                                                                     "match":  "(?i)\\b(CAPTURE)\\s+(START|STOP|PAUSE|RESUME|STATUS|SAVE|AVAILABLE|READ)\\b",
-                                                                     "captures":  {
-                                                                                      "1":  {
-                                                                                                "name":  "keyword.control.freebasic"
-                                                                                            },
-                                                                                      "2":  {
-                                                                                                "name":  "support.function.freebasic"
-                                                                                            }
-                                                                                  }
-                                                                 }
-                                                             ]
-                                            },
-                       "operators":  {
-                                         "patterns":  [
-                                                          {
-                                                              "name":  "keyword.operator.word.freebasic",
-                                                              "match":  "(?i)\\b(?:AND|ANDALSO|DELETE|EQV|IMP|IS|MOD|NEW|NOT|OR|ORELSE|SHL|SHR|XOR)\\b"
-                                                          }
-                                                      ]
-                                     },
-                       "types":  {
-                                     "patterns":  [
-                                                      {
-                                                          "name":  "storage.type.freebasic",
-                                                          "match":  "(?i)\\b(?:__CVA_LIST|ANY|BOOLEAN|BYTE|CVA_LIST|DOUBLE|INTEGER|LONG|LONGINT|OBJECT|SHORT|SINGLE|STRING|UBYTE|UINTEGER|ULONG|ULONGINT|UNSIGNED|USHORT|WSTRING|ZSTRING)\\b"
-                                                      },
-                                                      {
-                                                          "name":  "storage.modifier.freebasic",
-                                                          "match":  "(?i)\\b(?:POINTER|PTR)\\b"
-                                                      }
-                                                  ]
-                                 },
-                       "constants":  {
-                                         "patterns":  [
-                                                          {
-                                                              "name":  "constant.language.freebasic",
-                                                              "match":  "(?i)\\b(?:FALSE|NULL|TRUE)\\b|__(?:[A-Z0-9_]+)__"
-                                                          },
-                                                          {
-                                                              "name":  "constant.other.freebasic",
-                                                              "match":  "(?i)(?\u003c![A-Za-z0-9_\\.])(?:BUTTON_LEFT|BUTTON_RIGHT|EVENT_KEY_PRESS|EVENT_KEY_RELEASE|EVENT_KEY_REPEAT|EVENT_MOUSE_BUTTON_PRESS|EVENT_MOUSE_BUTTON_RELEASE|EVENT_MOUSE_DOUBLE_CLICK|EVENT_MOUSE_ENTER|EVENT_MOUSE_EXIT|EVENT_MOUSE_MOVE|EVENT_MOUSE_WHEEL|EVENT_WINDOW_CLOSE|EVENT_WINDOW_GOT_FOCUS|EVENT_WINDOW_LOST_FOCUS|FB\\.EVENT_MOUSE_HWHEEL|FB\\.GET_SCREEN_SIZE|FB\\.GFX_OPENGL|FB\\.PUT_HEADER|FB_IMAGE|FB_ISR_GET|FB_ISR_RESET|FB_ISR_SET|FB_MEMCOPY|GFX_NULL|SC_ESCAPE|SC_INDEX)(?![A-Za-z0-9_])"
-                                                          }
-                                                      ]
-                                     },
-                       "functions":  {
-                                         "patterns":  [
-                                                          {
-                                                              "name":  "support.function.freebasic",
-                                                              "match":  "(?i)\\b(?:__ASSERT|__ASSERTWARN|__BIT|__BITRESET|__BITSET|__HIBYTE|__HIWORD|__LOBYTE|__LOWORD|__OFFSETOF|__RGB|__RGBA|__VA_ARG|__VA_NEXT|ABS|ACOS|ACOSF|ASC|ASIN|ASINF|ASSERT|ASSERTWARN|ATAN|ATAN2|ATAN2F|ATANF|ATN|BIN|BIT|BITRESET|BITSET|CAST|CBOOL|CBYTE|CDBL|CHR|CINT|CLNG|CLNGINT|COS|CPTR|CSHORT|CSIGN|CSNG|CUBYTE|CUINT|CULNG|CULNGINT|CUNSG|CUSHORT|CVA_ARG|CVA_COPY|CVA_END|CVA_START|CVD|CVI|CVL|CVLONGINT|CVS|CVSHORT|DEFINED|ERFN|ERR|EXP|FABS|FABSF|FIX|FRAC|HEX|HIBYTE|HIWORD|IIF|INSTR|INSTRREV|INT|LBOUND|LCASE|LEFT|LEN|LLABS|LOBYTE|LOG|LOWORD|LTRIM|MID|MKD|MKI|MKL|MKLONGINT|MKS|MKSHORT|OCT|OFFSETOF|PEEK|POINT|POKE|POW|RIGHT|RTRIM|SADD|SGN|SIN|SIZEOF|SPACE|SPC|SQR|STR|STRPTR|SWAP|TAB|TAN|TANF|TRIM|TYPEOF|UBOUND|UCASE|VA_ARG|VA_FIRST|VA_NEXT|VAL|VALINT|VALLNG|VALUINT|VALULNG|VARPTR|WBIN|WCHR|WHEX|WOCT|WSPACE|WSTR)\\b"
-                                                          },
-                                                          {
-                                                              "name":  "support.function.freebasic",
-                                                              "match":  "(?i)\\b(?:ALLOCATE|ATEXIT|BEEP|CALLOCATE|CHAIN|CHANNEL|CHDIR|CLEAR|CLS|COMMAND|CONDBROADCAST|CONDCREATE|CONDDESTROY|CONDSIGNAL|CONDWAIT|CSRLIN|CURDIR|DATE|DEALLOCATE|DIR|DYLIBFREE|DYLIBLOAD|DYLIBSYMBOL|ENVIRON|EOC|EOF|ERL|ERMN|EXEC|EXEPATH|FRE|FREEFILE|GETKEY|INKEY|INP|KILL|LOC|LOCATE|LOF|LPOS|MEMCPY|MEMMOVE|MKDIR|MUTEXCREATE|MUTEXDESTROY|MUTEXLOCK|MUTEXUNLOCK|OUT|POS|RANDOMIZE|REALLOCATE|RENAME|RESET|RMDIR|RND|RUN|SETDATE|SETENVIRON|SETTIME|SHELL|SLEEP|STOP|SYSTEM|THREADCREATE|THREADWAIT|TIME|TIMER|WAIT)\\b"
-                                                          },
-                                                          {
-                                                              "name":  "support.function.freebasic",
-                                                              "match":  "(?i)\\b(?:BALANCE|BLOAD|BSAVE|ENVELOPE|FLIP|GETJOYSTICK|GETMOUSE|IMAGECONVERTROW|IMAGECREATE|IMAGEDESTROY|IMAGEINFO|INSTRUMENT|MULTIKEY|NOISE|NOTE|OCTAVE|PAN|PCOPY|PLAY|PMAP|POINTCOORD|REST|RGB|RGBA|SCREENCONTROL|SCREENCOPY|SCREENEVENT|SCREENGLPROC|SCREENINFO|SCREENLIST|SCREENLOCK|SCREENPTR|SCREENRES|SCREENSET|SCREENSYNC|SCREENUNLOCK|SETMOUSE|SOUND|STICK|STRIG|TEMPO|TONE|VOICE|VOLUME|WAVE|WINDOWTITLE)\\b"
-                                                          }
-                                                      ]
-                                     },
-                       "keywords":  {
-                                        "patterns":  [
-                                                         {
-                                                             "name":  "keyword.control.freebasic",
-                                                             "match":  "(?i)\\b(?:__FASTCALL|__THISCALL|ABSTRACT|ACCESS|ALIAS|APPEND|AS|ASM|AUDIO|BASE|BINARY|BYREF|BYVAL|CALL|CAPTURE|CASE|CDECL|CIRCLE|CLASS|CLOSE|COLOR|COM|COMMON|CONS|CONST|CONSTRUCTOR|CONTINUE|DATA|DECLARE|DEFBYTE|DEFDBL|DEFINT|DEFLNG|DEFLONGINT|DEFSHORT|DEFSNG|DEFSTR|DEFUBYTE|DEFUINT|DEFULNG|DEFULONGINT|DEFUSHORT|DESTRUCTOR|DEVICE|DIM|DO|DRAW|DYNAMIC|ELSE|ELSEIF|ENCODING|END|ENDIF|ENUM|ERASE|ERROR|EXIT|EXPLICIT|EXPORT|EXTENDS|EXTERN|FIELD|FOR|FUNCTION|GET|GOSUB|GOTO|IF|IMPLEMENTS|IMPORT|INCLUDE|INPUT|LET|LIB|LINE|LOCAL|LOCK|LOOP|LPRINT|LSET|MIDI|MUSIC|NAME|NAMESPACE|NEXT|ON|OPEN|OPERATOR|OPTION|OUTPUT|OVERLOAD|PAINT|PALETTE|PASCAL|PRESERVE|PRESET|PRINT|PRIVATE|PROCPTR|PROPERTY|PROTECTED|PSET|PUBLIC|PUT|RANDOM|READ|REDIM|RESTORE|RESUME|RETURN|RSET|SCOPE|SCREEN|SEEK|SELECT|SERVER|SFX|SHARED|STATIC|STDCALL|STEP|STREAM|SUB|TCP|THEN|THREADCALL|TO|TYPE|UNION|UNLOCK|UNTIL|USING|VAR|VIEW|VIRTUAL|WEND|WHILE|WIDTH|WINDOW|WINPUT|WITH|WRITE)\\b"
-                                                         }
-                                                     ]
-                                    }
-                   }
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "FreeBASIC",
+  "scopeName": "source.freebasic",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#preprocessor"
+    },
+    {
+      "include": "#labels"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#compoundKeywords"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#keywords"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.apostrophe.freebasic",
+          "match": "'[^\\n]*"
+        },
+        {
+          "name": "comment.line.rem.freebasic",
+          "match": "(?i)\\bREM\\b[^\\n]*"
+        },
+        {
+          "include": "#blockComment"
+        }
+      ]
+    },
+    "blockComment": {
+      "name": "comment.block.freebasic",
+      "begin": "/'",
+      "end": "'/",
+      "patterns": [
+        {
+          "include": "#blockComment"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.escape.freebasic",
+          "match": "(!)(\")(?:(?:\\\\[^\\r\\n])|[^\"\\\\\\r\\n])*(\")",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.freebasic"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.freebasic"
+            },
+            "3": {
+              "name": "punctuation.definition.string.end.freebasic"
+            }
+          }
+        },
+        {
+          "name": "string.quoted.double.freebasic",
+          "match": "([$]?)(\")(?:(?:\"\")|[^\"\\r\\n])*(\")",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.freebasic"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.freebasic"
+            },
+            "3": {
+              "name": "punctuation.definition.string.end.freebasic"
+            }
+          }
+        }
+      ]
+    },
+    "preprocessor": {
+      "patterns": [
+        {
+          "name": "meta.preprocessor.freebasic",
+          "begin": "(?i)^(\\s*)(#)(DEFINE|MACRO)\\b\\s+([A-Z_][A-Z0-9_]*(?:[$%!#&])?)",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.directive.freebasic"
+            },
+            "3": {
+              "name": "keyword.control.directive.freebasic"
+            },
+            "4": {
+              "name": "entity.name.function.preprocessor.freebasic"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#constants"
+            },
+            {
+              "include": "#operators"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "include": "#functions"
+            },
+            {
+              "include": "#keywords"
+            }
+          ]
+        },
+        {
+          "name": "meta.preprocessor.freebasic",
+          "begin": "(?i)^(\\s*)(#)(assert|cmdline|define|dump|else|elseif|elseifdef|elseifndef|endif|endmacro|error|if|ifdef|ifndef|inclib|include|lang|libpath|line|lookup|macro|odump|pragma|print|undef)\\b",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.directive.freebasic"
+            },
+            "3": {
+              "name": "keyword.control.directive.freebasic"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#constants"
+            },
+            {
+              "include": "#operators"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "include": "#functions"
+            },
+            {
+              "include": "#keywords"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.freebasic",
+          "match": "(?i)(?<![A-Z0-9_])(?:&H[0-9A-F]+|&B[01]+|&O?[0-7]+|(?:\\d+\\.\\d*|\\.\\d+|\\d+)(?:[ED][+-]?\\d+)?)(?:U(?:LL?)?|LL?|F|D|[%!#&])?(?![A-Z0-9_])"
+        }
+      ]
+    },
+    "labels": {
+      "patterns": [
+        {
+          "name": "meta.label.freebasic",
+          "match": "(?i)^\\s*([A-Z_][A-Z0-9_]*|\\d+)(\\s*:)",
+          "captures": {
+            "1": {
+              "name": "entity.name.label.freebasic"
+            },
+            "2": {
+              "name": "punctuation.separator.label.freebasic"
+            }
+          }
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "meta.declaration.procedure.freebasic",
+          "match": "(?i)\\b(SUB|FUNCTION|PROPERTY)\\s+([A-Z_][A-Z0-9_]*(?:[$%!#&])?(?:\\.[A-Z_][A-Z0-9_]*(?:[$%!#&])?)*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.freebasic"
+            },
+            "2": {
+              "name": "entity.name.function.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.type.freebasic",
+          "match": "(?i)\\b(TYPE|CLASS|UNION|ENUM)\\s+([A-Z_][A-Z0-9_]*(?:[$%!#&])?)",
+          "captures": {
+            "1": {
+              "name": "storage.type.freebasic"
+            },
+            "2": {
+              "name": "entity.name.type.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.namespace.freebasic",
+          "match": "(?i)\\b(NAMESPACE)\\s+([A-Z_][A-Z0-9_]*(?:\\.[A-Z_][A-Z0-9_]*)*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.namespace.freebasic"
+            },
+            "2": {
+              "name": "entity.name.namespace.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.constant.freebasic",
+          "match": "(?i)\\b(CONST)\\s+(AS)\\s+(?:UNSIGNED\\s+)?[A-Z_][A-Z0-9_.]*(?:\\s+(?:PTR|POINTER))*\\s+([A-Z_][A-Z0-9_]*(?:[$%!#&])?)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.freebasic"
+            },
+            "2": {
+              "name": "storage.type.freebasic"
+            },
+            "3": {
+              "name": "entity.name.constant.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.constant.freebasic",
+          "match": "(?i)\\b(CONST)\\s+((?!AS\\b)[A-Z_][A-Z0-9_]*(?:[$%!#&])?)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.freebasic"
+            },
+            "2": {
+              "name": "entity.name.constant.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.variable.freebasic",
+          "match": "(?i)\\b(DIM|REDIM|STATIC|COMMON|EXTERN)\\s+(?:(?:SHARED|STATIC|COMMON|EXTERN|PRESERVE)\\s+)*(AS)\\s+(?:UNSIGNED\\s+)?[A-Z_][A-Z0-9_.]*(?:\\s+(?:PTR|POINTER))*\\s+([A-Z_][A-Z0-9_]*(?:[$%!#&])?)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.freebasic"
+            },
+            "2": {
+              "name": "storage.type.freebasic"
+            },
+            "3": {
+              "name": "variable.other.readwrite.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.variable.freebasic",
+          "match": "(?i)\\b(DIM|REDIM|STATIC|COMMON|EXTERN|VAR)\\s+(?:(?:SHARED|STATIC|COMMON|EXTERN|PRESERVE)\\s+)*((?!(?:AS|SUB|FUNCTION|PROPERTY|CONSTRUCTOR|DESTRUCTOR|OPERATOR)\\b)[A-Z_][A-Z0-9_]*(?:[$%!#&])?)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.freebasic"
+            },
+            "2": {
+              "name": "variable.other.readwrite.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.parameter.freebasic",
+          "match": "(?i)\\b(BYVAL|BYREF|BYDESC|PARAMARRAY)\\s+([A-Z_][A-Z0-9_]*(?:[$%!#&])?)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.freebasic"
+            },
+            "2": {
+              "name": "variable.parameter.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.loop-variable.freebasic",
+          "match": "(?i)\\b(FOR)\\s+([A-Z_][A-Z0-9_]*(?:[$%!#&])?)\\s+(AS)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "variable.other.readwrite.freebasic"
+            },
+            "3": {
+              "name": "storage.type.freebasic"
+            }
+          }
+        }
+      ]
+    },
+    "compoundKeywords": {
+      "patterns": [
+        {
+          "name": "meta.select.case.freebasic",
+          "match": "(?i)\\b(SELECT)\\s+(CASE)(?:\\s+(AS)\\s+(CONST))?\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            },
+            "3": {
+              "name": "keyword.control.freebasic"
+            },
+            "4": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.case.else.freebasic",
+          "match": "(?i)\\b(CASE)\\s+(ELSE)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.end.block.freebasic",
+          "match": "(?i)\\b(END)\\s+(IF|SELECT|SUB|FUNCTION|PROPERTY|CONSTRUCTOR|DESTRUCTOR|OPERATOR|ENUM|TYPE|UNION|CLASS|NAMESPACE|EXTERN|SCOPE|WITH|ASM|MACRO)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.exit.block.freebasic",
+          "match": "(?i)\\b(EXIT)\\s+(DO|FOR|WHILE|SELECT|SUB|FUNCTION|PROPERTY|CONSTRUCTOR|DESTRUCTOR|OPERATOR)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.continue.block.freebasic",
+          "match": "(?i)\\b(CONTINUE)\\s+(DO|FOR|WHILE)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.on.error.freebasic",
+          "match": "(?i)\\b(ON)\\s+((?:LOCAL\\s+)?ERROR)\\s+(GOTO|RESUME)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            },
+            "3": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.resume.next.freebasic",
+          "match": "(?i)\\b(RESUME)\\s+(NEXT)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.option.mode.freebasic",
+          "match": "(?i)\\b(OPTION)\\s+(BASE|BYVAL|DYNAMIC|EXPLICIT|ESCAPE|GOSUB|PRIVATE)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.line.input.freebasic",
+          "match": "(?i)\\b(LINE)\\s+(INPUT)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.view.print.freebasic",
+          "match": "(?i)\\b(VIEW)\\s+(PRINT)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.view.screen.freebasic",
+          "match": "(?i)\\b(VIEW)\\s+(SCREEN)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.draw.string.freebasic",
+          "match": "(?i)\\b(DRAW)\\s+(STRING)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.palette.command.freebasic",
+          "match": "(?i)\\b(PALETTE)\\s+(GET)(?:\\s+(USING))?\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            },
+            "3": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.palette.command.freebasic",
+          "match": "(?i)\\b(PALETTE)\\s+(USING)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.open.device.freebasic",
+          "match": "(?i)\\b(OPEN)\\s+(CONS|ERR|PIPE|SCRN|LPT|COM|TCP)(?:\\s+(SERVER))?\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            },
+            "3": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.tcp.accept.freebasic",
+          "match": "(?i)\\b(TCP)\\s+(ACCEPT)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.width.lprint.freebasic",
+          "match": "(?i)\\b(WIDTH)\\s+(LPRINT)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.music.command.freebasic",
+          "match": "(?i)\\b(MUSIC)\\s+(LOAD|PLAY|LOOP|STOP|PAUSE|RESUME|STATUS|POSITION)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.sfx.status.channel.freebasic",
+          "match": "(?i)\\b(SFX)\\s+(STATUS)\\s*(\\()?\\s*(CHANNEL)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            },
+            "3": {
+              "name": "punctuation.section.group.begin.freebasic"
+            },
+            "4": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.sfx.channel-command.freebasic",
+          "match": "(?i)\\b(SFX)\\s+(STOP|PAUSE|RESUME)\\s+(CHANNEL)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            },
+            "3": {
+              "name": "keyword.control.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.sfx.command.freebasic",
+          "match": "(?i)\\b(SFX)\\s+(LOAD|PLAY|LOOP|STOP|PAUSE|RESUME|STATUS)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.midi.command.freebasic",
+          "match": "(?i)\\b(MIDI)\\s+(OPEN|CLOSE|PLAY|STOP|PAUSE|RESUME|SEND)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.device.command.freebasic",
+          "match": "(?i)\\b(DEVICE)\\s+(LIST|SELECT|INFO)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            }
+          }
+        },
+        {
+          "name": "meta.capture.command.freebasic",
+          "match": "(?i)\\b(CAPTURE)\\s+(START|STOP|PAUSE|RESUME|STATUS|SAVE|AVAILABLE|READ)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.freebasic"
+            },
+            "2": {
+              "name": "support.function.freebasic"
+            }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.word.freebasic",
+          "match": "(?i)\\b(?:AND|ANDALSO|DELETE|EQV|IMP|IS|MOD|NEW|NOT|OR|ORELSE|SHL|SHR|XOR)\\b"
+        },
+        {
+          "name": "keyword.operator.symbolic.freebasic",
+          "match": "(?:->|<>|<=|>=|=>|=<|[-+*/\\\\^=<>@&])"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.freebasic",
+          "match": "(?i)\\b(?:__CVA_LIST|__FB_BUILTIN_BOOL|__FB_BUILTIN_CLONG|__FB_BUILTIN_CULONG|__FB_BUILTIN_SIZE_T|_OLD_HEADER|ANY|BOOLEAN|BYTE|COMSTATUS|CVA_LIST|DOUBLE|EVENT|GFX3POINT|GFX3RENDERCALLBACK|IMAGE|INTEGER|LONG|LONGINT|OBJECT|PUT_HEADER|SHORT|SINGLE|STRING|UBYTE|UINTEGER|ULONG|ULONGINT|UNSIGNED|USHORT|WSTRING|ZSTRING)\\b"
+        },
+        {
+          "name": "storage.modifier.freebasic",
+          "match": "(?i)\\b(?:POINTER|PTR)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.freebasic",
+          "match": "(?i)\\b(?:__DATE__|__DATE_ISO__|__FB_64BIT__|__FB_ANDROID__|__FB_ARG_COUNT__|__FB_ARG_EXTRACT__|__FB_ARG_LEFTOF__|__FB_ARG_LISTEXPAND__|__FB_ARG_RIGHTOF__|__FB_ARM__|__FB_AROS__|__FB_ASM__|__FB_BACKEND__|__FB_BIGENDIAN__|__FB_BUILD_DATE__|__FB_BUILD_DATE_ISO__|__FB_BUILD_FORK_ID__|__FB_BUILD_SHA1__|__FB_CYGWIN__|__FB_DARWIN__|__FB_DEBUG__|__FB_DOS__|__FB_DRAGONFLY__|__FB_ERR__|__FB_EVAL__|__FB_FPMODE__|__FB_FPU__|__FB_FREEBSD__|__FB_GCC__|__FB_GFXLIB3__|__FB_GUI__|__FB_HAIKU__|__FB_IIF__|__FB_ILLUMOS__|__FB_JOIN__|__FB_JS__|__FB_LANG__|__FB_LINUX__|__FB_LOONGARCH64__|__FB_M68K__|__FB_MAIN__|__FB_MIN_VERSION__|__FB_MIPS__|__FB_MIPS32__|__FB_MIPS64__|__FB_MT__|__FB_NETBSD__|__FB_NUTTX__|__FB_OPENBSD__|__FB_OPTIMIZE__|__FB_OPTION_BYVAL__|__FB_OPTION_DYNAMIC__|__FB_OPTION_ESCAPE__|__FB_OPTION_EXPLICIT__|__FB_OPTION_GOSUB__|__FB_OPTION_PRIVATE__|__FB_OPTION_PROFILE__|__FB_OUT_DLL__|__FB_OUT_EXE__|__FB_OUT_LIB__|__FB_OUT_OBJ__|__FB_PCOS__|__FB_PPC__|__FB_PROFILE__|__FB_QUERY_SYMBOL__|__FB_QUOTE__|__FB_RISCOS__|__FB_RISCV32__|__FB_RISCV64__|__FB_S390X__|__FB_SIGNATURE__|__FB_SOLARIS__|__FB_SSE__|__FB_UNIQUEID__|__FB_UNIQUEID_POP__|__FB_UNIQUEID_PUSH__|__FB_UNIX__|__FB_UNQUOTE__|__FB_VECTORIZE__|__FB_VER_MAJOR__|__FB_VER_MINOR__|__FB_VER_PATCH__|__FB_VERSION__|__FB_WII__|__FB_WIN32__|__FB_WINCE__|__FB_X86__|__FB_XBOX__|__FILE__|__FILE_NQ__|__FUNCTION__|__FUNCTION_NQ__|__LINE__|__PATH__|__TIME__|FALSE|FB_NO_GFXLIB|FB_NO_SFXLIB|NULL|TRUE)\\b|__(?:[A-Z0-9_]+)__"
+        },
+        {
+          "name": "constant.other.freebasic",
+          "match": "(?i)(?<![A-Za-z0-9_\\.])(?:(?:FB\\.)?(?:BUTTON_LEFT|BUTTON_MIDDLE|BUTTON_RIGHT|BUTTON_X1|BUTTON_X2|COM_CAP_BREAK|COM_CAP_ERRORS|COM_CAP_INPUT_LINES|COM_CAP_OUTPUT_LINES|COM_CAP_PURGE_RX|COM_CAP_PURGE_TX|COM_CAP_RX_QUEUE|COM_CAP_TX_QUEUE|COM_ERROR_BREAK|COM_ERROR_FRAMING|COM_ERROR_OVERRUN|COM_ERROR_PARITY|COM_ERROR_RX_OVERFLOW|COM_LINE_CTS|COM_LINE_DCD|COM_LINE_DSR|COM_LINE_DTR|COM_LINE_RI|COM_LINE_RTS|COM_PURGE_RX|COM_PURGE_TX|EVENT_KEY_PRESS|EVENT_KEY_RELEASE|EVENT_KEY_REPEAT|EVENT_MOUSE_BUTTON_PRESS|EVENT_MOUSE_BUTTON_RELEASE|EVENT_MOUSE_DOUBLE_CLICK|EVENT_MOUSE_ENTER|EVENT_MOUSE_EXIT|EVENT_MOUSE_HWHEEL|EVENT_MOUSE_MOVE|EVENT_MOUSE_WHEEL|EVENT_WINDOW_CLOSE|EVENT_WINDOW_GOT_FOCUS|EVENT_WINDOW_LOST_FOCUS|EVENT_WINDOW_RESIZE|FB_IMAGE|FB_ISR_GET|FB_ISR_RESET|FB_ISR_SET|FB_MEMCOPY|GET_ALPHA_PRIMITIVES|GET_COLOR|GET_DESKTOP_SIZE|GET_DRIVER_NAME|GET_GL_2D_MODE|GET_GL_ACCUM_ALPHA_BITS|GET_GL_ACCUM_BITS|GET_GL_ACCUM_BLUE_BITS|GET_GL_ACCUM_GREEN_BITS|GET_GL_ACCUM_RED_BITS|GET_GL_COLOR_ALPHA_BITS|GET_GL_COLOR_BITS|GET_GL_COLOR_BLUE_BITS|GET_GL_COLOR_GREEN_BITS|GET_GL_COLOR_RED_BITS|GET_GL_DEPTH_BITS|GET_GL_EXTENSIONS|GET_GL_NUM_SAMPLES|GET_GL_SCALE|GET_GL_STENCIL_BITS|GET_HIGH_PRIORITY|GET_PEN_POS|GET_SCANLINE_SIZE|GET_SCREEN_BPP|GET_SCREEN_DEPTH|GET_SCREEN_PITCH|GET_SCREEN_REFRESH|GET_SCREEN_SIZE|GET_TRANSPARENT_COLOR|GET_VIEWPORT|GET_WINDOW_HANDLE|GET_WINDOW_POS|GET_WINDOW_TITLE|GET_X86_MMX_ENABLED|GFX_ACCUMULATION_BUFFER|GFX_ALPHA_PRIMITIVES|GFX_ALWAYS_ON_TOP|GFX_FULLSCREEN|GFX_HIGH_PRIORITY|GFX_MULTISAMPLE|GFX_NO_FRAME|GFX_NO_SWITCH|GFX_NO_X86_MMX|GFX_NULL|GFX_OPENGL|GFX_RESIZABLE|GFX_SCREEN_EXIT|GFX_SHAPED_WINDOW|GFX_STENCIL_BUFFER|GFX_VULKAN|GFX_WINDOWED|GFX3_FILTER_LINEAR|GFX3_FILTER_NEAREST|GFX3_MAP_READ|GFX3_MAP_WRITE|GFX3_PUT_ADD|GFX3_PUT_ALPHA|GFX3_PUT_AND|GFX3_PUT_BLEND|GFX3_PUT_OR|GFX3_PUT_PRESET|GFX3_PUT_PSET|GFX3_PUT_TRANS|GFX3_PUT_XOR|GFX3_SURFACE_ALL|GFX3_SURFACE_ASSET|GFX3_SURFACE_RENDER_TARGET|GFX3_SURFACE_SAMPLED|GFX3_SURFACE_TRANSFER_DESTINATION|GFX3_SURFACE_TRANSFER_SOURCE|GFX3_WRAP_CLAMP|GFX3_WRAP_REPEAT|MASK_COLOR|MASK_COLOR_INDEX|OGL_2D_AUTO_SYNC|OGL_2D_MANUAL_SYNC|OGL_2D_NONE|POLL_EVENTS|PUT_HEADER_NEW|SC_0|SC_1|SC_2|SC_3|SC_4|SC_5|SC_6|SC_7|SC_8|SC_9|SC_A|SC_ALT|SC_ALTGR|SC_B|SC_BACKSLASH|SC_BACKSPACE|SC_C|SC_CAPSLOCK|SC_CENTER|SC_CLEAR|SC_COMMA|SC_CONTROL|SC_D|SC_DELETE|SC_DOWN|SC_E|SC_END|SC_ENTER|SC_EQUALS|SC_ESCAPE|SC_F|SC_F1|SC_F10|SC_F11|SC_F12|SC_F2|SC_F3|SC_F4|SC_F5|SC_F6|SC_F7|SC_F8|SC_F9|SC_G|SC_H|SC_HOME|SC_I|SC_INDEX|SC_INSERT|SC_J|SC_K|SC_L|SC_LEFT|SC_LEFTBRACKET|SC_LSHIFT|SC_LWIN|SC_M|SC_MENU|SC_MINUS|SC_MULTIPLY|SC_N|SC_NUMLOCK|SC_O|SC_P|SC_PAGEDOWN|SC_PAGEUP|SC_PERIOD|SC_PLUS|SC_Q|SC_QUOTE|SC_R|SC_RIGHT|SC_RIGHTBRACKET|SC_RSHIFT|SC_RWIN|SC_S|SC_SCROLLLOCK|SC_SEMICOLON|SC_SLASH|SC_SPACE|SC_T|SC_TAB|SC_TILDE|SC_U|SC_UP|SC_V|SC_W|SC_X|SC_Y|SC_Z|SET_ALPHA_PRIMITIVES|SET_DRIVER_NAME|SET_GL_2D_MODE|SET_GL_ACCUM_ALPHA_BITS|SET_GL_ACCUM_BITS|SET_GL_ACCUM_BLUE_BITS|SET_GL_ACCUM_GREEN_BITS|SET_GL_ACCUM_RED_BITS|SET_GL_COLOR_ALPHA_BITS|SET_GL_COLOR_BITS|SET_GL_COLOR_BLUE_BITS|SET_GL_COLOR_GREEN_BITS|SET_GL_COLOR_RED_BITS|SET_GL_DEPTH_BITS|SET_GL_NUM_SAMPLES|SET_GL_SCALE|SET_GL_STENCIL_BITS|SET_PEN_POS|SET_WINDOW_POS|SET_WINDOW_TITLE|SET_X86_MMX_ENABLED|XPAD_BUTTON_A|XPAD_BUTTON_B|XPAD_BUTTON_GUIDE|XPAD_BUTTON_L1|XPAD_BUTTON_L2|XPAD_BUTTON_L3|XPAD_BUTTON_R1|XPAD_BUTTON_R2|XPAD_BUTTON_R3|XPAD_BUTTON_SELECT|XPAD_BUTTON_START|XPAD_BUTTON_X|XPAD_BUTTON_Y|XPAD_DPAD_DOWN|XPAD_DPAD_LEFT|XPAD_DPAD_RIGHT|XPAD_DPAD_UP|XPAD_STATUS_CONNECTED|XPAD_STATUS_DISCONNECTED|XPAD_STATUS_MISSING)|(?:FB\\.EVENT_MOUSE_HWHEEL|FB\\.GET_SCREEN_SIZE|FB\\.GFX_OPENGL|FB\\.PUT_HEADER))(?![A-Za-z0-9_])"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "support.function.freebasic",
+          "match": "(?i)\\b(?:__ASSERT|__ASSERTWARN|__BIT|__BITRESET|__BITSET|__HIBYTE|__HIWORD|__LOBYTE|__LOWORD|__OFFSETOF|__RGB|__RGBA|__VA_ARG|__VA_NEXT|ABS|ACOS|ACOSF|ASC|ASIN|ASINF|ASSERT|ASSERTWARN|ATAN|ATAN2|ATAN2F|ATANF|ATN|BIN|BIT|BITRESET|BITSET|CAST|CBOOL|CBYTE|CDBL|CHR|CINT|CLNG|CLNGINT|COS|CPTR|CSHORT|CSIGN|CSNG|CUBYTE|CUINT|CULNG|CULNGINT|CUNSG|CUSHORT|CVA_ARG|CVA_COPY|CVA_END|CVA_START|CVD|CVI|CVL|CVLONGINT|CVS|CVSHORT|DEFINED|ERFN|ERR|EXP|FABS|FABSF|FIX|FRAC|HEX|HIBYTE|HIWORD|IIF|INSTR|INSTRREV|INT|LBOUND|LCASE|LEFT|LEN|LLABS|LOBYTE|LOG|LOWORD|LTRIM|MID|MKD|MKI|MKL|MKLONGINT|MKS|MKSHORT|OCT|OFFSETOF|PEEK|POINT|POKE|POW|RIGHT|RTRIM|SADD|SGN|SIN|SIZEOF|SPACE|SPC|SQR|STR|STRPTR|SWAP|TAB|TAN|TANF|TRIM|TYPEOF|UBOUND|UCASE|VA_ARG|VA_FIRST|VA_NEXT|VAL|VALINT|VALLNG|VALUINT|VALULNG|VARPTR|WBIN|WCHR|WHEX|WOCT|WSPACE|WSTR)\\b"
+        },
+        {
+          "name": "support.function.freebasic",
+          "match": "(?i)\\b(?:ALLOCATE|ATEXIT|BEEP|CALLOCATE|CHAIN|CHANNEL|CHDIR|CLEAR|CLS|COMMAND|CONDBROADCAST|CONDCREATE|CONDDESTROY|CONDSIGNAL|CONDWAIT|CSRLIN|CURDIR|DATE|DEALLOCATE|DIR|DYLIBFREE|DYLIBLOAD|DYLIBSYMBOL|ENVIRON|EOC|EOF|ERL|ERMN|EXEC|EXEPATH|FRE|FREEFILE|GETKEY|INKEY|INP|KILL|LOC|LOCATE|LOF|LPOS|MEMCPY|MEMMOVE|MKDIR|MUTEXCREATE|MUTEXDESTROY|MUTEXLOCK|MUTEXUNLOCK|OUT|POS|RANDOMIZE|REALLOCATE|RENAME|RESET|RMDIR|RND|RUN|SETDATE|SETENVIRON|SETTIME|SHELL|SLEEP|STOP|SYSTEM|THREADCREATE|THREADWAIT|TIME|TIMER|WAIT)\\b"
+        },
+        {
+          "name": "support.function.freebasic",
+          "match": "(?i)\\b(?:BALANCE|BLOAD|BSAVE|ENVELOPE|FLIP|GETJOYSTICK|GETMOUSE|GETTOUCH|GETTOUCHCOUNT|GETTOUCHHIT|GETXPAD|IMAGECONVERTROW|IMAGECREATE|IMAGEDESTROY|IMAGEINFO|INSTRUMENT|MULTIKEY|NOISE|NOTE|OCTAVE|PAN|PCOPY|PLAY|PMAP|POINTCOORD|REST|RGB|RGBA|SCREENCONTROL|SCREENCOPY|SCREENEVENT|SCREENGLPROC|SCREENINFO|SCREENLIST|SCREENLOCK|SCREENPTR|SCREENRES|SCREENSET|SCREENSYNC|SCREENUNLOCK|SETMOUSE|SOUND|STICK|STRIG|TEMPO|TONE|VOICE|VOL|VOLUME|WAVE|WINDOWTITLE)\\b"
+        },
+        {
+          "name": "support.function.freebasic",
+          "match": "(?i)\\b(?:__BUILTIN_BSWAP16|__BUILTIN_BSWAP32|__BUILTIN_BSWAP64|__BUILTIN_CLRSB|__BUILTIN_CLRSBL|__BUILTIN_CLRSBLL|__BUILTIN_CLZ|__BUILTIN_CLZL|__BUILTIN_CLZLL|__BUILTIN_CTZ|__BUILTIN_CTZL|__BUILTIN_CTZLL|__BUILTIN_DYNAMIC_OBJECT_SIZE|__BUILTIN_EXPECT|__BUILTIN_EXPECT_WITH_PROBABILITY|__BUILTIN_FFS|__BUILTIN_FFSL|__BUILTIN_FFSLL|__BUILTIN_MEMCHR|__BUILTIN_MEMCMP|__BUILTIN_MEMCPY|__BUILTIN_MEMMOVE|__BUILTIN_MEMSET|__BUILTIN_OBJECT_SIZE|__BUILTIN_PARITY|__BUILTIN_PARITYL|__BUILTIN_PARITYLL|__BUILTIN_POPCOUNT|__BUILTIN_POPCOUNTL|__BUILTIN_POPCOUNTLL|__BUILTIN_PREFETCH|__BUILTIN_SADD_OVERFLOW|__BUILTIN_SADDL_OVERFLOW|__BUILTIN_SADDLL_OVERFLOW|__BUILTIN_SMUL_OVERFLOW|__BUILTIN_SMULL_OVERFLOW|__BUILTIN_SMULLL_OVERFLOW|__BUILTIN_SSUB_OVERFLOW|__BUILTIN_SSUBL_OVERFLOW|__BUILTIN_SSUBLL_OVERFLOW|__BUILTIN_STRCAT|__BUILTIN_STRCHR|__BUILTIN_STRCMP|__BUILTIN_STRCPY|__BUILTIN_STRCSPN|__BUILTIN_STRLEN|__BUILTIN_STRNCAT|__BUILTIN_STRNCMP|__BUILTIN_STRNCPY|__BUILTIN_STRPBRK|__BUILTIN_STRRCHR|__BUILTIN_STRSPN|__BUILTIN_STRSTR|__BUILTIN_TRAP|__BUILTIN_UADD_OVERFLOW|__BUILTIN_UADDL_OVERFLOW|__BUILTIN_UADDLL_OVERFLOW|__BUILTIN_UMUL_OVERFLOW|__BUILTIN_UMULL_OVERFLOW|__BUILTIN_UMULLL_OVERFLOW|__BUILTIN_UNREACHABLE|__BUILTIN_USUB_OVERFLOW|__BUILTIN_USUBL_OVERFLOW|__BUILTIN_USUBLL_OVERFLOW|COMGETSTATUS|COMPURGE|COMSETBREAK|COMSETLINES|ECHO|ECHOENABLED|ECHORESET|GFX3DRAWPOINTS|GFX3RUNONRENDERTHREAD|GFX3SETEXTERNALPRESENTATION|GFX3SURFACEBLIT|GFX3SURFACEBLITROTATED|GFX3SURFACEBLITSCALED|GFX3SURFACECLEAR|GFX3SURFACECREATE|GFX3SURFACEDESTROY|GFX3SURFACEDOWNLOAD|GFX3SURFACEINFO|GFX3SURFACELOAD|GFX3SURFACEMAP|GFX3SURFACEMAPRECT|GFX3SURFACEMODE7|GFX3SURFACEPRESENT|GFX3SURFACEUNMAP|GFX3SURFACEUPLOAD|OUTPUTCAPTURERESERVE|OUTPUTCAPTURESAVE|OUTPUTCAPTURESTART|OUTPUTCAPTURESTOP|OUTPUTSAMPLERATE|OUTPUTUNDERRUNS|RAWCLOSE|RAWOPEN|RAWUNDERRUNS|RAWWRITE)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.freebasic",
+          "match": "(?i)\\b(?:__FASTCALL|__THISCALL|ABSTRACT|ACCESS|ALIAS|APPEND|AS|ASM|BASE|BINARY|BYREF|BYVAL|CALL|CAPTURE|CASE|CDECL|CIRCLE|CLASS|CLOSE|COLOR|COM|COMMON|CONS|CONST|CONSTRUCTOR|CONTINUE|DATA|DECLARE|DEFBYTE|DEFDBL|DEFINT|DEFLNG|DEFLONGINT|DEFSHORT|DEFSNG|DEFSTR|DEFUBYTE|DEFUINT|DEFULNG|DEFULONGINT|DEFUSHORT|DESTRUCTOR|DEVICE|DIM|DO|DRAW|DYNAMIC|ELSE|ELSEIF|ENCODING|END|ENDIF|ENUM|ERASE|ERROR|EXIT|EXPLICIT|EXPORT|EXTENDS|EXTERN|FIELD|FOR|FUNCTION|GET|GOSUB|GOTO|IF|IMPLEMENTS|IMPORT|INCLUDE|INPUT|LET|LIB|LINE|LOCAL|LOCK|LOOP|LPRINT|LSET|MIDI|MUSIC|NAME|NAMESPACE|NEXT|ON|OPEN|OPERATOR|OPTION|OUTPUT|OVERLOAD|PAINT|PALETTE|PASCAL|PRESERVE|PRESET|PRINT|PRIVATE|PROCPTR|PROPERTY|PROTECTED|PSET|PUBLIC|PUT|RANDOM|READ|REDIM|RESTORE|RESUME|RETURN|RSET|SCOPE|SCREEN|SEEK|SELECT|SERVER|SFX|SHARED|STATIC|STDCALL|STEP|SUB|TCP|THEN|THREADCALL|TO|TYPE|UNION|UNLOCK|UNTIL|USING|VAR|VIEW|VIRTUAL|WEND|WHILE|WIDTH|WINDOW|WINPUT|WITH|WRITE)\\b"
+        }
+      ]
+    }
+  }
 }

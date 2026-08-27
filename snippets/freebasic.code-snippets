@@ -66,13 +66,94 @@
     ],
     "description": "Type block"
   },
-  "Option Explicit": {
+  "Type With Constructor": {
+    "prefix": "typeconstructor",
+    "body": [
+      "Type ${1:Name}",
+      "    Declare Constructor(${2})",
+      "    Declare Destructor()",
+      "    ${3:value} As ${4:Integer}",
+      "End Type",
+      "",
+      "Constructor ${1:Name}(${2})",
+      "    ${0}",
+      "End Constructor",
+      "",
+      "Destructor ${1:Name}()",
+      "End Destructor"
+    ],
+    "description": "Type declaration with constructor and destructor implementations"
+  },
+  "Property Pair": {
+    "prefix": "propertypair",
+    "body": [
+      "Type ${1:TypeName}",
+      "Private:",
+      "    ${2:storedValue} As ${3:Integer}",
+      "Public:",
+      "    Declare Property ${4:value}(ByVal newValue As ${3:Integer})",
+      "    Declare Property ${4:value}() As ${3:Integer}",
+      "End Type",
+      "",
+      "Property ${1:TypeName}.${4:value}(ByVal newValue As ${3:Integer})",
+      "    ${2:storedValue} = newValue",
+      "End Property",
+      "",
+      "Property ${1:TypeName}.${4:value}() As ${3:Integer}",
+      "    Return ${2:storedValue}",
+      "End Property",
+      "${0}"
+    ],
+    "description": "Matching property setter and getter declarations and implementations"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": [
+      "Enum ${1:Name}",
+      "    ${2:FirstValue} = 0",
+      "    ${3:SecondValue}",
+      "End Enum",
+      "${0}"
+    ],
+    "description": "Named enum block"
+  },
+  "Namespace": {
+    "prefix": "namespace",
+    "body": [
+      "Namespace ${1:Name}",
+      "",
+      "    ${0}",
+      "",
+      "End Namespace"
+    ],
+    "description": "Namespace block"
+  },
+  "Include Once": {
+    "prefix": "includeonce",
+    "body": [
+      "#include once \"${1:header.bi}\"",
+      "${0}"
+    ],
+    "description": "Include a FreeBASIC header once"
+  },
+  "Conditional Compilation": {
+    "prefix": "ifdef",
+    "body": [
+      "#ifdef ${1:__FB_WIN32__}",
+      "    ${0}",
+      "#else",
+      "",
+      "#endif"
+    ],
+    "description": "Conditional compilation block"
+  },
+  "Option Explicit (Legacy Dialects)": {
     "prefix": "optionexplicit",
     "body": [
       "Option Explicit",
       "${0}"
     ],
-    "description": "Require explicit declarations in the current module"
+    "description": "Require explicit declarations when compiling with -lang fblite or -lang qb"
   },
   "On Error": {
     "prefix": "onerror",
@@ -112,6 +193,27 @@
       "${0}"
     ],
     "description": "Read a full line from an open file"
+  },
+  "COM Port Status": {
+    "prefix": "comstatus",
+    "body": [
+      "#include once \"fbcom.bi\"",
+      "Using FB",
+      "",
+      "Dim As String ${1:port_spec} = \"${2:COM1:9600,N,8,1}\"",
+      "Dim As Integer ${3:file_number} = FreeFile()",
+      "Open Com ${1:port_spec} For Binary Access Read Write As #${3:file_number}",
+      "If( Err <> 0 ) Then",
+      "    Print \"Could not open \"; ${1:port_spec}; \". Runtime error \"; Err; \".\"",
+      "Else",
+      "    Dim As ComStatus ${4:status}",
+      "    If( ComGetStatus(${3:file_number}, ${4:status}) = 0 ) Then",
+      "        ${0}",
+      "    End If",
+      "    Close #${3:file_number}",
+      "End If"
+    ],
+    "description": "Open a serial port and query its portable fbcom status"
   },
   "ScreenRes": {
     "prefix": "screenres",
@@ -168,6 +270,29 @@
       "End If"
     ],
     "description": "Query FB.IMAGE metadata with ImageInfo"
+  },
+  "Gfx3 GPU Surface": {
+    "prefix": "gfx3surface",
+    "body": [
+      "#include once \"fbgfx3.bi\"",
+      "Using FB",
+      "",
+      "If( ScreenRes(${1:640}, ${2:480}, 32) <> 0 ) Then End 1",
+      "",
+      "Dim As Any Ptr ${3:surface} = Gfx3SurfaceCreate(${4:256}, ${5:256}, 32)",
+      "If( ${3:surface} = 0 ) Then",
+      "    Screen 0",
+      "    End 1",
+      "End If",
+      "",
+      "If( Gfx3SurfaceClear(${3:surface}, ${6:RGB(20, 30, 40)}) = 0 ) Then",
+      "    ${0}",
+      "End If",
+      "",
+      "Gfx3SurfaceDestroy(${3:surface})",
+      "Screen 0"
+    ],
+    "description": "Create, use, and destroy an opt-in gfxlib3 GPU surface"
   },
   "ScreenLock": {
     "prefix": "screenlock",
@@ -255,6 +380,38 @@
       "End If"
     ],
     "description": "Read mouse position, wheel, and button state"
+  },
+  "GetTouch Contacts": {
+    "prefix": "gettouch",
+    "body": [
+      "Dim As Integer ${1:contact_count} = GetTouchCount()",
+      "For ${2:index} As Integer = 0 To ${1:contact_count} - 1",
+      "    Dim As Integer ${3:x}, ${4:y}, ${5:contact_id}",
+      "    If( GetTouch(${2:index}, ${3:x}, ${4:y}, ${5:contact_id}) = 0 ) Then",
+      "        ${0}",
+      "    End If",
+      "Next ${2:index}"
+    ],
+    "description": "Enumerate the current touch contacts with GetTouchCount and GetTouch"
+  },
+  "GetXPad State": {
+    "prefix": "getxpad",
+    "body": [
+      "#include once \"fbgfx.bi\"",
+      "Using FB",
+      "",
+      "Dim As Integer ${1:buttons}, ${2:dpad}",
+      "Dim As Single ${3:left_x}, ${4:left_y}, ${5:right_x}, ${6:right_y}",
+      "Dim As Single ${7:left_trigger}, ${8:right_trigger}",
+      "Dim As Long ${9:status}",
+      "",
+      "${9:status} = GetXPad(${10:0}, ${1:buttons}, ${3:left_x}, ${4:left_y}, _",
+      "    ${5:right_x}, ${6:right_y}, ${7:left_trigger}, ${8:right_trigger}, ${2:dpad})",
+      "If( ${9:status} = XPAD_STATUS_CONNECTED ) Then",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "Read buttons, sticks, triggers, and d-pad state from an Xbox-style controller"
   },
   "SetMouse": {
     "prefix": "setmouse",
@@ -358,9 +515,14 @@
     "prefix": "musicplay",
     "body": [
       "Dim As String ${1:filename} = \"${2:good-morning-to-all.ogg}\"",
-      "Dim As Long ${3:music_id}",
-      "${3:music_id} = MUSIC PLAY( ${1:filename} )",
-      "${0}"
+      "Dim As Long ${3:result}",
+      "${3:result} = MUSIC PLAY( ${1:filename} )",
+      "If( ${3:result} < 0 ) Then",
+      "    Print \"MUSIC PLAY failed.\"",
+      "Else",
+      "    ${0}",
+      "    MUSIC STOP",
+      "End If"
     ],
     "description": "Start music playback with the MUSIC command family"
   },
@@ -384,48 +546,33 @@
     ],
     "description": "Loop a sound effect on a specific channel"
   },
-  "Audio Play": {
-    "prefix": "audioplay",
+  "SFX Echo Effect": {
+    "prefix": "sfxecho",
     "body": [
-      "Dim As String ${1:filename} = \"${2:clown-laugh.mp3}\"",
-      "Dim As Long ${3:result}",
-      "${3:result} = AUDIO PLAY( ${1:filename} )",
-      "If( ${3:result} = 0 ) Then",
+      "#include once \"sfxlib_effects.bi\"",
+      "",
+      "If( sfxlib.Echo(${1:0.20}, ${2:0.11}, ${3:0.32}) = 0 ) Then",
       "    ${0}",
-      "    AUDIO STOP",
+      "    sfxlib.EchoReset()",
       "End If"
     ],
-    "description": "Play a single audio file with the AUDIO command family"
+    "description": "Enable and reset the bundled sfxlib stereo echo effect"
   },
-  "Stream Open": {
-    "prefix": "streamopen",
+  "SFX Output Capture": {
+    "prefix": "sfxcaptureoutput",
     "body": [
-      "Dim As String ${1:filename} = \"${2:clown-laugh.mp3}\"",
-      "Dim As Long ${3:result}",
-      "${3:result} = STREAM OPEN( ${1:filename} )",
-      "If( ${3:result} = 0 ) Then",
-      "    STREAM PLAY",
-      "    Print \"STREAM POSITION() =\"; STREAM POSITION()",
+      "#include once \"sfxlib_raw.bi\"",
+      "",
+      "Dim As String ${1:output_file} = \"${2:capture.wav}\"",
+      "If( sfxlib.OutputCaptureStart() = 0 ) Then",
       "    ${0}",
-      "    STREAM STOP",
+      "    sfxlib.OutputCaptureStop()",
+      "    If( sfxlib.OutputCaptureSave(StrPtr(${1:output_file})) <> 0 ) Then",
+      "        Print \"Could not save \"; ${1:output_file}",
+      "    End If",
       "End If"
     ],
-    "description": "Open and control an audio stream with STREAM commands"
-  },
-  "Stream Seek": {
-    "prefix": "streamseek",
-    "body": [
-      "Dim As Long ${1:result}",
-      "${1:result} = STREAM OPEN( \"${2:clown-laugh.mp3}\" )",
-      "If( ${1:result} = 0 ) Then",
-      "    STREAM PLAY",
-      "    ${1:result} = STREAM SEEK( ${3:500} )",
-      "    Print \"STREAM SEEK returned\"; ${1:result}",
-      "    ${0}",
-      "    STREAM STOP",
-      "End If"
-    ],
-    "description": "Seek within an open audio stream"
+    "description": "Record the final sfxlib mixer output and save it as a WAV file"
   },
   "MIDI Open": {
     "prefix": "midiopen",

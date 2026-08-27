@@ -29,14 +29,16 @@ This extension started as a language-support stub and was grown into a practical
 
 ## How the plugin was developed
 
-The first step was to stop guessing. FreeBASIC is a real language with a large surface area, and a lot of its behavior lives in the compiler tree, runtime modules, parser quirks, and example programs. Instead of inventing syntax support by hand, the extension was built from the FreeBASIC 1.20.1 source tree you pointed at.
+The first step was to stop guessing. FreeBASIC is a real language with a large surface area, and a lot of its behavior lives in the compiler tree, runtime modules, parser quirks, and example programs. Instead of inventing syntax support by hand, the extension is aligned with the FreeBASIC 1.20.3 public language surface. The working compiler checkout currently carries a 1.20.4 development version, so the audit proves that the inspected paths are unchanged from tag `v1.20.3` before accepting that checkout.
 
 That source-backed approach shaped almost everything else:
 
 - compiler keywords came from `src/compiler/symb-keyword.bas`
 - runtime and library names came from the `src/compiler/rtl-*.bas` modules
 - special parser forms came from the `parser-quirk-*.bas` files
-- graphics behavior was checked against `src/gfxlib2`
+- preprocessor directives and compiler defines came from `pp.bas`, `symb-define.bas`, and the compiler target definitions
+- graphics behavior was checked against `src/gfxlib2`, `src/gfxlib3`, and the bundled graphics headers
+- compiler builtins, portable COM, and optional sfxlib APIs were checked against their bundled public headers
 - snippets were grounded in real programs under `examples`
 
 That made the extension much more durable than a keyword list copied from memory. It also made the result easier to keep current, because the grammar source can be audited against the upstream tree instead of being edited as one giant hand-maintained JSON blob.
@@ -44,10 +46,14 @@ That made the extension much more durable than a keyword list copied from memory
 The implementation was then split into smaller parts so each concern could stay focused:
 
 - `syntaxes/source/freebasic.grammar-source.json` holds the source data for the grammar
-- `tools/build-freebasic-grammar.ps1` regenerates the shipped grammar from that source data
-- `tools/audit-freebasic-coverage.ps1` checks the source data against upstream compiler and runtime registrations
-- `extension.js` provides the VS Code entry point for completions, hovers, document symbols, workspace symbols, and go-to-definition
-- `lib/freebasic-parser.js` handles the lightweight declaration tracing logic
+- `tools/build-freebasic-grammar.js` regenerates the shipped grammar from that source data on every supported development platform
+- `tools/audit-freebasic-coverage.js` checks the source data against compiler, runtime, parser, and selected bundled-header registrations
+- `extension.js` owns activation, provider registration, commands, and lifecycle events
+- `lib/freebasic-parser.js` handles nested declaration tracing, comments and strings, includes, occurrences, calls, and folding ranges
+- `lib/workspace-index.js` maintains a reusable index across `.bas` and `.bi` files
+- `lib/editor-features.js` adapts analysis results into completions, navigation, symbols, references, rename, signatures, folding, and links
+- `lib/compiler-diagnostics.js` runs `fbc` with bounded compile-only arguments and parses its output
+- `lib/compiler-service.js` applies trust policy and publishes compiler diagnostics through VS Code
 - `lib/grammar-data.js` loads and normalizes the grammar source data
 - `tests/` contains smoke tests, parser tests, and fixtures
 
@@ -63,7 +69,8 @@ Real examples tell you the patterns users actually need:
 - how graphics code enters a screen loop
 - how `ScreenLock` and `ScreenUnlock` are used together
 - how file I/O and error handling are written in practice
-- how the newer `sfxlib` commands are chained
+- how the current `sfxlib` commands and opt-in effect and output-capture helpers are chained
+- how touch, controller, gfxlib3, and portable serial APIs are initialized and cleaned up
 
 That makes the snippets feel like helpers, not marketing copy. A new user can insert a snippet and start from a shape that already matches the language as FreeBASIC developers write it.
 
@@ -73,10 +80,12 @@ For a FreeBASIC developer using VS Code, the extension changes the editor from "
 
 The practical effect is:
 
-- syntax highlighting now covers core language forms, runtime APIs, graphics entry points, TCP forms, and sfxlib commands
+- syntax highlighting now covers core language forms, compiler defines, runtime APIs, graphics entry points, TCP forms, and sfxlib commands
 - indentation and comment behavior are tuned for FreeBASIC block structures
 - snippets reduce the friction of common tasks like file I/O, graphics loops, thread setup, and network examples
-- lightweight IntelliSense helps surface built-ins and declarations already present in the workspace
+- cached editor intelligence surfaces built-ins and declarations already present in the workspace
+- navigation, references, guarded rename, signatures, folding, and include links reduce routine source navigation work
+- optional compiler checks report real `fbc` errors and warnings on save without creating build products in the project
 - the grammar and tests are structured so the extension can be kept current as FreeBASIC evolves
 
 That matters for two reasons.
@@ -89,7 +98,7 @@ Second, it helps FreeBASIC look and feel like a living language in a modern edit
 
 This project is not pretending to be a full compiler front-end.
 
-The current IntelliSense layer is intentionally lightweight. It can trace common declarations and provide useful completions and hovers, but it does not yet do full type checking, overload resolution, or compiler-accurate semantic analysis. TextMate grammar highlighting also has natural limits because it is regex-based instead of parser-based.
+The editor analyzer is intentionally conservative. It traces common declarations and scopes, but it does not do full type checking, inheritance resolution, or compiler-accurate overload selection. Rename is therefore restricted to spellings with one unambiguous indexed declaration. TextMate highlighting also has natural limits because it is regex-based instead of parser-based. Real syntax and type diagnostics come from the configured FreeBASIC compiler rather than being approximated in JavaScript.
 
 That is not a flaw in the project. It is just the boundary between practical editor support and full language intelligence.
 
@@ -99,11 +108,11 @@ The repository also carries the project-side tooling needed to keep the extensio
 
 That includes:
 
-- grammar regeneration from the source data under `syntaxes/source`
-- audit checks against the upstream compiler and runtime registrations
+- cross-platform grammar regeneration from the source data under `syntaxes/source`
+- audit checks against compiler and runtime registrations, parser command families, and selected bundled headers
 - smoke tests for JSON validity and packaging rules
-- unit tests for the lightweight parser and declaration tracing logic
-- VSIX packaging checks that verify the packaged `extension/package.json` stays valid and BOM-free
+- unit tests for parser, workspace-index, and compiler-diagnostic behavior
+- native Bash and PowerShell VSIX builders that verify the packaged `extension/package.json` stays valid and BOM-free
 
 Those details are useful to contributors and maintainers, but they are not part of the installed extension experience. Keeping that split helps the packaged README stay focused on FreeBASIC users while the repository still documents how the project is maintained.
 
