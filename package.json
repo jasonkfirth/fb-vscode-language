@@ -1,8 +1,8 @@
 {
   "name": "fb-vscode-language",
   "displayName": "FreeBASIC Language",
-  "description": "Source-backed FreeBASIC 1.20.3 highlighting, navigation, IntelliSense, snippets, and compiler diagnostics for Visual Studio Code.",
-  "version": "1.20.3",
+  "description": "FreeBASIC 1.20.4 highlighting, type-aware IntelliSense, navigation, reference help, and compiler diagnostics for Visual Studio Code.",
+  "version": "1.20.4",
   "publisher": "SJZero",
   "license": "MIT",
   "repository": {
@@ -21,10 +21,11 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Editing and indexing remain available. Compiler-backed diagnostics are disabled.",
+      "description": "Editing and indexing remain available. Compiler diagnostics and compiler analysis are disabled.",
       "restrictedConfigurations": [
         "freebasic.compiler.path",
-        "freebasic.compiler.arguments"
+        "freebasic.compiler.arguments",
+        "freebasic.analysis.compilerPath"
       ]
     },
     "virtualWorkspaces": {
@@ -37,10 +38,25 @@
   },
   "scripts": {
     "build:grammar": "node tools/build-freebasic-grammar.js",
+    "build:reference": "node tools/build-language-reference.js",
+    "build:compiler-bridge": "node tools/build-compiler-bridge.js",
     "audit:grammar": "node tools/audit-freebasic-coverage.js",
+    "audit:expression-routes": "node tools/audit-compiler-expression-routes.js",
+    "audit:call-routes": "node tools/audit-compiler-call-routes.js",
     "test:smoke": "node --test tests/smoke.test.js",
-    "test:unit": "node --test tests/parser.test.js tests/compiler-diagnostics.test.js tests/editor-features.test.js tests/workspace-index.test.js",
-    "test": "npm run build:grammar && npm run audit:grammar && npm run test:smoke && npm run test:unit",
+    "test:unit": "node tools/run-unit-tests.js",
+    "test:integration": "node tools/test-extension.js",
+    "test:integration:vsix:linux": "npm run package:vsix && node tools/test-packaged-extension.js",
+    "test:grammar": "node --test tests/textmate.test.js",
+    "test:corpus": "node tools/audit-source-corpus.js",
+    "test:corpus:native": "node tools/audit-native-corpus.js",
+    "test:corpus:semantic": "node tools/audit-native-corpus.js --semantic-sidecar",
+    "test:corpus:implicit-calls": "node tools/audit-native-corpus.js --semantic-bindings --architecture=x86-64 --timeout-ms=60000 --category=compound --category=dim --category=expressions --category=functions --category=namespace --category=overload --category=pointers --category=pp --category=qb --category=scopes --category=structs --category=typedef --category=virtual --category=visibility",
+    "test:corpus:matrix": "node tools/audit-native-matrix.js",
+    "benchmark:analysis": "node tools/benchmark-compiler-analysis.js",
+    "benchmark:project": "node tools/benchmark-compiler-project.js",
+    "benchmark:workspace": "node tools/benchmark-compiler-workspace.js",
+    "test": "npm run build:grammar && npm run audit:grammar && npm run test:smoke && npm run test:unit && npm run test:grammar",
     "build": "npm run build:grammar",
     "package:vsix": "node tools/run-vsix-builder.js",
     "package:vsix:linux": "bash ./tools/build-vsix.sh",
@@ -64,7 +80,9 @@
     "workspaceContains:**/*.{bas,bi,BAS,BI}",
     "onCommand:freebasic.checkSyntax",
     "onCommand:freebasic.rebuildWorkspaceIndex",
-    "onCommand:freebasic.showOutput"
+    "onCommand:freebasic.showOutput",
+    "onCommand:freebasic.analyzeModule",
+    "onCommand:freebasic.showPreprocessed"
   ],
   "contributes": {
     "languages": [
@@ -98,6 +116,28 @@
     ],
     "commands": [
       {
+        "command": "freebasic.analyzeModule",
+        "title": "Analyze Module With Compiler",
+        "category": "FreeBASIC",
+        "icon": "$(search)"
+      },
+      {
+        "command": "freebasic.selectCompilerContext",
+        "title": "Select Compiler Context",
+        "category": "FreeBASIC",
+        "icon": "$(list-filter)"
+      },
+      {
+        "command": "freebasic.showPreprocessed",
+        "title": "Show Compiler-Expanded Module",
+        "category": "FreeBASIC"
+      },
+      {
+        "command": "freebasic.showExpressionType",
+        "title": "Show Compiler Expression Type",
+        "category": "FreeBASIC"
+      },
+      {
         "command": "freebasic.checkSyntax",
         "title": "Check Current Module",
         "category": "FreeBASIC",
@@ -117,15 +157,92 @@
     "menus": {
       "editor/title": [
         {
+          "command": "freebasic.selectCompilerContext",
+          "when": "editorLangId == freebasic && resourceScheme == file",
+          "group": "navigation@1"
+        },
+        {
+          "command": "freebasic.analyzeModule",
+          "when": "editorLangId == freebasic && resourceScheme == file",
+          "group": "navigation@2"
+        },
+        {
           "command": "freebasic.checkSyntax",
           "when": "editorLangId == freebasic && resourceScheme == file",
-          "group": "navigation"
+          "group": "navigation@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "freebasic.showExpressionType",
+          "when": "editorLangId == freebasic && resourceScheme == file",
+          "group": "freebasic@1"
+        },
+        {
+          "command": "freebasic.showPreprocessed",
+          "when": "editorLangId == freebasic && resourceScheme == file",
+          "group": "freebasic@2"
         }
       ]
     },
     "configuration": {
       "title": "FreeBASIC",
       "properties": {
+        "freebasic.analysis.compilerPath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Optional editor-bridge fbc for full native symbols, macro/source origins, scopes, unsaved-buffer analysis, Outline/workspace symbols, and validated project refactoring. Build or rebuild it with npm run build:compiler-bridge. Stock schema-27 sidecars also provide saved-file physical navigation, macro Signature Help, selected macro-signature hovers, and macro parameter inlays, requesting full macro data only for recognized macro interactions."
+        },
+        "freebasic.analysis.run": {
+          "type": "string",
+          "enum": ["off", "onDemand", "onSave", "onChange"],
+          "enumDescriptions": [
+            "Only run compiler analysis from the FreeBASIC: Analyze Module With Compiler command.",
+            "Run compiler analysis on the first editor request for a source snapshot, then reuse it until inputs change.",
+            "Run compiler analysis after a saved module changes.",
+            "Run compiler analysis after edits with a 400 ms debounce; unsaved buffers require the editor bridge."
+          ],
+          "default": "onDemand",
+          "scope": "resource",
+          "description": "Compiler analysis supplies saved-file expression types from a schema-27 fbc on demand by default. Stock sidecars also provide saved-file physical symbol/macro navigation, compiler-selected macro Signature Help and parameter inlays, and selected macro-signature hovers, requesting the full macro graph only at recognized macro interactions. The protocol-14 editor bridge adds complete macro origins, unsaved-buffer analysis, Outline/workspace symbols, and validated project refactoring. Sidecar-only analysis refuses dirty inputs rather than using stale disk contents. Requires a trusted workspace."
+        },
+        "freebasic.analysis.timeoutMs": {
+          "type": "integer",
+          "default": 60000,
+          "minimum": 1000,
+          "maximum": 300000,
+          "scope": "resource",
+          "description": "Time limit in milliseconds for a native semantic-analysis request. Large macro-heavy modules may need more time than ordinary diagnostics."
+        },
+        "freebasic.analysis.projectContexts": {
+          "type": "array",
+          "default": [],
+          "scope": "resource",
+          "description": "Explicit complete build contexts for compiler-backed project navigation, Find References, and project rename. Each context lists a unique name, .bas module paths relative to the workspace, and additional compiler arguments. Stock FBC semantic sidecars support saved-file navigation and references, including macro references only when all selected uses map to physical source tokens; project rename and unsaved-buffer validation require the editor bridge. Omitted configurations are not validated.",
+          "items": {
+            "type": "object",
+            "required": ["name", "modules"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "modules": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+              "arguments": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "freebasic.analysis.activeContext": {
+          "type": ["object", "null"],
+          "default": null,
+          "scope": "resource",
+          "description": "Selected build name and translation unit from analysis.projectContexts. Headers are analyzed through this module; .bas files use their own root in the same named build. Null uses base compiler options for modules and disables native header analysis. Use FreeBASIC: Select Compiler Context to choose.",
+          "required": ["name", "module"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "module": { "type": "string", "minLength": 1 }
+          }
+        },
         "freebasic.compiler.path": {
           "type": "string",
           "default": "fbc",
@@ -178,7 +295,7 @@
           },
           "default": [],
           "scope": "resource",
-          "description": "Additional directories used to resolve clickable #include paths. ${workspaceFolder} is supported."
+          "description": "Additional directories for include navigation, indexing, and compiler checks (-i). ${workspaceFolder} is supported."
         },
         "freebasic.index.exclude": {
           "type": "string",
@@ -202,6 +319,22 @@
           "scope": "window",
           "description": "Maximum results returned by workspace symbol search."
         },
+        "freebasic.index.workspaceConcurrency": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 2,
+          "scope": "window",
+          "description": "Concurrent compiler workers for workspace symbol indexing. Reduce to 1 for lower peak memory and smaller observed timer gaps on large workspaces; cold indexing takes longer."
+        },
+        "freebasic.index.maxFileSizeKB": {
+          "type": "integer",
+          "default": 4096,
+          "minimum": 1,
+          "maximum": 1048576,
+          "scope": "resource",
+          "description": "Maximum size in KiB for background-indexed files. Open documents are still analyzed. Rename is disabled while the index is incomplete."
+        },
         "freebasic.index.maxCompletionResults": {
           "type": "integer",
           "default": 2000,
@@ -212,5 +345,10 @@
         }
       }
     }
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^3.1.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   }
 }

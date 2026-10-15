@@ -45,7 +45,7 @@ function readFixture(name) {
 test("grammar source loads expected symbol groups", () => {
     const grammarData = loadGrammarSourceFile(path.join(__dirname, "..", "syntaxes", "source", "freebasic.grammar-source.json"));
 
-    assert.equal(grammarData.sourceVersion, "1.20.3");
+    assert.equal(grammarData.sourceVersion, "1.20.4");
     assert.ok(grammarData.preprocessorDirectives.includes("LOOKUP"));
     assert.ok(grammarData.keywords.includes("FUNCTION"));
     assert.ok(!grammarData.keywords.includes("AUDIO"));
@@ -63,9 +63,15 @@ test("grammar source loads expected symbol groups", () => {
     assert.ok(grammarData.bundledFunctions.includes("COMGETSTATUS"));
     assert.ok(grammarData.bundledFunctions.includes("RAWOPEN"));
     assert.ok(grammarData.bundledFunctions.includes("ECHO"));
+    assert.ok(grammarData.bundledFunctions.includes("Serialize"));
+    assert.ok(grammarData.bundledFunctions.includes("Deserialize"));
+    assert.ok(grammarData.intrinsicFunctions.includes("__FB_SERIALIZE"));
+    assert.ok(grammarData.intrinsicFunctions.includes("__FB_DESERIALIZE"));
     assert.ok(grammarData.libraryTypes.includes("COMSTATUS"));
     assert.ok(grammarData.libraryTypes.includes("EVENT"));
     assert.ok(grammarData.symbolicConstants.includes("SC_ESCAPE"));
+    assert.ok(grammarData.symbolicConstants.includes("FB_SERIALIZE_INVALID"));
+    assert.ok(grammarData.symbolicConstants.includes("FB_SERIALIZE_OUT_OF_MEMORY"));
     assert.ok(grammarData.symbolicConstants.includes("GFX_VULKAN"));
     assert.ok(grammarData.symbolicConstants.includes("EVENT_WINDOW_RESIZE"));
     assert.ok(grammarData.symbolicConstants.includes("XPAD_BUTTON_A"));
@@ -75,6 +81,72 @@ test("grammar source loads expected symbol groups", () => {
 
 test("stripComments removes apostrophe comments", () => {
     assert.equal(stripComments("Dim value As Integer ' comment"), "Dim value As Integer ");
+});
+
+test("multiple type aliases preserve name positions and do not open aggregate scopes", () => {
+    const source = "Namespace Library\n Type As Long FirstType, SecondType\n Type FirstAlias As FirstType, SecondAlias As SecondType\n Type Opaque As Opaque\n Dim value As FirstAlias\nEnd Namespace\nDim outside As Long\n";
+    const declarations = parseFreeBasicText(source).declarations;
+    for (const name of ["FirstType", "SecondType", "FirstAlias", "SecondAlias", "Opaque"]) {
+        const declaration = declarations.find((entry) => entry.name === name);
+        assert.equal(declaration.detail, "Type alias");
+        assert.equal(declaration.containerName, "Library");
+        assert.equal(source.split("\n")[declaration.line].slice(declaration.startColumn, declaration.endColumn), name);
+    }
+    assert.equal(declarations.find((entry) => entry.name === "value").containerName, "Library");
+    assert.equal(declarations.find((entry) => entry.name === "outside").containerName, "");
+    assert.ok(!declarations.some((entry) => entry.name.toLowerCase() === "as"));
+});
+
+test("special procedure declarations preserve operator and type suffix positions", () => {
+    const source = [
+        "Type T",
+        "\tDeclare operator[](index as Integer) as T",
+        "\tDeclare Operator ()(ByVal index As Long) As Long",
+        "\tDeclare constructor%()",
+        "End Type",
+        "Operator% +(byref left as T, byref right as T) as T",
+        "End Operator",
+        "Operator T.()(ByVal index As Long) As Long",
+        "End Operator",
+        "Operator not%(byref value as T) as T"
+    ].join("\n");
+    const lines = source.split("\n");
+    const declarations = parseFreeBasicText(source).declarations;
+    const expectedRanges = [
+        { line: 1, type: "operator", selected: "[]" },
+        { line: 2, type: "operator", selected: "()" },
+        { line: 3, type: "constructor", selected: "%" },
+        { line: 5, type: "operator", selected: "%" },
+        { line: 7, type: "operator", selected: "T.()" },
+        { line: 9, type: "operator", selected: "not%" }
+    ];
+
+    for (const expected of expectedRanges) {
+        const declaration = declarations.find((entry) =>
+            entry.line === expected.line && entry.type === expected.type
+        );
+        assert.ok(declaration);
+        assert.equal(
+            lines[declaration.line].slice(declaration.startColumn, declaration.endColumn),
+            expected.selected
+        );
+    }
+});
+
+test("special procedure names in bodies remain calls and assignments", () => {
+    const parsed = parseFreeBasicText([
+        "Sub caller()",
+        "\tconstructor%()",
+        "\toperator% = 1",
+        "End Sub",
+        "Dim outside As Integer"
+    ].join("\n"));
+    const outside = parsed.declarations.find((entry) => entry.name === "outside");
+
+    assert.ok(!parsed.declarations.some((entry) =>
+        entry.line === 1 || entry.line === 2
+    ));
+    assert.equal(outside.containerName, "");
 });
 
 test("source masking preserves positions while ignoring strings and comments", () => {
@@ -93,6 +165,53 @@ test("source masking preserves positions while ignoring strings and comments", (
     assert.deepEqual(occurrences.map((occurrence) => occurrence.line), [0, 1, 3]);
 });
 
+test("compiler option ranges mask escaped literals in parser occurrences", () => {
+    const source = String.raw`#if 1
+Option Escape
+#endif
+Print "inside \" : Dim escapedOnlyName As Integer ([)]"`;
+    const statementStart = source.indexOf("Print");
+    const statementEnd = source.length;
+    const ranges = [{ start: statementStart, end: statementEnd }];
+    const sourceOnly = parseFreeBasicText(source);
+    const compilerAware = parseFreeBasicText(source, null, ranges);
+
+    assert.ok(sourceOnly.occurrences.some((occurrence) => occurrence.name === "escapedOnlyName"),
+        "source-only parsing must not guess the conditional option state");
+    assert.ok(sourceOnly.declarations.some((declaration) => declaration.name === "escapedOnlyName"),
+        "an incorrect quote boundary can make string contents look like a declaration");
+    assert.ok(!compilerAware.occurrences.some((occurrence) => occurrence.name === "escapedOnlyName"),
+        "compiler-confirmed escape mode must hide identifiers within the literal");
+    assert.ok(!compilerAware.declarations.some((declaration) => declaration.name === "escapedOnlyName"),
+        "compiler-aware parsing must not invent the corresponding declaration");
+    assert.equal(compilerAware.text.length, source.length, "compiler-aware masking must preserve offsets");
+});
+
+test("source masking keeps UTF-16 columns aligned after supplementary characters", () => {
+    const source = 'Print "😀" + visibleName \' hiddenName\nPrint afterEmoji';
+    const masked = maskFreeBasicText(source);
+    const occurrences = findIdentifierOccurrences(source);
+    const visibleName = occurrences.find((occurrence) => occurrence.name === "visibleName");
+
+    assert.equal(masked.length, source.length);
+    assert.equal(visibleName.startColumn, source.split("\n")[0].indexOf("visibleName"));
+    assert.deepEqual(occurrences.map((occurrence) => occurrence.name), ["Print", "visibleName", "Print", "afterEmoji"]);
+});
+
+test("REM comment detection respects complete identifier boundaries", () => {
+    const source = [
+        "REMEMBER = 1",
+        "xREM = 2",
+        "REM hiddenName",
+        "REM_ = 3"
+    ].join("\n");
+
+    assert.deepEqual(
+        findIdentifierOccurrences(source).map((occurrence) => occurrence.name),
+        ["REMEMBER", "xREM", "REM_"]
+    );
+});
+
 test("source masking handles escaped strings, REM comments, and nested block comments", () => {
     const source = [
         "Dim textValue As String = !\"quote: \\\" and apostrophe \\' remains text\"",
@@ -107,6 +226,46 @@ test("source masking handles escaped strings, REM comments, and nested block com
 
     assert.deepEqual(occurrences.map((occurrence) => occurrence.line), [0, 1, 5]);
     assert.equal(maskFreeBasicText(source).length, source.length);
+});
+
+test("OPTION NOKEYWORD REM stops treating REM identifiers as comments", () => {
+    const source = [
+        "Option NoKeyword REM",
+        "Dim REM As Integer",
+        "REM = (1 + 2)",
+        "REM #region",
+        "REM #endregion",
+        ""
+    ].join("\n");
+    const maskedLines = maskFreeBasicText(source).split("\n");
+    const identifiers = findIdentifierOccurrences(source);
+    const ranges = findFoldingRanges(source);
+    const declaration = findDeclarationByName(parseFreeBasicText(source).declarations, "REM");
+
+    assert.equal(maskedLines[1], "Dim REM As Integer");
+    assert.equal(maskedLines[2], "REM = (1 + 2)");
+    assert.equal(declaration?.type, "variable");
+    assert.ok(identifiers.some((occurrence) => occurrence.name === "REM" && occurrence.line === 2));
+    assert.equal(ranges.some((range) => range.kind === "region"), false,
+        "REM region markers are not comments once REM is removed as a keyword");
+});
+
+test("OPTION NOKEYWORD REM inside conditionals or macro bodies does not leak", () => {
+    const source = [
+        "#if 0",
+        "Option NoKeyword REM",
+        "#endif",
+        "REM hiddenAfterConditional",
+        "#macro DisableRem",
+        "Option NoKeyword REM",
+        "#endmacro",
+        "REM hiddenAfterMacro",
+        ""
+    ].join("\n");
+    const occurrences = findIdentifierOccurrences(source);
+
+    assert.equal(occurrences.some((occurrence) => occurrence.name === "hiddenAfterConditional"), false);
+    assert.equal(occurrences.some((occurrence) => occurrence.name === "hiddenAfterMacro"), false);
 });
 
 test("splitDimVariables handles typed and suffixed variables", () => {
@@ -167,6 +326,25 @@ test("parseFreeBasicText traces nested members and continued signatures", () => 
     assert.equal(procedure.endLine, 9);
 });
 
+test("trailing identifier underscores do not become line continuations", () => {
+    const parsed = parseFreeBasicText([
+        "Dim trailing_ As Integer",
+        "Dim following As Integer",
+        "Dim continued As Integer = 1 _",
+        "    + 2",
+        "Dim afterContinuation As Integer"
+    ].join("\n"));
+    const declarationByName = new Map(parsed.declarations.map((declaration) => [declaration.name, declaration]));
+
+    assert.equal(declarationByName.get("trailing_").line, 0);
+    assert.equal(declarationByName.get("following").line, 1);
+    assert.equal(declarationByName.get("continued").line, 2);
+    assert.equal(declarationByName.get("afterContinuation").line, 4);
+    assert.deepEqual(parsed.statements.map(({ startLine, endLine }) => [startLine, endLine]), [
+        [0, 0], [1, 1], [2, 3], [4, 4]
+    ]);
+});
+
 test("parseFreeBasicText traces macro blocks, loop variables, and access sections", () => {
     const parsed = parseFreeBasicText([
         "#macro RepeatValue(value)",
@@ -208,6 +386,33 @@ test("call context counts only top-level arguments", () => {
     assert.equal(context.activeParameter, 1);
 });
 
+test("call context survives multiline calls and ignores nested brace commas", () => {
+    const multilineSource = "result = BuildPerson(\n    first,\n    value";
+    const multilineContext = findCallContext(multilineSource, multilineSource.length);
+
+    assert.equal(multilineContext?.name, "BuildPerson");
+    assert.equal(multilineContext?.activeParameter, 1);
+
+    const bracesSource = "result = BuildPerson({1, {2, 3}}, value)";
+    const bracesContext = findCallContext(bracesSource, bracesSource.indexOf("value") + "value".length);
+    assert.equal(bracesContext?.name, "BuildPerson");
+    assert.equal(bracesContext?.activeParameter, 1);
+
+    const incompleteBracesSource = "result = BuildPerson({1, {2, 3";
+    const incompleteBracesContext = findCallContext(incompleteBracesSource, incompleteBracesSource.length);
+    assert.equal(incompleteBracesContext?.name, "BuildPerson");
+    assert.equal(incompleteBracesContext?.activeParameter, 0);
+});
+
+test("call context supports overloaded index operators and nested bracket expressions", () => {
+    const source = "indexedInstance[GetIndex(1, 2), value]";
+    const context = findCallContext(source, source.indexOf("value") + "value".length);
+
+    assert.equal(context.name, "indexedInstance");
+    assert.equal(context.activeParameter, 1);
+    assert.equal(context.indexing, true);
+});
+
 test("folding ranges cover language blocks, preprocessor blocks, and comment regions", () => {
     const ranges = findFoldingRanges([
         "' #region Setup",
@@ -227,6 +432,78 @@ test("folding ranges cover language blocks, preprocessor blocks, and comment reg
         { startLine: 3, endLine: 9, kind: "region" },
         { startLine: 4, endLine: 8, kind: undefined },
         { startLine: 5, endLine: 7, kind: undefined }
+    ]);
+});
+
+test("REM comment regions are recognized only when REM is still a comment keyword", () => {
+    assert.deepEqual(findFoldingRanges("REM #region Setup\nREM #endregion\n"), [
+        { startLine: 0, endLine: 1, kind: "region" }
+    ]);
+});
+
+test("folding ranges include multiline nested block comments but ignore comment-like text", () => {
+    const ranges = findFoldingRanges([
+        "Print \"/' not a comment\"",
+        "/' outer comment",
+        "    /' nested comment '/",
+        "outer comment continues '/ Print 1",
+        "Print 2"
+    ].join("\n"));
+
+    assert.deepEqual(ranges, [
+        { startLine: 1, endLine: 3, kind: "comment" }
+    ]);
+});
+
+test("folding ranges group line comments without folding inline comments or regions twice", () => {
+    const ranges = findFoldingRanges([
+        "' first comment",
+        "' second comment",
+        "REM third comment",
+        "Print 1 ' inline comment",
+        "' #region Documentation",
+        "' region body",
+        "' #endregion",
+        "Print \"' not a comment\"",
+        "REM final comment",
+        "REM last comment"
+    ].join("\n"));
+
+    assert.deepEqual(ranges, [
+        { startLine: 0, endLine: 2, kind: "comment" },
+        { startLine: 4, endLine: 6, kind: "region" },
+        { startLine: 8, endLine: 9, kind: "comment" }
+    ]);
+});
+
+test("folding ranges group consecutive includes and USING directives as imports", () => {
+    const ranges = findFoldingRanges([
+        '#include "first.bi"',
+        '#include once "second.bi"',
+        "Using Graphics",
+        "Using Geometry, Physics",
+        "Print 1",
+        '#include "standalone.bi"'
+    ].join("\n"));
+
+    assert.deepEqual(ranges, [
+        { startLine: 0, endLine: 3, kind: "imports" }
+    ]);
+});
+
+test("folding ranges cover continued statements without matching underscores in comments or strings", () => {
+    const ranges = findFoldingRanges([
+        "Declare Function BuildThing( _",
+        "    ByVal first As Long, _",
+        "    ByVal second As Long _",
+        ") As Long",
+        'Print "literal _"',
+        "' comment _",
+        "Print 1"
+    ].join("\n"));
+
+    assert.deepEqual(ranges, [
+        { startLine: 0, endLine: 3 }
     ]);
 });
 

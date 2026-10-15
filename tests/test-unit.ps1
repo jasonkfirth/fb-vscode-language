@@ -28,10 +28,24 @@ $ErrorActionPreference = "Stop"
 function Get-NodeCommand {
     $testArguments = @(
         "--test",
+        ".\tests\bracket-diagnostics.test.js",
+        ".\tests\compiler-diagnostic-sidecar.test.js",
         ".\tests\parser.test.js",
         ".\tests\compiler-diagnostics.test.js",
         ".\tests\editor-features.test.js",
-        ".\tests\workspace-index.test.js"
+        ".\tests\workspace-index.test.js",
+        ".\tests\semantic-model.test.js",
+        ".\tests\compiler-audit-options.test.js",
+        ".\tests\language-reference.test.js",
+        ".\tests\compiler-analysis.test.js",
+        ".\tests\compiler-recovery.test.js",
+        ".\tests\compiler-analysis-service.test.js",
+        ".\tests\compiler-project.test.js",
+        ".\tests\compiler-macros.test.js",
+        ".\tests\compiler-preprocessor.test.js",
+        ".\tests\compiler-worker.test.js",
+        ".\tests\compiler-model-worker.test.js",
+        ".\tests\compiler-project-worker.test.js"
     )
 
     $nodeCommand = Get-Command node -ErrorAction SilentlyContinue

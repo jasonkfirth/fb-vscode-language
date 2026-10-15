@@ -1,0 +1,5 @@
+# FreeBASIC extension: deterministic text assets across platform checkouts.
+# Binary assets are not normalized. This file does not control build output.
+* text=auto eol=lf
+*.png binary
+# end of .gitattributes

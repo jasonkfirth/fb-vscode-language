@@ -1,0 +1,11 @@
+{
+  "name": "freebasic-vscode-test-harness",
+  "displayName": "FreeBASIC VSIX Test Harness",
+  "publisher": "sjzero",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": []
+}

@@ -1,6 +1,7 @@
 node_modules/
 .vscode/
 .vscode-test/
+.reference/
 dist/
 *.vsix
 *.vsix.zip

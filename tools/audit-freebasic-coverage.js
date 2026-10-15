@@ -42,6 +42,7 @@ const HEADER_API_PATHS = [
     "inc/fbgfx.bi",
     "inc/fbgfx3.bi",
     "inc/fbcom.bi",
+    "inc/fbserialize.bi",
     "inc/sfxlib_effects.bi",
     "inc/sfxlib_raw.bi"
 ];
@@ -51,8 +52,158 @@ const VERSIONED_SURFACE_PATHS = [
     ...HEADER_API_PATHS
 ];
 
+function compilerSourceDirectories(compilerRoot) {
+    const sourceRoot = path.resolve(compilerRoot);
+    const freeBasicRoot = path.resolve(sourceRoot, "..", "..");
+    const manifestPath = path.join(freeBasicRoot, "mk", "compiler-sources.mk");
+    const directories = [sourceRoot];
+
+    if (!fs.existsSync(manifestPath)) return directories;
+
+    const groups = [];
+    let collectingGroups = false;
+    let continuedLine = "";
+
+    for (const line of readText(manifestPath).split(/\r?\n/)) {
+        if (!collectingGroups) {
+            const match = line.match(/^\s*FBC_SOURCE_GROUPS\s*:=\s*(.*)$/);
+            if (!match) continue;
+            collectingGroups = true;
+            continuedLine = match[1];
+        } else {
+            continuedLine = line;
+        }
+
+        const continues = /\\\s*$/.test(continuedLine);
+        const groupText = continuedLine.replace(/\\\s*$/, "").replace(/#.*/, "");
+        groups.push(...groupText.split(/\s+/).filter(Boolean));
+        if (!continues) break;
+    }
+
+    for (const group of groups) {
+        const segments = group.split(/[\\/]+/);
+        if (!group || path.isAbsolute(group) || segments.some((segment) => segment === "..")) continue;
+        directories.push(path.join(sourceRoot, ...segments));
+    }
+
+    return [...new Set(directories)].filter((directory) => fs.existsSync(directory));
+}
+
+function listCompilerSourceFiles(compilerRoot, extensions = [".bas"]) {
+    const sourceRoot = path.resolve(compilerRoot);
+    const acceptedExtensions = new Set(extensions.map((extension) => extension.toLowerCase()));
+    const files = new Set();
+
+    for (const directory of compilerSourceDirectories(sourceRoot)) {
+        for (const name of fs.readdirSync(directory)) {
+            const filePath = path.join(directory, name);
+            if (!fs.statSync(filePath).isFile()) continue;
+            if (!acceptedExtensions.has(path.extname(name).toLowerCase())) continue;
+            files.add(path.relative(sourceRoot, filePath).split(path.sep).join("/"));
+        }
+    }
+
+    return [...files].sort();
+}
+
+function resolveCompilerSourcePath(compilerRoot, sourceName) {
+    const sourceRoot = path.resolve(compilerRoot);
+    const directPath = path.resolve(sourceRoot, sourceName);
+    if (fs.existsSync(directPath)) return directPath;
+
+    const baseName = path.basename(sourceName);
+    const matches = listCompilerSourceFiles(sourceRoot, [".bas", ".bi"])
+        .filter((relativePath) => path.basename(relativePath) === baseName);
+
+    if (matches.length > 1) {
+        throw new Error(`Ambiguous FreeBASIC compiler source basename: ${baseName}`);
+    }
+
+    return matches.length === 1 ? path.join(sourceRoot, matches[0]) : directPath;
+}
+
+function readCompilerSource(compilerRoot, sourceName) {
+    return readText(resolveCompilerSourcePath(compilerRoot, sourceName));
+}
+
 function readText(filePath) {
     return fs.readFileSync(filePath, "utf8");
+}
+
+function compilerSourceDirectories(compilerRoot) {
+    const sourceRoot = path.resolve(compilerRoot);
+    const freeBasicRoot = path.resolve(sourceRoot, "..", "..");
+    const manifestPath = path.join(freeBasicRoot, "mk", "compiler-sources.mk");
+    const directories = [sourceRoot];
+
+    if (!fs.existsSync(manifestPath)) return directories;
+
+    const groups = [];
+    let collecting = false;
+    for (const line of readText(manifestPath).split(/\r?\n/)) {
+        let groupText = line;
+        if (!collecting) {
+            const match = line.match(/^\s*FBC_SOURCE_GROUPS\s*:=\s*(.*)$/);
+            if (!match) continue;
+            collecting = true;
+            groupText = match[1];
+        }
+
+        const continued = /\\\s*$/.test(groupText);
+        groupText = groupText.replace(/\\\s*$/, "").replace(/#.*/, "");
+        groups.push(...groupText.split(/\s+/).filter(Boolean));
+        if (!continued) break;
+    }
+
+    if (groups.length === 0) {
+        throw new Error(`No compiler source groups found in ${manifestPath}`);
+    }
+
+    for (const group of groups) {
+        const segments = group.split(/[\\/]+/);
+        if (path.isAbsolute(group) || segments.some((segment) => segment === "..")) {
+            throw new Error(`Invalid compiler source group in ${manifestPath}: ${group}`);
+        }
+        directories.push(path.join(sourceRoot, ...segments));
+    }
+
+    return [...new Set(directories)].filter((directory) => fs.existsSync(directory));
+}
+
+function listCompilerSourceFiles(compilerRoot, extensions = [".bas"]) {
+    const sourceRoot = path.resolve(compilerRoot);
+    const acceptedExtensions = new Set(extensions.map((extension) => extension.toLowerCase()));
+    const files = new Set();
+
+    for (const directory of compilerSourceDirectories(sourceRoot)) {
+        for (const name of fs.readdirSync(directory)) {
+            const filePath = path.join(directory, name);
+            if (!fs.statSync(filePath).isFile()) continue;
+            if (!acceptedExtensions.has(path.extname(name).toLowerCase())) continue;
+            files.add(path.relative(sourceRoot, filePath).split(path.sep).join("/"));
+        }
+    }
+
+    return [...files].sort();
+}
+
+function resolveCompilerSourcePath(compilerRoot, sourceName) {
+    const sourceRoot = path.resolve(compilerRoot);
+    const directPath = path.resolve(sourceRoot, sourceName);
+    if (fs.existsSync(directPath)) return directPath;
+
+    const baseName = path.basename(sourceName);
+    const matches = listCompilerSourceFiles(sourceRoot, [".bas", ".bi"])
+        .filter((relativePath) => path.basename(relativePath) === baseName);
+    if (matches.length > 1) {
+        throw new Error(`Ambiguous FreeBASIC compiler source basename: ${baseName}`);
+    }
+
+    return matches.length === 1 ? path.join(sourceRoot, matches[0]) : directPath;
+}
+
+function readCompilerSource(compilerRoot, sourceName) {
+    return readText(resolveCompilerSourcePath(compilerRoot, sourceName));
 }
 
 function asUpperSet(values) {
@@ -110,12 +261,12 @@ function collectGrammarCoverage(grammarSource) {
 }
 
 function extractCompilerKeywords(compilerRoot) {
-    const source = readText(path.join(compilerRoot, "symb-keyword.bas"));
+    const source = readCompilerSource(compilerRoot, "symb-keyword.bas");
     return asUpperSet([...source.matchAll(/@"([^"]+)"/g)].map((match) => match[1]));
 }
 
 function extractPreprocessorDirectives(compilerRoot) {
-    const source = readText(path.join(compilerRoot, "pp.bas"));
+    const source = readCompilerSource(compilerRoot, "pp.bas");
     const directives = [...source.matchAll(/\(@"([A-Z]+)"\s*,\s*FB_TK_PP_[A-Z]+\s*\)/g)]
         .map((match) => match[1]);
     return asUpperSet(directives);
@@ -123,8 +274,8 @@ function extractPreprocessorDirectives(compilerRoot) {
 
 function extractPublicRtlNames(compilerRoot) {
     const names = new Set();
-    const rtlFiles = fs.readdirSync(compilerRoot)
-        .filter((fileName) => /^rtl-.*\.bas$/i.test(fileName))
+    const rtlFiles = listCompilerSourceFiles(compilerRoot)
+        .filter((fileName) => /^rtl-.*\.bas$/i.test(path.basename(fileName)))
         .sort((left, right) => left.localeCompare(right));
 
     for (const fileName of rtlFiles) {
@@ -151,8 +302,8 @@ function extractPublicRtlNames(compilerRoot) {
 
 function extractParserMatchedWords(compilerRoot) {
     const words = new Set();
-    const parserFiles = fs.readdirSync(compilerRoot)
-        .filter((fileName) => /^parser-.*\.bas$/i.test(fileName));
+    const parserFiles = listCompilerSourceFiles(compilerRoot)
+        .filter((fileName) => /^parser-.*\.bas$/i.test(path.basename(fileName)));
 
     for (const fileName of parserFiles) {
         const source = readText(path.join(compilerRoot, fileName));
@@ -168,7 +319,7 @@ function extractParserMatchedWords(compilerRoot) {
 }
 
 function extractParserFamilyWords(compilerRoot, family) {
-    const source = readText(path.join(compilerRoot, "parser-quirk-sfx.bas"));
+    const source = readCompilerSource(compilerRoot, "parser-quirk-sfx.bas");
     const functionPattern = new RegExp(
         `private\\s+function\\s+hParse${family}\\b([\\s\\S]*?)\\nend\\s+function`,
         "i"
@@ -206,11 +357,12 @@ function extractGrammarFamilyWords(grammarSource, family) {
 
 function extractCompilerDefines(freeBasicRoot) {
     const compilerRoot = path.join(freeBasicRoot, "src", "compiler");
-    const defineSource = readText(path.join(compilerRoot, "symb-define.bas"));
-    const symbolSource = readText(path.join(compilerRoot, "symb.bas"));
-    const fbSource = readText(path.join(compilerRoot, "fb.bi"));
-    const rtlMacroSource = readText(path.join(compilerRoot, "rtl-macro.bas"));
-    const compilerDriverSource = readText(path.join(compilerRoot, "fbc.bas"));
+    const defineSource = readCompilerSource(compilerRoot, "symb-define.bas");
+    const symbolSource = readCompilerSource(compilerRoot, "symb.bas");
+    const fbSource = readCompilerSource(compilerRoot, "fb.bi");
+    const rtlMacroSource = readCompilerSource(compilerRoot, "rtl-macro.bas");
+    const compilerDriverSource = readCompilerSource(compilerRoot, "fbc.bas");
+    const compilerHelpSource = readCompilerSource(compilerRoot, "fbc-help.bas");
     const defines = new Set();
 
     for (const match of defineSource.matchAll(/\(@"(__[A-Z0-9_]+__)"\s*,/g)) {
@@ -233,7 +385,8 @@ function extractCompilerDefines(freeBasicRoot) {
         defines.add(match[1]);
     }
 
-    if (compilerDriverSource.includes("__FB_GFXLIB3__")) {
+    if (compilerDriverSource.includes("__FB_GFXLIB3__") ||
+        /define\s+__FB_GFXLIB3__/i.test(compilerHelpSource)) {
         defines.add("__FB_GFXLIB3__");
     }
 
@@ -248,6 +401,11 @@ function extractHeaderApi(freeBasicRoot) {
         const source = readText(path.join(freeBasicRoot, relativePath));
 
         for (const match of source.matchAll(/\bdeclare\s+(?:function|sub)\s+([A-Za-z_][A-Za-z0-9_]*)/gi)) {
+            functions.add(match[1].toUpperCase());
+        }
+
+        /* fbserialize.bi exposes its compiler intrinsics as public call macros. */
+        for (const match of source.matchAll(/^[ \t]*#define[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+__FB_(?:SERIALIZE|DESERIALIZE)\b/gmi)) {
             functions.add(match[1].toUpperCase());
         }
 
@@ -452,7 +610,8 @@ function resolveFreeBasicRoot(configuredRoot) {
 
     for (const candidate of candidates) {
         const resolvedCandidate = path.resolve(candidate);
-        const keywordPath = path.join(resolvedCandidate, "src", "compiler", "symb-keyword.bas");
+        const compilerRoot = path.join(resolvedCandidate, "src", "compiler");
+        const keywordPath = resolveCompilerSourcePath(compilerRoot, "symb-keyword.bas");
 
         if (fs.existsSync(keywordPath)) {
             return resolvedCandidate;
@@ -504,6 +663,9 @@ if (require.main === module) {
 
 module.exports = {
     auditCoverage,
+    compilerSourceDirectories,
+    listCompilerSourceFiles,
+    resolveCompilerSourcePath,
     collectGrammarCoverage,
     extractCompilerDefines,
     extractCompilerKeywords,

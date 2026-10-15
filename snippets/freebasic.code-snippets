@@ -294,6 +294,38 @@
     ],
     "description": "Create, use, and destroy an opt-in gfxlib3 GPU surface"
   },
+  "Gfx3 Load Image Surface": {
+    "prefix": "gfx3loadimage",
+    "body": [
+      "#include once \"fbgfx3.bi\"",
+      "Using FB",
+      "",
+      "If( ScreenRes(${1:640}, ${2:480}, 32) <> 0 ) Then End 1",
+      "Dim As Any Ptr ${3:surface} = Gfx3SurfaceLoad(\"${4:image.png}\", 32)",
+      "If( ${3:surface} <> 0 ) Then",
+      "    Dim As Long ${5:imageWidth}, ${6:imageHeight}",
+      "    If( Gfx3SurfaceInfo(${3:surface}, @${5:imageWidth}, @${6:imageHeight}) = 0 ) Then",
+      "        Gfx3SurfaceBlit(0, ${3:surface}, 0, 0, ${5:imageWidth}, ${6:imageHeight}, 0, 0)",
+      "        ${0}",
+      "        Sleep",
+      "    End If",
+      "    Gfx3SurfaceDestroy(${3:surface})",
+      "End If",
+      "Screen 0"
+    ],
+    "description": "Load a BMP or PNG into an opaque gfxlib3 surface, draw it, and release it (build with -gfx3)"
+  },
+  "Save Screen As PNG": {
+    "prefix": "savepng",
+    "body": [
+      "If( ScreenRes(${1:640}, ${2:480}, 32) <> 0 ) Then End 1",
+      "${0}",
+      "If( BSave(\"${3:screenshot.png}\", 0) <> 0 ) Then",
+      "    Print \"Could not save the PNG image.\"",
+      "End If"
+    ],
+    "description": "Save the current graphics work page as a PNG using FreeBASIC 1.20.4 BSave"
+  },
   "ScreenLock": {
     "prefix": "screenlock",
     "body": [

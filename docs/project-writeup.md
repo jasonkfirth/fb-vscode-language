@@ -29,7 +29,7 @@ This extension started as a language-support stub and was grown into a practical
 
 ## How the plugin was developed
 
-The first step was to stop guessing. FreeBASIC is a real language with a large surface area, and a lot of its behavior lives in the compiler tree, runtime modules, parser quirks, and example programs. Instead of inventing syntax support by hand, the extension is aligned with the FreeBASIC 1.20.3 public language surface. The working compiler checkout currently carries a 1.20.4 development version, so the audit proves that the inspected paths are unchanged from tag `v1.20.3` before accepting that checkout.
+The first step was to stop guessing. FreeBASIC is a real language with a large surface area, and a lot of its behavior lives in the compiler tree, runtime modules, parser quirks, and example programs. Instead of inventing syntax support by hand, the extension is aligned with the current FreeBASIC 1.20.4 compiler and headers. Generated reference data records the exact source revision and a reproducible content hash.
 
 That source-backed approach shaped almost everything else:
 
@@ -50,9 +50,16 @@ The implementation was then split into smaller parts so each concern could stay 
 - `tools/audit-freebasic-coverage.js` checks the source data against compiler, runtime, parser, and selected bundled-header registrations
 - `extension.js` owns activation, provider registration, commands, and lifecycle events
 - `lib/freebasic-parser.js` handles nested declaration tracing, comments and strings, includes, occurrences, calls, and folding ranges
+- `lib/bracket-diagnostics.js` provides immediate lexical delimiter checks without requiring a compiler process
 - `lib/workspace-index.js` maintains a reusable index across `.bas` and `.bi` files
-- `lib/editor-features.js` adapts analysis results into completions, navigation, symbols, references, rename, signatures, folding, and links
+- `lib/semantic-model.js` resolves scopes, declaration identities, types, aliases, members, and public inheritance
+- `lib/semantic-features.js` adapts resolved symbols into navigation, references, rename, and semantic tokens
+- `lib/editor-features.js` presents completions, hover, symbols, signatures, folding, and links
+- `lib/include-paths.js` shares include discovery between links and indexing
+- `tools/build-language-reference.js` generates offline reference data from the manual and headers
+- `lib/language-reference.js` provides attributed built-in reference help
 - `lib/compiler-diagnostics.js` runs `fbc` with bounded compile-only arguments and parses its output
+- `lib/compiler-diagnostic-sidecar.js` validates FBC's structured diagnostic transport before narrowing editor ranges
 - `lib/compiler-service.js` applies trust policy and publishes compiler diagnostics through VS Code
 - `lib/grammar-data.js` loads and normalizes the grammar source data
 - `tests/` contains smoke tests, parser tests, and fixtures
@@ -82,6 +89,7 @@ The practical effect is:
 
 - syntax highlighting now covers core language forms, compiler defines, runtime APIs, graphics entry points, TCP forms, and sfxlib commands
 - indentation and comment behavior are tuned for FreeBASIC block structures
+- bracket pairs are highlighted by VS Code, and unmatched delimiters receive live warnings outside comments and strings; conditional branches are not evaluated
 - snippets reduce the friction of common tasks like file I/O, graphics loops, thread setup, and network examples
 - cached editor intelligence surfaces built-ins and declarations already present in the workspace
 - navigation, references, guarded rename, signatures, folding, and include links reduce routine source navigation work
@@ -98,7 +106,7 @@ Second, it helps FreeBASIC look and feel like a living language in a modern edit
 
 This project is not pretending to be a full compiler front-end.
 
-The editor analyzer is intentionally conservative. It traces common declarations and scopes, but it does not do full type checking, inheritance resolution, or compiler-accurate overload selection. Rename is therefore restricted to spellings with one unambiguous indexed declaration. TextMate highlighting also has natural limits because it is regex-based instead of parser-based. Real syntax and type diagnostics come from the configured FreeBASIC compiler rather than being approximated in JavaScript.
+The editor analyzer resolves common declarations, lexical scopes, declared types, aliases, namespace imports, and public inheritance. It does not perform full type checking, macro expansion, target-specific preprocessing, or compiler-accurate overload selection. Rename follows resolved declaration identity and rejects ambiguity, collisions, and incomplete indexes, but unsupported and macro-generated uses can remain unresolved. Preview edits before applying them. TextMate highlighting is supplemented by semantic tokens for resolved symbols. Real syntax and type diagnostics come from the configured FreeBASIC compiler.
 
 That is not a flaw in the project. It is just the boundary between practical editor support and full language intelligence.
 
@@ -111,7 +119,10 @@ That includes:
 - cross-platform grammar regeneration from the source data under `syntaxes/source`
 - audit checks against compiler and runtime registrations, parser command families, and selected bundled headers
 - smoke tests for JSON validity and packaging rules
-- unit tests for parser, workspace-index, and compiler-diagnostic behavior
+- unit tests for parsing, semantic resolution, indexing, compiler cancellation, and reference reproducibility
+- actual VS Code provider tests, including optional real-compiler diagnostics and snippet checks
+- actual TextMate tokenizer tests and a source-corpus coordinate/performance audit
+- Linux and Windows CI using a pinned compiler source revision
 - native Bash and PowerShell VSIX builders that verify the packaged `extension/package.json` stays valid and BOM-free
 
 Those details are useful to contributors and maintainers, but they are not part of the installed extension experience. Keeping that split helps the packaged README stay focused on FreeBASIC users while the repository still documents how the project is maintained.

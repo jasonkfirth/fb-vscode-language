@@ -1,5 +1,444 @@
 # Changelog
 
+## 1.20.4
+
+- Added conservative indentation-only document formatting for recognized FreeBASIC block structures
+- Added range formatting for selected lines while retaining whole-document block context
+- Added an FBC-contextual Quick Fix to remove a mismatched single `NEXT` counter name
+- Added a Quick Fix to remove a redundant `NEXT` counter when FBC emits `-w next`
+- Added a Quick Fix to remove an undeclared optional counter name after `NEXT`
+- Added a Quick Fix for ignored type suffixes on simple `DIM name% AS Type` declarations
+- Kept the case-only duplicate `DIM` Quick Fix available for FBC's exact duplicate-definition error when its optional semantic context is absent
+- Extended case-only duplicate `DIM` removal to untyped declarations with the same default type
+- Underlined the compiler-selected target for `LINE INPUT` with unknown buffer capacity
+- Added compiler-confirmed EOF Quick Fixes for the exact missing block terminator
+- Used FBC's physical declaration-name point for procedure signature mismatch diagnostics
+- Used FBC's parser context and physical point to underline unsupported `ON ERROR RESUME NEXT`
+- Added an exact Quick Fix to remove standalone unsupported `ON ERROR RESUME NEXT` statements
+- Added a compiler-confirmed Quick Fix to parenthesize an unambiguous function call when assigning to its BYREF result
+- Added an opt-in Quick Fix to change a warned nested `Else If` into an `ElseIf` branch
+- Added opt-in address/value Quick Fixes for FBC's BYREF temporary and scalar/pointer mismatch warnings, including matching pointer dereference, guarded by source and parameter types
+- Underlined FBC's exact limit token and added an opt-in Quick Fix to widen an explicitly typed inline `FOR` counter when it cannot exceed the loop limit
+- Underlined the compiler-selected operand for exact `Suspicious pointer assignment` warnings
+- Added an opt-in Quick Fix to widen simple explicitly typed integer declarations when FBC warns a literal overflows conversion
+- Added an opt-in Quick Fix to align a simple numeric procedure default with its unique same-file declaration
+- Added a Quick Fix to dereference a primitive pointer in a simple `PUT`/`GET` value slot when FBC warns the pointer value would be transferred
+- Showed compiler-accepted `#inclib` and `#libpath` inputs on their directives, declaration hovers, unambiguous completion docs, and Signature Help
+- Showed adjacent `''` documentation on declarations and macros in hovers/completions/Outline, plus continued-parameter notes and matching `@param` docs in parameter hovers, completions, and Signature Help
+- Added compiler-selected value types to Outline details for typed symbols
+- Distinguished implicit and inferred types from written types in Outline details
+- Showed compiler-selected base types for classes in Outline details
+- Showed compiler-selected base types in type hovers and completion docs
+- Used FBC-selected base-type identities in matching stock-sidecar type completion docs, including types declared in included headers
+- Added stock-sidecar constructor completion for FBC-bound types and aliases from reachable included headers, including qualified names and constructor-argument snippets when the target is unambiguous
+- Kept scalar declaration hovers available when no aggregate facts are present
+- Kept Signature Help on the normal analysis path when a source-only semantic model is unavailable
+- Added compiler-selected array bounds to array declarations in Outline details
+- Added compiler-verified array element counts to Outline when they match the fixed bounds
+- Added compiler-selected field offsets and bitfield positions/widths to Outline details
+- Showed compiler-confirmed field offsets and access visibility on stock-FBC field declaration hovers
+- Showed compiler-selected aggregate size, alignment, packing, access sections, and abstract-member counts on stock-FBC type hovers
+- Showed compiler-confirmed inherited base types in stock-FBC type hovers and Outline details
+- Added compiler-selected parameter passing modes and array ranks to Outline parameters
+- Showed compiler-selected storage scope for implicit locals in Outline details
+- Used FBC declaration occurrences to cover implicit variables in FBLite, QB, and deprecated dialects even when first encountered by a read; added compiler-backed type inlays, hovers, Outline/completion details, and local-to-Dim refactors, including unsaved bridge-buffer edits when exact scalar facts are available
+- Preserved stock-sidecar completion, Outline, hover, Go to Definition, Find References, document highlights, inlay hints, typed-local refactoring, and semantic-token coloring for physical identifiers the lightweight lexer masks as comments when FBC accepted them as code
+- Kept the native bridge model valid for conditional `OPTION NOKEYWORD REM`, including unsaved overlays and project rename, by applying compiler-confirmed token overrides only at bound expanded and physical source ranges
+- Preserved compiler-selected native-bridge type inlays for implicit locals named `REM` under conditional `OPTION NOKEYWORD`
+- Enabled native-bridge typed-`Dim` refactoring for masked implicit `REM` locals when FBC confirms local scalar storage
+- Added compiler-selected Public/Protected/Private access labels to contained Outline symbols
+- Showed compiler-selected base methods for overridden members in Outline details
+- Added compiler-selected UDT size, natural alignment, and packing alignment to Outline details
+- Showed unresolved abstract-member counts in type Outline details
+- Added compiler-selected foreign linkage and ByRef return details to procedure Outline entries
+- Clarified module-scope default visibility for standalone procedures in Outline
+- Marked a completion deprecated only when every candidate declaration documents `@deprecated`
+- Applied the semantic-token `deprecated` modifier to documented declarations and references
+- Tagged documented deprecated declarations in the compiler-backed Outline and Call Hierarchy
+- Preserved deprecation tags in workspace symbol search only when all indexed build contexts agree
+- Called out source-documented deprecation in hovers, unambiguous completion docs, and Signature Help
+- Explained compiler-confirmed case-only variable collisions and suffix/`AS` conflicts; added bounded Quick Fixes to remove redundant declarations and the rejected suffix from `DIM AS` lists
+- Refreshed the offline API reference to FBC HEAD `3d17dc284` (616 names; FreeBASIC 1.20.4), including opt-in `Serialize` and `Deserialize` forms
+- Added bounded manual return values and descriptions to offline hover, completion, and Signature Help documentation
+- Added import-aware completion, syntax coverage, and manual Signature Help for the `fbserialize.bi` API
+- Rebuilt the compiler bridge from current FBC source and covered the serialization expression-parser route with compiler-selected type checks
+- Added compiler-confirmed operand, operation-result, and assignment-target details to compound-assignment hovers
+- Added compiler-reported operand and result types to binary and unary operator hovers
+- Added compiler-reported operand hovers for Cva_List operations and a result type hover for `Cva_Arg`
+- Documented compiler-confirmed default ByVal/ByRef modes in Signature Help when the keyword is omitted
+- Marked compiler-default ByVal/ByRef parameter modes as unwritten in Outline details
+- Added compiler-selected parameter passing modes to positional-argument inlay tooltips
+- Showed compiler-selected passing mode, array rank, and optionality on stock-FBC parameter declaration hovers
+- Showed compiler-selected storage scope on stock-FBC assignment-target hovers
+- Showed compiler-selected target value widths on stock-FBC variable declaration hovers
+- Showed compiler-selected default or inferred primitive types on untyped stock-FBC variable declarations
+- Showed compiler-confirmed scalar String initialization on stock-FBC declaration hovers
+- Enabled targeted stock-FBC sidecar hovers for accepted `#inclib` and `#libpath` inputs
+- Identified compiler-assigned enum values versus explicit values on stock-FBC enum member hovers
+- Showed FBC's target-wide string unit width, termination, and bounded emitted-unit prefix on literal hovers
+- Included target-wide literal representation in the compiler expression type command
+- Showed compiler-selected SELECT CASE comparison and jump-table lowering on selector hovers
+- Added compiler-confirmed fixed-array element storage totals to Outline, hover, and completion details
+- Showed compiler-confirmed array bounds and target element storage on array declarations and bound, index, and ByDesc-use hovers
+- Added matching offline reference documentation to hovers for compiler-resolved bundled header declarations
+- Displayed exact compiler-confirmed integer, floating-point, and string values for named constants in hover, retaining raw string units and withholding ambiguous values
+- Displayed FBC-folded numeric and string expression values on hover when the compiler supplied an exact physical expression match
+- Included compiler-folded values in the existing expression-type command when the selected compiler span is unambiguous
+- Preserved parser-based document Outline when stock FBC is configured without the editor bridge, without compiling just for native symbols
+- Added a bounded summary from adjacent apostrophe docs to parser Outline details and applied the VS Code Deprecated tag for `@deprecated`
+- Enriched cached stock-sidecar Outline with FBC-selected primitive types, compiler-created implicit locals, enum values and origin, parameter modes, procedure ABI/default visibility/overrides, array bounds, field offsets/visibility, aggregate layout, scalar String initialization, and constant values, without starting compiler analysis
+- Added cached stock-sidecar completion for compiler-created locals, limited to prior declarations in the same parsed procedure
+- Added compiler-selected primitive types and storage scope to stock-sidecar completion details for untyped declarations
+- Intersected conditional-macro completion across repeated shared-header contexts so macros visible in only one include environment are not suggested
+- Added stock-sidecar Go to Definition and Find References for compiler-selected conditional-name probes, including qualified and continued names, using compact semantic bindings; qualified `DEFINED()` hovers show the full source name
+- Added stock-sidecar macro Signature Help and selected-definition hover, including a bounded source-body preview when its physical definition site matches; parameter casing is preserved when formal slots agree
+- Added stock-sidecar parameter inlays for compiler-selected macro signatures, including nested calls in macro arguments, `#if`/`#elseif`/`#assert` expressions, and `#macro` blocks; full macro facts are requested only when a source macro call is visible
+- Kept workspace-symbol search on the parser index for stock-FBC semantic-only roots, skipping native indexing and merging duplicate locations with any native results
+- Used compiler access roles for write semantic tokens and read/write document highlights, including when stock-FBC bindings are already cached
+- Added compiler-selected type inlays on FBC-created implicit assignment and compound-assignment variables and scalar FOR counters, plus uninitialized implicit declarations, in stock-sidecar mode
+- Added stock-sidecar type inlays for compiler-confirmed implicit primitive function results, parameters, and unresolved `INPUT`/`READ` targets; written types remain unannotated
+- Added stock-sidecar Outline entries for compiler-created variables in `INPUT` and `READ` statements
+- Extended stock-sidecar implicit-local completion to compiler-created `INPUT`/`READ` targets in the current procedure
+- Added compiler-selected type and storage-class hovers on unresolved stock-sidecar `INPUT` and `READ` targets
+- Added a stock-sidecar refactor to declare unresolved procedure-local `INPUT`/`READ` targets with FBC's selected primitive type
+- Extended the stock-sidecar implicit-local declaration refactor to optional `LET` assignments
+- Added compiler-selected type inlays, Outline/completion entries, and typed-declaration refactoring for FBC-created compound-assignment locals
+- Added stock-sidecar type inlays, Outline/completion entries, and typed-declaration refactoring for implicit `SWAP` targets
+- Added stock-sidecar string type inlays, Outline/completion entries, and typed declarations for implicit `LSET`/`RSET` targets
+- Added compiler-selected type inlays and type/storage hovers, Outline/completion entries, and a typed-declaration refactor for implicit `GET` destinations
+- Added a stock-sidecar refactor to make unresolved scalar `FOR` counter types explicit using FBC's selected primitive type
+- Added compiler-selected stock-sidecar type inlays for implicit `REDIM` array declarations
+- Added compiler-selected element types and storage scope to stock-sidecar Outline for implicit `REDIM` arrays
+- Added a stock-sidecar refactor to declare implicit local `REDIM` arrays with FBC's selected primitive type
+- Added stock-sidecar type and storage-class hovers for implicit scalar `FOR` counters
+- Showed compiler-confirmed scalar `FOR` entry results on the loop header hover
+- Added an inline hint when FBC confirms a scalar `FOR` loop body is skipped, including stock-sidecar analysis
+- Added an inline `unreachable` hint for physical statements proven unreachable by FBC's control-flow graph, including stock-sidecar analysis
+- Added compiler-selected target storage widths and UDT layout sizes to full-model symbol hovers, with pointer, ByRef, and dynamic-string caveats
+- Added compiler-selected calling-convention, external-linkage, and ByRef-return details to full-model procedure hovers
+- Surfaced compiler-confirmed implicit calling-convention clauses and FreeBASIC `STRING`-based ABI types in procedure hovers
+- Included compiler-confirmed procedure ABI details in callable completion and Signature Help documentation
+- Surfaced compiler-selected procedure ABI and scope-default visibility on stock-FBC procedure declaration hovers
+- Included unambiguous compiler-selected override targets in callable completion documentation
+- Included compiler-confirmed parameter passing mode, optionality, and array rank in parameter completion documentation
+- Added compiler-confirmed ByDesc, VarArg, and optional parameter details to Signature Help
+- Documented compiler-selected implicit return and parameter types in completion details
+- Included compiler-confirmed storage widths, array bounds, and field layout in completion documentation
+- Surfaced compiler-confirmed scalar dynamic String initialization and exact constant initializer values
+- Showed compiler-confirmed unresolved abstract members on type completion candidates
+- Identified the compiler-selected base method and optional `Override` marker status in full-model procedure hovers
+- Added a refactor action to write the optional `Override` marker when FBC confirms the base method, including stock-sidecar analysis
+- Displayed compiler-confirmed private and protected access levels in member hovers
+- Displayed compiler-confirmed public access on aggregate fields and contained symbols
+- Reported compiler-confirmed unresolved abstract members in type hovers
+- Summarized compiler-confirmed Public/Protected/Private access sections in aggregate documentation
+- Clarified FBC-selected local/global storage for implicitly declared variables in hovers
+- Displayed compiler-selected implicit return types in procedure hovers and Signature Help, and implicit parameter types in hovers
+- Added a refactor action to write compiler-confirmed implicit function return types as explicit `As` clauses
+- Added a refactor action to make compiler-selected default visibility explicit on standalone procedure definitions, including stock-sidecar analysis
+- Added a compiler-confirmed refactor to write the selected Cdecl/Stdcall/Pascal/Thiscall/Fastcall convention on foreign-linked, non-managed-STRING procedures, including stock-sidecar analysis
+- Added stock-sidecar support for making compiler-selected default ByVal/ByRef parameter modes explicit
+- Added stock-sidecar support for making implicit parameter types explicit and replacing parameter type suffixes from FBC's normalized type facts
+- Added stock-sidecar support for making implicit function return types explicit and replacing return type suffixes from FBC's normalized type facts
+- Explained compiler-selected scope-default visibility on standalone procedure hovers
+- Added a refactor action to write compiler-confirmed implicit parameter types, including array parameters, as explicit `As` clauses, including stock-sidecar analysis
+- Added a refactor action to replace scalar parameter type suffixes with compiler-selected `As` types
+- Added a refactor action to replace function return suffixes with compiler-selected `As` types
+- Added a refactor action to make untyped `DIM`, `STATIC`, `COMMON`, and `EXTERN` variables use their compiler-selected `As` types, including individual declarators in multi-name `DIM` statements and stock-sidecar analysis
+- Added a refactor action to make implicitly typed constants use their compiler-selected `As` types, including stock-sidecar analysis
+- Added a refactor action to replace constant type suffixes with compiler-selected `As` types, including stock-sidecar analysis
+- Added a refactor action to rewrite single-declarator `Var` inference as a typed `Dim`, including stock-sidecar analysis
+- Added a refactor action to turn compiler-confirmed implicit local assignments into typed `Dim` declarations, including stock-sidecar analysis
+- Added a refactor action to write FBC's exact value explicitly for implicit enum members, including stock-sidecar analysis
+- Added a refactor action to replace variable type suffixes with compiler-selected `As` types, including stock-sidecar analysis
+- Extended configured-project Find References and prototype/implementation navigation to stock FBC semantic sidecars for saved source, including compiler-selected conditional constants and qualified member probes
+- Enabled stock FBC sidecar navigation, Find References, and targeted document highlights for compiler-bound numeric labels
+- Corrected stock-sidecar source mapping to honor FBC's UTF-16 columns after non-ASCII text
+- Added on-demand stock-sidecar macro definition navigation and translation-unit/configured-project Find References using FBC's selected physical invocations and `#undef` lifecycle; unprojectable nested expansions withhold the project result
+- Added a refactor action to make compiler-selected default `ByVal` or `ByRef` modes explicit
+- Added compiler-selected ByVal/ByRef/ByDesc passing modes and array ranks to full-model parameter hovers
+- Added compiler-selected natural and packing alignment to UDT declaration hovers
+- Added compiler-confirmed array bounds and verified element counts to full-model symbol hovers
+- Added compiler-selected byte offsets and bitfield positions/widths for physical UDT fields in full-model hovers
+- Included the same exact compiler-confirmed numeric and string values in completion details
+- Included compiler-confirmed numeric and string values in native Outline descriptions
+- Added stock-FBC sidecar constant-value hovers for compiler-bound numeric and string symbols
+- Added stock-FBC sidecar constant values to matching completion details
+- Activated FBC-selected ordinary procedure overloads in Signature Help while retaining visible candidates
+- Used stock FBC's physical call bindings to activate ordinary overloads only when source resolution is ambiguous
+- Added stock-FBC sidecar parameter-name inlay hints for physical direct calls, requesting bindings only for ranges containing calls
+- Requested stock-FBC expression-sidecar analysis for inferred type inlays on ranges with potentially untyped declarations
+- Preserved offline reference hover and signatures for `#` type-suffixed identifiers
+- Listed all visible signatures in overloaded completion entries without guessing call arguments
+- Explained the compiler's undeclared optional `NEXT` counter context and gated its removal fix on that fact
+- Offered an exact one-edit correction from a mistyped `NEXT` counter to its unambiguous active `FOR` counter
+- Added documented parameter descriptions to offline reference hovers and completion details
+- Added missing bundled API headers and namespaces when accepting uniquely mapped completion items
+- Kept bundled API completion imports correct when matching directives occur later in the file
+- Respected lexical scope and conditional branches when checking existing API imports
+- Reused one source snapshot for all API import edits in a completion request
+- Restricted completion inside `Using` directives to namespace candidates
+- Restricted nested `Using` completion to child namespaces
+- Documented that `fbgfx3.bi` selects gfxlib3 and `-gfx3` selects it for unchanged source
+- Documented automatic runtime linkage for the graphics headers
+- Documented that the advanced sfxlib headers link their runtime automatically
+- Fixed nested bracket Quick Fixes to insert missing closers in valid order
+- Respected accepted unconditional `OPTION NOKEYWORD REM` when masking comments, folding regions, and checking bracket diagnostics
+- Fixed registration of the EOF bracket-balancing Quick Fix
+- Added a preferred bracket Quick Fix to replace a mismatched closer when one open bracket makes the repair unambiguous
+- Routed manual module checks through the editor bridge when unsaved module or header buffers need analysis
+- Added Go to Implementation for matching `DECLARE` procedures and out-of-line bodies
+- Added Go to Declaration from calls and bodies back to matching procedure prototypes
+- Added type hierarchy navigation from UDT declarations and typed values, following native or stock-sidecar compiler identities for direct bases and subtypes
+- Followed stock-FBC subtype identities for Type Definition from typed variables and expressions before source-name fallback
+- Skipped stock-sidecar Type Definition analysis for comments, literals, and complete source-resolved symbols without a user-defined type
+- Skipped stock-sidecar Type Hierarchy analysis for comments, literals, punctuation, and source-resolved symbols with no user-defined type
+- Added incoming and outgoing call hierarchy for procedures and module-level calls, using compiler-selected bindings or conservative source resolution
+- Added compiler-identified reference CodeLens for procedures, overloaded operators, constructors, and destructors, with clickable physical reference/operation locations from a prepared native snapshot
+- Added stock-FBC procedure reference CodeLens from cached physical bindings, overload-selected calls, and compiler-selected overloaded operator expressions, without compiling only to display lenses
+- Included compiler-selected overloaded index expressions in native Call Hierarchy, preserving use-site ranges and module callers
+- Used stock FBC source-call bindings to keep same-result overloads exact in Call Hierarchy, including call-site preparation and module edges
+- Added stock-sidecar Call Hierarchy edges for overloaded operators, mapped from FBC's physical operator receipts
+- Matched operator declaration ranges before ordinary token resolution in Call Hierarchy, keeping `Operator Delete[]` distinct from scalar `Delete`
+- Used FBC's physical `cast` receipts for definition, hover, references, highlights, and Call Hierarchy at cast intrinsics that select `Operator Cast`
+- Used FBC's physical math receipts for overloaded intrinsic callees such as `Abs`
+- Used FBC's selected assignment receipts for stock-sidecar `Operator Let` navigation, references, and Call Hierarchy
+- Found `Operator Let` candidates from the final top-level member of an assignment target, enabling navigation for UDT-valued fields while ignoring index arguments
+- Kept the parser's empty `()` operator suffix separate from constructor parameter lists, preserving `Constructor%()` symbol ranges
+- Added stock-sidecar navigation, hover, references, and Call Hierarchy for compiler-selected `Operator New`, `New[]`, `Delete`, and `Delete[]` at their physical keyword tokens
+- Added stock-sidecar navigation, hover, references, highlights, and Call Hierarchy for compiler-selected UDT iterator `FOR`, explicit `STEP`, and `NEXT` operators
+- Extended the editor bridge to consume FBC's physical operator receipts for custom scalar/vector `NEW` and `DELETE`, overloaded expressions including word operators and simple/indexed `Operator Let` assignments, and UDT iterator operators across navigation, references, hover, highlights, and Call Hierarchy
+- Distinguished compiler-selected `Operator =` from plain assignment at the physical `=` token while keeping ordinary assignments on the lighter path
+- Prepared Call Hierarchy from `Operator Let` declarations with incoming simple and indexed UDT assignment sites
+- Included compiler-selected `Operator Let` assignment sites in declaration-origin Find References and document highlights
+- Kept ordinary assignments on the lighter analysis path unless a visible `Operator Let` or overloaded equality candidate exists
+- Deferred source operator-index lookup in remote hovers, navigation, Call Hierarchy, references, and highlights until specialized syntax requires it
+- Skipped compiler analysis for Signature Help triggers that are not inside a call or index expression
+- Avoided full binding analysis for resolved source symbols inside call arguments across navigation, references, and highlights
+- Skipped on-demand Inlay Hint analysis for ranges with no potentially implicit declaration types
+- Skipped compiler-model acquisition for Hover in line comments and edge whitespace
+- Routed compound-assignment operators and their documented `=>` aliases through compiler-selected operator receipts
+- Added compiler-selected `Operator Len` navigation and call/reference edges from physical typed-expression facts
+- Added stock-sidecar Call Hierarchy edges for overloaded indexers, preserving the compiler-selected target and full indexed expression range
+- Added stock-sidecar Call Hierarchy edges for compiler-selected `NEW`, local default, initializer, and return-value constructors
+- Added stock-sidecar Call Hierarchy, Find References, and document highlights for compiler-selected argument constructors at implicit UDT conversions, preserving overload-specific argument ranges
+- Prepared stock-sidecar Call Hierarchy directly on ordinary `Type(...)` constructor expressions
+- Added stock-sidecar Call Hierarchy edges for compiler-selected UDT destructors invoked by `DELETE`
+- Added stock-sidecar Call Hierarchy edges for physical local-object destructor calls
+- Added stock-sidecar Call Hierarchy edges for compiler-selected temporary destructors at their creating expressions
+- Added stock-sidecar Call Hierarchy edges for compiler-selected destructors at explicit scope-exit control transfers
+- Documented and regression-tested context-sensitive label completion for forward and QB numeric labels
+- Preserved native call hierarchy through macro arguments when the compiler maps the callee to a physical source token
+- Included standalone zero-argument `Sub` calls in source-mode Call Hierarchy
+- Included zero-argument `Function` calls used as complete simple expressions in source-mode Call Hierarchy
+- Included unambiguous bare getter `Property` accesses in source-mode Call Hierarchy
+- Added signature help for overloaded `Operator []` indexers in source and compiler-backed modes
+- Preserved Signature Help context and active-parameter counts across multiline calls and nested brace initializers
+- Used FBC's physical expression ranges to include nested compiler-confirmed expressions in Expand Selection, retaining parser-based selections as fallback
+- Added Signature Help for explicit user-defined type constructor calls, using declared constructor signatures in source mode and activating the compiler-selected constructor when native call data records it
+- Inserted named parameter snippets for unique UDT constructors after `NEW`; overloaded or ambiguous constructor sets remain name-only
+- Showed the constructor declaration on Hover at a UDT call, using the compiler-selected constructor when the native call graph identifies it
+- Requested FBC's full binding sidecar only for `NEW` Signature Help when needed, activating the exact constructor overload without increasing ordinary analysis cost
+- Mapped stock FBC's selected `NEW` constructor procedure back to its physical source definition for Signature Help
+- Included compiler-selected `NEW` constructor calls in Find References and document highlights, preserving overload separation
+- Extended compiler-selected `NEW` constructor references and highlights to stock FBC sidecars by mapping their procedure source locations back to the source index
+- Included matching constructor prototypes and implementations when Find References requests declarations in stock-sidecar mode
+- Added source and compiler-backed declaration, definition, and implementation navigation for `Operator []` index expressions, selecting FBC's overload in native mode
+- Activated the compiler-selected `Operator []` overload in native signature help without hiding other candidates
+- Added overload-aware Hover for index expressions, including the compiler-resolved result type
+- Included compiler-selected `Operator []` uses in native Find References and document highlights, keeping overload references separate
+- Followed the compiler-selected `Operator []` result type for compiler-backed Type Definition on index expressions
+- Added Expand Selection ranges for tokens, matched delimiters, statements, enclosing scopes, and whole documents
+- Added comment-kind folding for multiline nested block comments
+- Added import-kind folding for consecutive `#include` and `USING` directives
+- Added folding ranges for multi-line underscore continuations
+- Added comment-kind folding for contiguous apostrophe and `REM` comment lines
+- Suppressed automatic bracket closers inside strings and comments
+- Extended Expand Selection to select contiguous line-comment and multiline block-comment groups
+- Used ordinary FBC result types to keep overload declaration/implementation navigation on the compiler-selected signature
+- Used ordinary FBC sidecar expression types for type-definition navigation when one visible source declaration matches unambiguously
+- Refined member completion after overloaded calls from ordinary FBC sidecar types when one visible source type matches
+- Used ordinary FBC sidecar result types to select a unique overload for Go to Definition
+- Highlighted the ordinary-FBC sidecar-selected overload in signature help without hiding other candidates
+- Presented the ordinary-FBC sidecar-selected overload on hover
+- Added sidecar-guided document highlights for compiler-confirmed calls to the selected overload
+- Added compiler-confirmed translation-unit overload call sites to ordinary FBC Find References results
+- Supported starting ordinary-FBC overload references from the exact declaration as well as a selected call
+- Used FBC source-call bindings to select same-result overloads in stock-sidecar Signature Help, navigation, hover, references, and highlights; loaded full bindings only for explicit overloaded-call interactions
+- Retained physical expression types alongside on-demand full binding facts so later type hovers and inlay hints remain available
+- Used FBC's selected symbol on overloaded index expressions for stock-sidecar indexer Signature Help, navigation, hover, references, and highlights
+- Preserved compiler-selected overloaded index expressions from unopened included headers for stock-sidecar reference results
+- Added stock-sidecar definition, implementation, hover, reference, and highlight support for other physical overloaded-operator tokens using FBC's selected operator records
+- Added inlay type hints from ordinary FBC sidecars for untyped constants and legacy implicit `Dim` initializers, including continued initializer expressions
+- Used FBC's validated FBCDIA transport to place compiler-analysis, on-save, and Check Syntax diagnostics at verified physical source tokens, including included headers
+- Used compiler include outcomes for active-branch physical `#include` links when a current semantic snapshot is available
+- Added on-demand compiler analysis to the FreeBASIC editor title actions alongside Check Current Module
+- Added Select Compiler Context to the editor title actions for switching build/translation-unit context
+- Added Show Compiler Expression Type to the FreeBASIC editor context menu
+- Added Show Compiler-Expanded Module to the FreeBASIC editor context menu
+- Showed the compiler-resolved include target in link tooltips, including once-only skip status
+- Offered a Quick Fix to include the bundled header for an undeclared API routine or unresolved type with a unique reference mapping
+- Offered the same bundled-header Quick Fix directly on included-header diagnostics
+- Corrected missing include paths when exactly one matching workspace or configured-include header exists
+- Completed `.bi` include operands from source/configured/compiler paths, with folder suggestions for nested includes
+- Inserted named argument placeholders for unique non-overloaded procedures, indexed getter properties, parameterized macros, and compatible offline-reference function signatures, omitting defaulted trailing arguments and withholding ambiguous overload/accessor forms
+- Suggested one-edit corrections for undeclared variables, explicit procedure calls, bundled API calls, and public bundled types only when one visible/reference name matches; bundled fixes also add the unique header/import
+- Used FBCDIA's observed source inventory to clear and recheck compiler diagnostics after edits to macro-included headers
+- Added live lexical warnings for unmatched `()`, `[]`, and `{}` delimiters, while ignoring strings and comments
+- Added bracket Quick Fixes to insert a missing closer at the detected mismatch/EOF or remove an unmatched closer
+- Faded compiler-confirmed inactive source ranges and suppressed their bracket warnings
+- Showed compiler-evaluated conditional results, branch selection, and `DEFINED(name)` status on hover across continued conditions
+- Included bounded `#define` source and `#macro` bodies in macro hover/completion when the compiler identity is unique, and on exact redefinition sites
+- Followed the active compiler macro definition epoch for macro signatures and completion after redefinition
+- Added compiler-selected type inlay hints for implicit variables, parameters, function results, and inferred constants; omitted explicit, suffix, and recovery-uncertain types
+- Added compiler-selected parameter-name inlay hints for positional user-procedure and constructor calls, preserving overload-specific names and withholding ambiguous expansions
+- Added compiler-selected type hints for unresolved implicit `FOR` counters, first-use assignments, and prompted/file-channel `INPUT` plus `READ` targets in FBLite, while avoiding native analysis for source-resolved targets
+- Preserved written optional-parameter defaults in compiler-backed signature help instead of showing `...`
+- Reduced cold native workspace-symbol indexing time with a bounded dedicated compiler-worker pool; `freebasic.index.workspaceConcurrency` can be set to 1 to reduce memory use
+- Updated the compiler-sidecar reader and bridge against the current FreeBASIC source, including schema 27 normalized types, procedure flow phases, structured diagnostics, and source operator operands
+- Updated the bridge for FBC commit `ba996343a` and its schema-27 declaration/procedure typing, aggregate access, SELECT CASE lowering, and target-wide literal facts
+- Added schema-27 support for scalar dynamic String declaration inputs, including selected RHS identity and default initialization
+- Accepted the compiler's iterator/length operator concepts, full 4-bit pointer-depth range, and reversible legacy-byte type spellings
+- Updated the offline reference revision to the newest FreeBASIC source commit
+- Compiler-backed binding analysis now consumes the compact full semantic model and exposes compiler-selected declaration facts through exact physical declaration links
+- Added a trace-preserving bindings-only retry when FBC reaches its bounded full-model export limit; trace-free fallback remains available for oversized output
+- Regenerated the bundled offline API reference from the current FreeBASIC checkout
+- Preserved source-expression types separately from compiler-inserted array-index conversions and incomplete pointer-intrinsic prefixes
+- Kept completed operator prefixes and combined-assignment values typed through the current `astNewBOPWithOperands` lowering route
+- Added semantic-model schema 18 selected-call signatures that preserve exact overload identity across legal UDT renames
+- Added compiler-validated type rename through copied macro arguments across FB/x86-64 and FB/x86-32 project contexts
+- Mapped compiler-selected argument-constructor facts to copied macro arguments only when token tracing proves an exact physical source span
+- Retained compiler-typed expressions from unaffected source ranges in partial unsaved-buffer analyses using explicitly incomplete semantic-model recovery records
+- Indexed exact native and compiler-sidecar expression ranges for direct selection queries
+- Expanded compiler expression-only output with typed member, array-index, and call-result prefixes
+- Added two-context project-rename coverage for deferred macro references across `#undef` and conditional redefinitions
+- Added validated project-rename coverage for `ON LOCAL ERROR GOTO` handler labels
+- Added a compiler-source audit that assigns every active call, constructor, and destructor builder to a graph-provenance owner
+- Expanded the AST parser inventory across every compiler parser source and made overload-count drift explicit
+- Expanded native compiler-parity and model audits to 776 expression, pointer, numeric, overload, quirk, API, procedure, QB, and declaration cases
+- Require complete native snapshots to match every deduplicated expression type range and dtype/subtype to the compiler syntax graph
+- Reset compiler trace identities across `#lang "qb"` compiler restarts and validated namespace-qualified native bindings for navigation and refactoring
+- Added dedicated parser-family checks for console view, screen expressions, and `VA_FIRST`
+- Added BOM-marked UTF-16LE disk-source decoding for immutable analysis snapshots and UTF-8 compiler overlays
+- Preserved declared source dependencies for parser-recovery tokens initialized before the physical filename is set
+- Added direct native regression coverage for selected unary overloads and casts selected while binding procedure arguments
+- Added native graph coverage for implicit cast operators selected during assignment and conditional branching, plus malformed delimiter recovery across allocation, conversion, quirk, pointer, string, array, graphics, and runtime parser families
+- Retained compiler-selected UDT `LET` and direct combined-assignment operators at their written assignment statements
+- Retained compiler-selected UDT `NEW`, `NEW[]`, `DELETE`, and `DELETE[]` operators at their written allocation constructs
+- Retained compiler-selected UDT destructors for scalar and vector `DELETE` as separate dependencies from overloaded deallocator operators
+- Retained compiler-selected iterator `FOR`, `STEP`, and `NEXT` operators with their written loop operands
+- Preserved later unsaved-buffer analysis after an incomplete parameterized macro invocation, including intrinsic `RGB(` and source-defined macros, without changing trace-disabled compiler behavior
+- Added compiler-validated rename coverage for multiline variadic macro names and parameter slots
+- Added native identity and validated rename coverage for active `#ifdef` and `#elseifdef` macro queries, while keeping absent `#elseifndef` names unresolved
+- Added protocol 13 compiler-authoritative macro completion for unfinished conditional-directive operands, including included and skipped-branch definitions plus `#undef` lifetime filtering
+- Added protocol 14 positioned parser-error records so complete expression prefixes before a syntax error remain typed while malformed enclosing expressions stay withheld
+- Marked `TYPE` and `ENUM` scopes provisional when the compiler recovers from a missing or mismatched terminator
+- Added native type and parser-provenance coverage for fixed-length-string sizes and width-qualified integer conversions
+- Added native expression-graph coverage for property getters, setters, and indexed getters
+- Added native expression-graph coverage for compiler-selected overloaded `[]` operators
+- Added native expression-graph coverage for compiler-selected overloaded `->` operators
+- Added native expression-graph coverage for compiler-selected overloaded `@` operators
+- Added native graph coverage for the receiver and index dependencies of dynamic-array expressions
+- Preserved later unsaved-buffer analysis after incomplete expression-side `PROCPTR(` without changing trace-disabled compiler behavior
+- Preserved later unsaved-buffer analysis after an incomplete ordinary procedure argument list without changing trace-disabled compiler behavior
+- Preserved later unsaved-buffer analysis after incomplete expression-side `PEEK(` without changing trace-disabled compiler behavior
+- Preserved later unsaved-buffer analysis after incomplete expression-side `LEN(` and `SIZEOF(` without changing trace-disabled compiler behavior
+- Enabled compiler-validated numeric-to-named label conversion inside both branches of a QB single-line `IF`, adding the required `GOTO` and accounting for its generated compiler scope
+- Added native graph coverage for implicit construction of a nontrivial `BYREF` UDT argument from an ordinary expression
+- Preserved later unsaved-buffer analysis after an incomplete declaration-side `TYPEOF(` without changing trace-disabled compiler behavior
+- Added parser-route provenance and malformed-buffer recovery coverage for `LEN`, `SIZEOF`, and `TYPEOF` expression inputs
+- Kept later unsaved-buffer analysis authoritative after an incomplete `#include` by resynchronizing the trace at the directive line ending
+- Added protocol 12 multi-path parser provenance so grammar helpers that return an existing source AST are included in expression coverage audits
+- Added compiler parser-family provenance and native-corpus family counts for grammar-led expression coverage audits
+- Added native regression coverage for MOD, integer division, power, shift, bitwise, short-circuit, and RTTI IS expression grammar paths
+- Marked declarations and expression types provisional when they transitively depend on a declaration retracted by compiler recovery
+- Added native expression-type regression coverage for address, cast, allocation, math, and file/runtime parser surfaces
+- Added native Outline for configured sources and native workspace-symbol search for configured closed modules
+- Added native navigation, references, and validated rename for named and numeric labels through `GOTO`, `GOSUB`/`RETURN <label>`, `ON ... GOTO/GOSUB`, `ON ERROR GOTO`, numeric single-line `IF` branches, and `RESTORE`
+- Added validated numeric-to-named label conversion for both colon-free and colon-terminated declarations
+- Retained selected source-derived runtime helper and explicit or implicit constructor calls in the expression graph without exporting unrelated generated calls
+- Retained compiler-selected constructors for `TYPE<UDT>(...)` expressions when their quirk parser bypasses the ordinary selection output
+- Retained compiler-selected constructors for `NEW UDT(...)` expressions through their compiler `CALLCTOR` wrapper
+- Retained `CVA_ARG` source operands through compiler-native vararg lowering without inventing a procedure target
+- Retained the compiler-selected overloaded `CAST` call as a conversion dependency for written conversion expressions
+- Retained both the source subcall and generated runtime target for `THREADCALL` expression typing
+- Retained compiler-selected copy constructors for declaration and return construction, plus `CONSTRUCTOR()` chains and `BASE()` initialization
+- Kept a current compiler analysis alive across delayed VS Code configuration notifications while context signatures still reject changed compiler inputs
+- Made compiler snapshot invalidation compare the changed document with each immutable request, avoiding delayed edit-event cancellation of current analysis
+- Coalesced matching native analysis requests so concurrent Outline and manual commands share one current compiler preparation
+- Retried a native rename target once after a project transaction evicts its prepared worker model
+- Moved project-wide rename baseline construction, cross-context identity joins, and semantic validation into the compiler worker
+- Spooled native project baselines under a bounded temporary-file budget instead of retaining every module's full graph in memory
+- Added one-use source-verification tickets, immutable project requests, context/generation checks, and symlink-target validation before publishing rename previews
+- Added a compiler-source project benchmark comparing identical direct and worker edit previews, with separate editor-thread pause measurements
+- Moved native editor model construction and completion, hover, navigation, reference, signature, expression, and semantic-token queries into the persistent worker
+- Bounded prepared-model retention and query messages, verified source freshness around queries, and rejected stale asynchronous results without discarding valid models on queue backpressure
+- Froze newly discovered disk dependencies before accepting native editor models and rechecked workspace trust before each compiler pass
+- Moved overlay I/O and native trace decoding into a persistent analysis worker with bounded input queues and exact-trace caching
+- Added cancellable manual analysis, shared cancellation checkpoints, stalled-worker recovery, and host-owned compiler process reaping after worker failures
+- Added repeatable direct/raw-worker/prepared-worker analysis benchmarks with separate host pauses and semantic-token query measurements
+- Added explicit translation-unit/build selection for native header analysis, expression types, navigation, and rename target selection
+- Applied selected build arguments to modules, rejected stale context snapshots, and scheduled unsaved header analysis even when the selected module editor is closed
+- Kept project rename validation across every configured build, independent of the active editor context
+- Added protocol 11 native macro declarations, parameter-slot identities, lookup/undefinition records, and lexer-captured macro environment epochs
+- Preserved the compiler-selected final member of qualified preprocessor queries for navigation, references, and validated rename
+- Enabled macro-name and parameter navigation, signatures, semantic coloring, active-name completion, and validated project rename across shared headers and build configurations
+- Kept equivalent redefinitions' parameter names separate while joining macro-name lifetimes and include-guard checks for validated rename
+- Retained macro completion context through failed unsaved expressions without restoring invalid symbol bindings or types
+- Checked parameter capture through native replacement-list slots, including unused definitions, and omitted repeated immutable DEFINE metadata from traces
+- Bound an expanded replacement-list identifier to its selected macro only when every observed expansion agrees, while leaving unexpanded and ambiguous text unresolved
+- Preserved ordinary completion versus empty member-completion results across repeated macro expansions
+- Added protocol 10 native macro maps for replacement lists, invocation sites, arguments, concatenation, stringification, and callback inputs
+- Projected copied, duplicated, and nested arguments into unsaved source for navigation, expression types, completion, and validated rename previews
+- Required agreement across repeated expansions and preserved constructed tokens as expanded-only references
+- Validated macro relationships and expanded text during project rename, including stringified values and retained directives
+- Bounded provenance storage with immutable map interning, balanced concatenation, append builders, and compact physical file identities
+- Kept unrelated open buffers outside configured project-rename coverage while retaining them for include discovery and freshness checks
+- Added protocol 9 physical token ranges with character-lookahead tracking, separate logical filenames, and empty-include dependencies
+- Enabled native navigation, expression selections, and validated rename through continued lines and repeated `#line` remapping in unsaved buffers
+- Preserved legacy type suffixes during rename and checked physical token anchors before returning project edits
+- Added protocol 8 native lexical regions, declaration inventory, imports, type/base shapes, and parameter modes
+- Replaced compiler-mode scope guessing with native ownership, including out-of-line methods, sibling branches, anonymous union fields, and legacy implicit variables
+- Used native private/protected attributes and inheritance links for member completion and validated scope/inventory relationships during project rename
+- Added protocol 7 AST source provenance, intermediate member/index/call prefixes, and native conversion and implicit operator-call relationships
+- Preserved unary/binary operands through constant folding, both IIf branches, repeated dereference types, and arbitrary-arity source call arguments with conversions and omitted defaults
+- Kept implicit promotions separate from written operand types and propagated recovery invalidation through exported expression dependencies
+- Extended rename validation to source-anchored expression graphs, preserving semantic relationships across legitimate compiler construction-order changes
+- Added protocol 6 dispatch relationships and validated virtual-family rename across modules and conditional inheritance without merging unrelated overloads
+- Bound namespace imports, selected procedure addresses, function-result assignments, and forward type replacements to native identities
+- Refreshed dependent type metadata when the compiler backpatches forward declarations
+- Fixed multiple TYPE aliases being mistaken for an aggregate named AS
+- Verified address and virtual dispatch behavior by compiling and running before/after rename fixtures with the unmodified compiler
+- Added protocol 5 native symbol identities, lexical owner/namespace/type relationships, and explicit prototype/body parameter reconciliation
+- Extended compiler-validated project rename to represented variables, parameters, fields, constants, enums, types/aliases, namespaces, and named labels
+- Used native subtype identities for type navigation and rename validation, preserving type relationships while type spellings change
+- Added protocol 4 recovery snapshots, failed-region invalidation, terminal completeness checks, and diagnostics against unsaved source
+- Retained compiler-authoritative independent types around syntax errors, marked recovery-dependent types and recovered-scope declarations provisional, excluded failed regions, and kept recovery bindings out of project refactoring
+- Refreshed the source-backed vocabulary/reference for the newly added `DrawStringSize` and `PaintPattern` header APIs
+- Exported native expression types and member receiver types for arithmetic, casts, arrays, pointers, intrinsics, inferred values, and overloaded operator results
+- Added expression-type hover and inspection, immutable unsaved module/header overlays, and debounced on-change compiler analysis
+- Added explicit project build contexts and compiler-validated procedure rename across modules, shared headers, and configurations, with temporary validation and edit previews
+- Rejected refactoring coverage gaps, changed bindings/types, source races, external ABI names, generated references, and out-of-workspace edits
+- Upgraded the bridge to protocol 3; existing native companions must be rebuilt
+- Exported compiler-owned procedure identities and committed overload targets, including nested calls, methods, properties, static virtual targets, and BYREF results
+- Used compiler-selected calls for definition navigation, overload-specific references, signature help, and function-result member lookup
+- Added versioned binding records with validated expanded byte coordinates and UTF-16 conversion; existing compiler bridges must be rebuilt
+- Added an optional compiler bridge built from a private source copy, with real macro expansion, conditional selection, source origins, and macro-only include dependency tracking
+- Connected saved compiler translation units to completion, navigation, references, signatures, and semantic tokens, with a read-only expanded-source view
+- Added trusted opt-in analysis commands, cancellation, snapshot freshness checks, output/source/cache limits, and compiler-backed integration tests
+- Routed compiler-mode rename through explicit project validation without falling back to the lightweight rename provider
+- Updated the source audit and package version to the current FreeBASIC 1.20.4 tree
+- Generated an attributed offline reference for 586 built-in and bundled API names, with signatures, parameter help, source revision links, and reproducibility checks
+- Added shared scope/type resolution for namespaces, aliases, aggregate members, public inheritance, arrays, and common function-result chains
+- Added typed member completion, type-definition navigation, semantic tokens, and declaration-identity references and rename
+- Guarded rename against overload ambiguity, duplicate conditional declarations, name capture, inherited collisions, and incomplete indexes
+- Followed transitive includes, invalidated unsaved header changes, bounded background file sizes, and prevented stale asynchronous reads from replacing newer source
+- Cancelled superseded compiler checks, preserved split Unicode output, cleared stale diagnostics, and rechecked open dependent modules on header saves
+- Fixed extension-host activation and source-coordinate handling for UTF-16, CRLF, continued declarations, same-name types and variables, and colon-separated statements
+- Added PNG-saving and gfxlib3 image-loading snippets
+- Added actual VS Code provider tests, real TextMate tokenizer tests, compiler-source corpus checks, and Linux/Windows CI
+- Included all runtime modules and reference/license assets in both native VSIX builders
+
 ## 1.20.3
 
 - Aligned the grammar, completions, hovers, and snippets with the FreeBASIC 1.20.3 public language surface
@@ -39,3 +478,5 @@
 - Initial scaffold for a FreeBASIC language extension
 - Added FreeBASIC file associations for `.bas` and `.bi`
 - Added a starter TextMate grammar, language configuration, and snippet set
+
+<!-- end of CHANGELOG.md -->
