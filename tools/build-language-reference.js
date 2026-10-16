@@ -40,6 +40,21 @@ const OPT_IN_REFERENCE_HEADERS = Object.freeze({
 const MAX_REFERENCE_RETURN_LENGTH = 600;
 const MAX_REFERENCE_DESCRIPTION_LENGTH = 1800;
 
+function referenceSourceRevision(freeBasicRoot) {
+    /* Compiler-only commits do not change the cited manual/header contents.
+       First-parent history finds a tree with the same complete input set,
+       instead of selecting one side of an unrelated merge. */
+    const revision = execFileSync("git", ["-C", freeBasicRoot, "log", "-1", "--first-parent",
+        "--no-show-signature", "--format=%H", "--", "mk/version.mk", "doc/fdl-1.2.txt",
+        ":(glob)doc/manual/cache/KeyPg*.wakka", ...HEADER_PATHS], {
+        encoding: "utf8", timeout: 5000, maxBuffer: 65536
+    }).trim();
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(revision)) {
+        throw new Error("Unable to identify the reference input revision.");
+    }
+    return revision;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Manual extraction                                                         */
 /* ------------------------------------------------------------------------- */
@@ -309,7 +324,7 @@ function generateReference(freeBasicRoot, grammar) {
     return {
         title: `FreeBASIC ${sourceVersion} editor reference`,
         sourceVersion,
-        sourceRevision: execFileSync("git", ["-C", freeBasicRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+        sourceRevision: referenceSourceRevision(freeBasicRoot),
         sourceHash: sourceHash.digest("hex"),
         attribution: "Manual excerpts: The FreeBASIC documentation contributors, GNU Free Documentation License 1.2. See docs/reference-attribution.md and docs/fdl-1.2.txt.",
         sourceRepository: "https://github.com/jasonkfirth/fbc",
@@ -335,6 +350,6 @@ if (require.main === module) {
     try { main(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
 
-module.exports = { generateReference, parseManualEntry, plainText, readSections };
+module.exports = { generateReference, parseManualEntry, plainText, readSections, referenceSourceRevision };
 
 /* end of tools/build-language-reference.js */

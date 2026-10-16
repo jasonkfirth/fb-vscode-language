@@ -1,8 +1,8 @@
 {
   "name": "fb-vscode-language",
   "displayName": "FreeBASIC Language",
-  "description": "FreeBASIC 1.20.4 highlighting, type-aware IntelliSense, navigation, reference help, and compiler diagnostics for Visual Studio Code.",
-  "version": "1.20.4",
+  "description": "FreeBASIC 1.20.5 highlighting, type-aware IntelliSense, navigation, reference help, and compiler diagnostics for Visual Studio Code.",
+  "version": "1.20.5",
   "publisher": "SJZero",
   "license": "MIT",
   "repository": {
@@ -192,7 +192,7 @@
           "type": "string",
           "default": "",
           "scope": "resource",
-          "description": "Optional editor-bridge fbc for full native symbols, macro/source origins, scopes, unsaved-buffer analysis, Outline/workspace symbols, and validated project refactoring. Build or rebuild it with npm run build:compiler-bridge. Stock schema-27 sidecars also provide saved-file physical navigation, macro Signature Help, selected macro-signature hovers, and macro parameter inlays, requesting full macro data only for recognized macro interactions."
+          "description": "Optional editor-bridge fbc for full native symbols, macro/source origins, scopes, unsaved-buffer analysis, Outline/workspace symbols, and validated project refactoring. Build or rebuild it with npm run build:compiler-bridge. Stock schema-27 sidecars also provide saved-file physical navigation, macro Signature Help, selected macro-signature hovers, and macro parameter inlays, requesting full macro data only for recognized macro interactions. Compiler-backed analysis requires FBC 1.20.4 or newer; older compilers retain syntax highlighting, source-based editor features, and ordinary compiler checks."
         },
         "freebasic.analysis.run": {
           "type": "string",
@@ -205,7 +205,7 @@
           ],
           "default": "onDemand",
           "scope": "resource",
-          "description": "Compiler analysis supplies saved-file expression types from a schema-27 fbc on demand by default. Stock sidecars also provide saved-file physical symbol/macro navigation, compiler-selected macro Signature Help and parameter inlays, and selected macro-signature hovers, requesting the full macro graph only at recognized macro interactions. The protocol-14 editor bridge adds complete macro origins, unsaved-buffer analysis, Outline/workspace symbols, and validated project refactoring. Sidecar-only analysis refuses dirty inputs rather than using stale disk contents. Requires a trusted workspace."
+          "description": "Compiler analysis supplies saved-file expression types from a schema-27 fbc on demand by default. Stock sidecars also provide saved-file physical symbol/macro navigation, compiler-selected macro Signature Help and parameter inlays, and selected macro-signature hovers, requesting the full macro graph only at recognized macro interactions. The protocol-14 editor bridge adds complete macro origins, unsaved-buffer analysis, Outline/workspace symbols, and validated project refactoring. FBC 1.20.4 or newer is required; older compilers keep syntax highlighting and source-based editor features while compiler-backed analysis is disabled. Sidecar-only analysis refuses dirty inputs rather than using stale disk contents. Requires a trusted workspace."
         },
         "freebasic.analysis.timeoutMs": {
           "type": "integer",
@@ -247,7 +247,7 @@
           "type": "string",
           "default": "fbc",
           "scope": "resource",
-          "description": "Path or command name for the FreeBASIC compiler used by diagnostics."
+          "description": "Path or command name for the FreeBASIC compiler used by diagnostics and, when supported, saved-file semantic analysis. Schema-27 compiler analysis requires FBC 1.20.4 or newer."
         },
         "freebasic.compiler.arguments": {
           "type": "array",

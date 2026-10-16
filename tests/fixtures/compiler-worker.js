@@ -28,8 +28,19 @@ runAnalysisWorker(parentPort, async (options, decode, execute) => {
         while (Date.now() < until) {}
     }
     if (mode === "crash-child" || mode === "live-child") {
-        const running = execute({ command: process.execPath, arguments: ["-e", "setInterval(() => {}, 1000)"], cwd: options.temporaryDirectory, signal: options.signal, timeoutMs: 10000, maxOutputBytes: 1024 });
-        if (mode === "crash-child") setTimeout(() => { throw new Error("Deliberate compiler worker crash."); }, 500);
+        const childPidPath = path.join(options.temporaryDirectory, "child.pid");
+        const running = execute({ command: process.execPath, arguments: ["-e",
+            'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', childPidPath],
+            cwd: options.temporaryDirectory, signal: options.signal, timeoutMs: 10000, maxOutputBytes: 1024 });
+        // The supervisor starts asynchronously. Crash only after the child has
+        // actually run, so a busy machine cannot turn cleanup into a no-child test.
+        if (mode === "crash-child") {
+            void running.catch(() => {});
+            for (let attempt = 0; attempt < 1000 && !fs.existsSync(childPidPath) && !options.signal.aborted; attempt++) {
+                await new Promise((resolve) => setTimeout(resolve, 5));
+            }
+            if (fs.existsSync(childPidPath)) setTimeout(() => { throw new Error("Deliberate compiler worker crash."); }, 500);
+        }
         await running;
     }
     if (mode === "bad-reply") parentPort.postMessage(null);

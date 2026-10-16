@@ -2,7 +2,7 @@
 
 The bridge uses the real FreeBASIC compiler for preprocessing, committed call
 resolution, expression types, editor-buffer overlays, and validated project
-symbol rename. The extension remains version 1.20.4 to match its source
+symbol rename. The extension remains version 1.20.5 to match its source
 target. These are working compiler-backed features, not a claim that every
 language-server operation has compiler-grade coverage.
 
@@ -821,6 +821,28 @@ not show an overall compiler speedup or completion of interactive tuning.
 The macro-heavy upstream `compare-float-nan.bas` and `iif.bas` fixtures also fit
 the exclusive prepared-model allowance and return native semantic tokens.
 
+Editor providers share model acquisition in `editor-model.js`. Binding and macro
+requests reject explicitly weaker cached snapshots even when those snapshots
+contain bridge-native identities. If an upgrade loses a snapshot invalidation,
+the provider can follow one successor with the same required capabilities.
+Cancellation, a changed document version, or incomplete workspace initialization
+prevents publication or source-only fallback. The compiler service still owns
+request sharing and snapshot validity; this helper does not execute the compiler
+or introduce an unbounded retry loop.
+
+The same acquisition helper has a native-only entry point for late binding
+upgrades. Argument navigation, selected-operator lookup, and bound-member
+completion cannot replace a missing compiler decision with a source-only model.
+Definition, declaration, and implementation stop when that upgrade is unavailable
+or the document changes, rather than querying a predecessor that preparation may
+have released. A superseded upgrade can still follow one current successor.
+
+An overload probe can replace the snapshot even when its source-index mapping
+finds no target. Definition, declaration, implementation, references, and
+highlights then continue on the current native model. A header not yet loaded
+by the source index does not erase an independently available compiler target,
+and this fallback does not request another compiler pass.
+
 ## Error recovery and current-buffer diagnostics
 
 The real parser already recovers from many errors. Protocol 4 retains that
@@ -837,6 +859,84 @@ are provisional rather than being presented as a closed lexical region.
 In trace mode, an incomplete `#include` stops at that directive's end of line
 instead of consuming the first token of the following valid source line. The
 ordinary trace-disabled compiler path remains unchanged.
+
+Member lookup already emits the selected receiver type before checking the
+member name. Failed statements retain those receipts separately for completion
+after a physical `.` or `->`, including partial member names, array elements,
+and function results. Suggestions use native type identities, member inventory,
+and access checks; missing, conflicting, or recovered type facts are withheld.
+Recovered token projections remain separate from normal bindings. This does
+not restore invalid expression types, navigation targets, references, or rename
+sites, and it does not require a new compiler export format.
+
+Ordinary name completion also uses retained physical token positions to enter
+the native lexical inventory after a failed statement. It lists only surviving
+nonprovisional declarations and the compiler-active macro environment, retaining
+scope, declaration order, imports, access checks, and local-over-member shadowing.
+The unfinished identifier remains unresolved. Written whitespace can shrink in
+preprocessed output, so this path anchors to the last proven token instead of
+allowing a large trailing gap to enter another scope. Native labels are visible
+before their definitions, including definitions inside nested blocks, but only
+within their native owner procedure; module labels do not leak into a procedure.
+
+The editor's label-target filter also handles comma-separated `ON ... GOTO`
+and `ON ... GOSUB` lists, including explicit continuations and trailing comments.
+It keeps inline IF arms separate and does not treat single-label error handlers
+or ordinary argument lists as computed branches. Label ownership still comes
+from the selected model. Continued-prefix reconstruction is bounded to 128
+physical lines and 65,536 characters and does not start another compiler pass.
+
+For empty lines, completion can intersect the compiler scopes at the surrounding
+direct physical tokens. Both source and expanded gaps must contain only
+whitespace/comments; generated or missing anchors, unmatched occurrences, and
+preprocessor boundaries remain withheld. The intersection prevents a loop local
+or sibling-scope declaration from leaking across a closing block. This lookup
+does not change token resolution or add bindings. Gap validation is bounded to
+65,536 UTF-16 code units and 64 include occurrences. Cases without this evidence still need a
+compiler-provided token-free scope context rather than a source-parser guess.
+
+Direct string-literal receipts can also bound those gaps. Their exact source
+spelling and UTF-8 byte boundaries are checked while building the existing
+source-coordinate index, including escaped strings and Unicode/BOM inputs.
+The opaque completion anchors retain macro epochs but never enter identifier,
+navigation, rename, or recovery-binding maps. Missing, generated, mismatched,
+or oversized literal contexts remain withheld. No extra compiler pass is needed
+for the completion query.
+
+A native module-end receipt also anchors trailing blank lines in the root file
+to the final global scope. Only whitespace/comments may remain
+after the cursor, within the same gap-size bound. Completion uses the final
+compiler macro epoch, including trailing definitions and removals, rather than
+inheriting a preceding procedure's scope or macro state. A partial root can use
+this anchor when every native scope has an explicit nonrecovered closure and
+every error has a positioned receipt on a directly observed parser line.
+Matching uses compiler serials, including through logical `#line` names, rather
+than treating diagnostic names as editable file paths. Unclosed scopes,
+unpositioned preprocessor failures, and included-header EOFs remain withheld
+without other native context. This completion-only point does not become an
+identifier origin or navigation binding.
+
+Escaped-string context probes capture the document version and honor
+cancellation, including before scanning source. Only ambiguous quotes in default
+strings request native option facts; explicit escaped/raw strings and comments
+stay on the local path. An uncached request can acquire the normal binding model;
+a lightweight cached model can join that upgrade to obtain accepted option
+contexts. The worker then uses all preceding
+native escape spans, not just the span at the caret, and returns code/string/
+comment state, a bounded masked line prefix, and call contexts. Range tables stay
+in the worker. Signature and navigation queries also use the snapshot's native
+mask so a fake call or comment opener inside a literal cannot hide following
+code. BOM offsets are adjusted once.
+
+Type Hierarchy also keeps that native masked prefix for its identifier preflight,
+retaining the original suffix to include the token at the caret. A second raw
+source scan must not hide an identifier following a compiler-confirmed escaped
+literal. Numeric and ordinary source-only requests retain their cheap preflight.
+
+If another upgrade releases the queried model, the probe follows one cached
+successor. A cleared or repeatedly replaced snapshot returns an unknown context
+instead of reusing the old source interpretation. Ordinary source-only context
+checks stay local, and production analysis deadlines are unchanged.
 
 Likewise, a declaration-side `TYPEOF(` that ends at a physical source line
 reports its missing expression in trace mode before the parser can consume the
@@ -1199,6 +1299,18 @@ On Linux, `npm run test:unit` discovers a nearby FreeBASIC checkout and
 bootstrap compiler, then builds the editor bridge. Set
 `FBC_EDITOR_EXECUTABLE` to select a specific bridge:
 
+That variable selects an existing executable; it does not rebuild it. Rebuild
+the bridge after changing the compiler checkout, even if the reported compiler
+version is unchanged. The current source/binary identities and full editor
+results are recorded in the [refreshed compiler checkpoint](compiler-grade-plan.md#refreshed-compiler-checkpoint-2026-10-16).
+
+The latest consolidated installed-VSIX runs pass all 101 editor checks on each
+supported editor version. The complete unit run and its two timeout-adjusted
+stress reruns are recorded separately in the
+[validation record](compiler-grade-plan.md#full-linux-release-checkpoint-2026-10-16).
+Those combined results are not a repeated successful `npm test` command under
+the new offline limits.
+
 ```bash
 FBC_EDITOR_EXECUTABLE=/path/to/fbc-editor npm test
 FBC_EDITOR_EXECUTABLE=/path/to/fbc-editor FBC_EXECUTABLE=/path/to/fbc npm run test:integration
@@ -1285,7 +1397,7 @@ source expression and reference form.
 
 For every complete snapshot, the corpus audit also compares final deduplicated
 type ranges with syntax-node ranges and verifies exact dtype, subtype, and
-rendered-type agreement. The current 776-case run checked 411 complete
+rendered-type agreement. The earlier 776-case run checked 411 complete
 snapshots with no missing type/syntax ranges or disagreements. Partial snapshots
 are counted separately because recovery may retract one record while preserving
 an independent expression. This is a bridge-consistency gate; it does not prove
@@ -1296,6 +1408,28 @@ Analysis of `ast-node-call.bas` and `parser-proc.bas` also exercises thousands
 of native type records. This is a regression check, not a claim that every
 compiler expression is represented. Building the bridge leaves the original
 compiler checkout unchanged.
+
+The 2026-10-16 x86-64 binding audit passes all 244 upstream `scopes` and
+`visibility` inputs using FBC 1.20.5-1. Direct and worker analysis use identical
+export options and captured source; their semantic tokens match for all 73
+complete and 171 partial models. All 2,599 physical bindings and 61 implicit
+calls have valid source ranges and selected target signatures where required.
+No models are missing or bounded, and stock/bridge compiler parity passes for
+every input. This is reproducible with `tools/audit-native-corpus.js
+--semantic-bindings --architecture=x86-64 --timeout-ms=60000 --category=scopes
+--category=visibility` and the compiler environment variables above. It verifies
+this subset, not complete declaration, access-control, or refactoring coverage.
+
+The refreshed compiler's x86-64 expression-sidecar audit also passes all 248
+`functions` and `overload` inputs: 121 complete and 127 partial models, without
+bounded or missing analyses. All 46,571 typed trace ranges agree with their
+native syntax types. Sidecar-only checks cover 8,636 expression observations;
+34 ambiguous observations remain withheld, with no unexplained missing or
+mistyped result. The binary model supplies 113 results absent from the trace,
+and recovery checks expose no unsafe facts. Run `tools/audit-native-corpus.js
+--semantic-sidecar --architecture=x86-64 --timeout-ms=60000 --category=functions
+--category=overload` with the compiler environment variables above to repeat
+this gate. Other categories, modes, and architectures remain separate checks.
 
 The current compiler-source model checks retain 5,690 and 6,537 native
 declarations, with 314 and 729 scope instances respectively. Both modules reach

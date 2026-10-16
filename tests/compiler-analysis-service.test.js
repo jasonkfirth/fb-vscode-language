@@ -14,8 +14,13 @@ const path = require("path");
 const { CompilerAnalysisService } = require("../lib/compiler-analysis-service");
 const { analysisContext, projectContexts } = require("../lib/compiler-contexts");
 const { BoundedTextMap } = require("../lib/bounded-text-map");
+const { compilerExecutableIdentity } = require("../lib/compiler-model-store");
 
-function setup(t, analyze) {
+function setup(t, analyze, executeCompatibilityProbe = async () => ({
+    exitCode: 0,
+    stdout: "FreeBASIC Compiler - Version 1.20.5-1\n",
+    stderr: ""
+})) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-analysis-service-test-"));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const filePath = path.join(directory, "main.bas");
@@ -29,12 +34,13 @@ function setup(t, analyze) {
         getConfiguration: () => ({ get: (name, fallback) => values[name] ?? fallback })
     };
     const index = { documents: new Map([[uri.toString(), { uri }]]), ensureInitialized: async () => true, getDependentModules: () => [], notifyChange() {} };
-    const vscode = { workspace, Uri: { file: (file) => ({ scheme: "file", fsPath: file, toString: () => `file://${file}` }), from: (value) => ({ ...value, toString: () => `${value.scheme}:${value.path}?${value.query}` }) }, window: { showWarningMessage() {}, showInformationMessage() {}, showErrorMessage() {} } };
+    const informationMessages = [];
+    const vscode = { workspace, Uri: { file: (file) => ({ scheme: "file", fsPath: file, toString: () => `file://${file}` }), from: (value) => ({ ...value, toString: () => `${value.scheme}:${value.path}?${value.query}` }) }, window: { showWarningMessage() {}, showInformationMessage: (message) => informationMessages.push(message), showErrorMessage() {} } };
     const result = { text: "Dim value As Long\n", origins: [{ filePath, line: 0, generated: false }], dependencies: [filePath] };
     let calls = 0;
-    const service = new CompilerAnalysisService(vscode, index, { appendLine() {} }, async (options) => { calls++; return analyze ? analyze(options, result) : result; });
+    const service = new CompilerAnalysisService(vscode, index, { appendLine() {} }, async (options) => { calls++; return analyze ? analyze(options, result) : result; }, executeCompatibilityProbe);
     t.after(() => service.dispose());
-    return { service, document, workspace, vscode, filePath, directory, values, calls: () => calls };
+    return { service, document, workspace, vscode, filePath, directory, values, calls: () => calls, informationMessages };
 }
 
 function headerContext(fixture) {
@@ -47,12 +53,12 @@ function headerContext(fixture) {
     return header;
 }
 
-test("manual checks select overlay analysis only for dirty inputs with the editor bridge", (t) => {
+test("manual checks select overlay analysis for dirty inputs with the editor bridge", (t) => {
     const fixture = setup(t);
-    assert.equal(fixture.service.shouldAnalyzeUnsavedBuffers(fixture.document), false);
+    assert.equal(fixture.service.shouldCheckWithAnalysis(fixture.document), false);
 
     fixture.document.isDirty = true;
-    assert.equal(fixture.service.shouldAnalyzeUnsavedBuffers(fixture.document), true,
+    assert.equal(fixture.service.shouldCheckWithAnalysis(fixture.document), true,
         "a dirty root can be checked from its editor buffer when the bridge is configured");
     fixture.document.isDirty = false;
 
@@ -63,12 +69,51 @@ test("manual checks select overlay analysis only for dirty inputs with the edito
         isDirty: true,
         getText: () => "Type EditorValue As Long\n"
     });
-    assert.equal(fixture.service.shouldAnalyzeUnsavedBuffers(fixture.document), true,
+    assert.equal(fixture.service.shouldCheckWithAnalysis(fixture.document), true,
         "an unsaved open header should be included when checking a saved root module");
 
     fixture.values["analysis.compilerPath"] = "";
-    assert.equal(fixture.service.shouldAnalyzeUnsavedBuffers(fixture.document), false,
+    assert.equal(fixture.service.shouldCheckWithAnalysis(fixture.document), false,
         "ordinary fbc diagnostics remain on their saved-file path without the editor bridge");
+});
+
+test("older compilers skip semantic analysis without interrupting source editing", async (t) => {
+    let versionChecks = 0;
+    const fixture = setup(t, null, async (options) => {
+        versionChecks++;
+        assert.deepEqual(options.arguments, ["-version"]);
+        return { exitCode: 0, stdout: "FreeBASIC Compiler - Version 1.10.1\n", stderr: "" };
+    });
+
+    assert.equal(await fixture.service.check(fixture.document), false);
+    assert.equal(versionChecks, 1);
+    assert.equal(fixture.calls(), 0, "unsupported compiler flags must not reach semantic analysis");
+    assert.equal(fixture.service.compilerCompatibilityFor(fixture.document.uri).state, "unsupported");
+    assert.match(fixture.informationMessages[0], /syntax highlighting/i);
+});
+
+test("manual saved-module and header checks retain the selected compiler context", async (t) => {
+    const fixture = setup(t, (options, result) => {
+        assert.ok(options.compilerArguments.includes("SELECTED_BUILD"), "the selected build's defines must reach FBC");
+        return result;
+    });
+    fixture.values["analysis.projectContexts"] = [{ name: "selected", modules: ["main.bas"], arguments: ["-d", "SELECTED_BUILD"] }];
+    fixture.values["analysis.activeContext"] = { name: "selected", module: "main.bas" };
+    assert.equal(fixture.document.isDirty, false);
+    assert.equal(fixture.service.shouldCheckWithAnalysis(fixture.document), true);
+    assert.equal(await fixture.service.check(fixture.document), true);
+    const header = { uri: fixture.vscode.Uri.file(path.join(fixture.directory, "header.bi")), isDirty: false };
+    assert.equal(fixture.service.shouldCheckWithAnalysis(header), true,
+        "a saved header uses its explicit root rather than the .bas-only diagnostic path");
+    fixture.values["analysis.activeContext"] = null;
+    assert.equal(fixture.service.shouldCheckWithAnalysis(header), true,
+        "analysis should explain missing header context rather than trying to compile a .bi file directly");
+    assert.equal(await fixture.service.check(header), false);
+    assert.equal(fixture.calls(), 1, "missing header context must be rejected before launching the compiler");
+    assert.equal(fixture.service.shouldCheckWithAnalysis({ uri: { scheme: "untitled" } }), false);
+    fixture.values["analysis.compilerPath"] = "";
+    assert.equal(fixture.service.shouldCheckWithAnalysis(header), false,
+        "saved-file diagnostics without an editor bridge keep their existing execution path");
 });
 
 test("expanded text cache enforces entry and UTF-8 byte bounds with incremental accounting", () => {
@@ -118,6 +163,23 @@ test("workspace symbol worker concurrency is configurable and capped", async (t)
     const capped = service.getWorkspaceWorkers();
     assert.equal(capped.length, 2, "Invalidly large configuration must stay within the memory bound.");
     assert.ok(serial[0].disposed, "Replaced workers must be shut down.");
+});
+
+test("workspace symbol settings respect window and resource configuration scopes", async (t) => {
+    const fixture = setup(t);
+    fixture.workspace.workspaceFolders = [{ uri: fixture.vscode.Uri.file(fixture.directory) }];
+    fixture.workspace.getConfiguration = (_section, resource) => ({ get: (name, fallback) => {
+        if (name.startsWith("index.")) assert.equal(resource, null, `${name} is a window-scoped limit`);
+        else assert.ok(resource, `${name} must retain the workspace folder's compiler options`);
+        return fixture.values[name] ?? fallback;
+    } });
+    fixture.workspace.findFiles = async () => [];
+    fixture.vscode.RelativePattern = class {};
+    fixture.service.analysisWorker = { cancelAll() {}, async dispose() {} };
+    fixture.service.getWorkspaceWorkers = () => [{}];
+    const result = await fixture.service.workspaceSymbols("value");
+    assert.deepEqual(result.symbols, []);
+    assert.equal(result.roots.size, 1);
 });
 
 test("untrusted and unnamed documents never launch compiler analysis", async (t) => {
@@ -320,6 +382,72 @@ test("on-demand analysis stays opt-out and retries failed inputs only after thei
     assert.equal(failed.calls(), 2, "a new document version must be eligible for a fresh compiler attempt");
 });
 
+test("on-demand failures retry when an included header has been edited and saved", async (t) => {
+    let header;
+    const fixture = setup(t, (_options, result) => {
+        if (header.version === 1) throw new Error("Header export failed.");
+        return { ...result, dependencies: [fixture.filePath, header.uri.fsPath] };
+    });
+    const filePath = path.join(fixture.directory, "header.bi");
+    fs.writeFileSync(filePath, "Type IncompleteHeader\n");
+    header = { uri: fixture.vscode.Uri.file(filePath), version: 1, isDirty: false,
+        getText: () => fs.readFileSync(filePath, "utf8") };
+    fixture.workspace.textDocuments.push(header);
+    assert.equal(await fixture.service.getModelForEditor(fixture.document), null);
+    assert.equal(await fixture.service.getModelForEditor(fixture.document), null);
+    assert.equal(fixture.calls(), 1);
+    fs.writeFileSync(filePath, "Type FixedHeader As Long\n");
+    header.version++;
+    fixture.service.documentChanged(header);
+    assert.ok(await fixture.service.getModelForEditor(fixture.document),
+        "a saved header revision must retry immediately without editing the root or waiting 30 seconds");
+    assert.equal(fixture.document.version, 1);
+    assert.equal(fixture.calls(), 2);
+});
+
+test("invalidated on-demand work does not repopulate the failure throttle", async (t) => {
+    let release;
+    const fixture = setup(t, (_options, result) => fixture.calls() === 1
+        ? new Promise((resolve) => { release = () => resolve(result); }) : result);
+    const pending = fixture.service.getModelForEditor(fixture.document);
+    await new Promise(setImmediate);
+    fixture.service.invalidate();
+    release();
+    assert.equal(await pending, null);
+    assert.ok(await fixture.service.getModelForEditor(fixture.document),
+        "unchanged editor inputs must be eligible after framework cancellation");
+    assert.equal(fixture.calls(), 2);
+});
+
+test("non-compiler editor buffers do not release a genuine failure throttle", async (t) => {
+    const fixture = setup(t, () => { throw new Error("Compiler is unavailable."); });
+    const notes = { uri: fixture.vscode.Uri.file(path.join(fixture.directory, "notes.txt")), version: 1, isDirty: false };
+    fixture.workspace.textDocuments.push(notes);
+    assert.equal(await fixture.service.getModelForEditor(fixture.document), null);
+    notes.version++;
+    notes.isDirty = true;
+    assert.equal(await fixture.service.getModelForEditor(fixture.document), null);
+    assert.equal(fixture.calls(), 1, "ordinary editor activity must not start a failing compiler again");
+});
+
+test("late failures from an old timeout do not throttle newly configured analysis", async (t) => {
+    let rejectFirst;
+    const timeouts = [];
+    const fixture = setup(t, (options, result) => {
+        timeouts.push(options.timeoutMs);
+        return timeouts.length === 1 ? new Promise((_resolve, reject) => { rejectFirst = reject; }) : result;
+    });
+    fixture.values["analysis.timeoutMs"] = 1000;
+    const pending = fixture.service.getModelForEditor(fixture.document);
+    await new Promise(setImmediate);
+    fixture.values["analysis.timeoutMs"] = 2000;
+    fixture.service.refreshContexts();
+    rejectFirst(new Error("Old timeout expired."));
+    assert.equal(await pending, null);
+    assert.ok(await fixture.service.getModelForEditor(fixture.document));
+    assert.deepEqual(timeouts, [1000, 2000]);
+});
+
 test("on-demand sidecar analysis does not read dirty roots from disk", async (t) => {
     const fixture = setup(t, () => { throw new Error("plain fbc must not receive an unsaved root"); });
     fixture.values["analysis.compilerPath"] = "";
@@ -339,12 +467,108 @@ test("sidecar-only compiler analysis rejects an unsaved root before launching fb
     assert.equal(fixture.calls(), 0);
 });
 
+test("newly available failed-include inputs reschedule open on-change roots", async (t) => {
+    const fixture = setup(t, (_options, result) => ({ ...result,
+        semanticIncludeOutcomes: [{ outcome: "not-found", requested: "appeared.bi" }] }));
+    fixture.values["analysis.run"] = "onChange";
+    assert.equal(await fixture.service.check(fixture.document, false), true);
+    const header = { uri: fixture.vscode.Uri.file(path.join(fixture.directory, "appeared.bi")) };
+    fixture.service.documentOpened(header);
+    assert.equal(fixture.service.snapshots.size, 0);
+    assert.ok(fixture.service.pendingModules.has(fixture.document.uri.toString()),
+        "the compiler receipt must recover roots that source indexing could not resolve before creation");
+    assert.ok(fixture.service.pendingTimer);
+});
+
 test("source edits invalidate accepted snapshots", async (t) => {
     const fixture = setup(t);
     assert.equal(await fixture.service.check(fixture.document), true);
     assert.ok(fixture.service.getModel(fixture.document.uri));
     fs.writeFileSync(fixture.filePath, "Dim changedValue As String\n");
     assert.equal(fixture.service.getModel(fixture.document.uri), null);
+});
+
+test("manual analysis retries one invalidation without following edits, cancellation, or context changes", async (t) => {
+    for (const change of ["invalidation", "edit", "cancel", "context"]) {
+        let complete;
+        const fixture = setup(t, (_options, result) => fixture.calls() === 1
+            ? new Promise((resolve) => { complete = () => resolve(result); }) : result);
+        fixture.document.version = 1;
+        const token = { isCancellationRequested: false };
+        const pending = fixture.service.checkCurrent(fixture.document, false, token);
+        await new Promise(setImmediate);
+        assert.equal(fixture.calls(), 1);
+        fixture.service.invalidate();
+        if (change === "edit") fixture.document.version++;
+        if (change === "cancel") token.isCancellationRequested = true;
+        if (change === "context") fixture.values["compiler.arguments"] = ["-d", "OTHER_BUILD"];
+        complete();
+        assert.equal(await pending, change === "invalidation", change);
+        assert.equal(fixture.calls(), change === "invalidation" ? 2 : 1, change);
+    }
+});
+
+test("configuration refresh retracts obsolete diagnostics without dropping current snapshots", async (t) => {
+    const fixture = setup(t, (options, result) => ({ ...result, diagnostics: [{
+        filePath: fixture.filePath, line: 0, code: 9, severity: "error", message: "Expected expression"
+    }] }));
+    fixture.vscode.Range = class { constructor(...values) { this.values = values; } };
+    fixture.vscode.Diagnostic = class { constructor(range, message, severity) { Object.assign(this, { range, message, severity }); } };
+    fixture.vscode.DiagnosticSeverity = { Error: 0, Warning: 1 };
+    const published = new Map();
+    fixture.service.diagnosticCollection = { set: (uri, diagnostics) => published.set(uri.toString(), diagnostics), clear: () => published.clear(), dispose() {} };
+    assert.equal(await fixture.service.check(fixture.document), true);
+    const model = fixture.service.getModel(fixture.document.uri);
+    fixture.service.refreshContexts();
+    assert.equal(fixture.service.getModel(fixture.document.uri), model,
+        "a delayed configuration event must preserve a snapshot that already uses current settings");
+    assert.equal(published.size, 1);
+    fixture.values["compiler.arguments"] = ["-d", "OTHER_BUILD"];
+    fixture.service.refreshContexts();
+    assert.equal(fixture.service.snapshots.size, 0);
+    assert.equal(fixture.service.expanded.size, 0);
+    assert.equal(published.size, 0, "old build errors must disappear even when no new analysis runs");
+});
+
+test("configuration refresh cancels only analyses using obsolete settings", async (t) => {
+    let complete, captured;
+    const fixture = setup(t, (options, result) => {
+        captured = options;
+        return new Promise((resolve) => { complete = () => resolve(result); });
+    });
+    const first = fixture.service.check(fixture.document, false);
+    await new Promise(setImmediate);
+    fixture.service.refreshContexts();
+    assert.equal(captured.signal.aborted, false);
+    fixture.values["compiler.arguments"] = ["-d", "NEW_BUILD"];
+    fixture.service.refreshContexts();
+    assert.equal(captured.signal.aborted, true);
+    complete();
+    assert.equal(await first, false);
+    const second = fixture.service.check(fixture.document, false);
+    await new Promise(setImmediate);
+    fixture.service.refreshContexts();
+    assert.equal(captured.signal.aborted, false, "work started with new settings must survive the event");
+    complete();
+    assert.equal(await second, true);
+});
+
+test("configuration refresh retains the original header's resource context", async (t) => {
+    let header;
+    const fixture = setup(t, (options, result) => ({ ...result, dependencies: [fixture.filePath, header.uri.fsPath] }));
+    header = headerContext(fixture);
+    fixture.workspace.getConfiguration = (_section, uri) => ({
+        get: (name, fallback) => name === "compiler.arguments" && uri.fsPath === header.uri.fsPath
+            ? ["-d", "HEADER_RESOURCE"] : fixture.values[name] ?? fallback
+    });
+    assert.equal(await fixture.service.check(header), true);
+    const model = fixture.service.getModel(header.uri);
+    fixture.service.refreshContexts();
+    assert.equal(fixture.service.getModel(header.uri), model,
+        "checking the root's settings instead of the request header would wrongly expire this snapshot");
+    fixture.values["analysis.activeContext"] = { name: "missing", module: "main.bas" };
+    fixture.service.refreshContexts();
+    assert.equal(fixture.service.snapshots.size, 0, "invalid context selections must also retract old results");
 });
 
 test("rebuilding a stable bridge symlink invalidates compiler snapshots", { skip: process.platform === "win32" }, async (t) => {
@@ -365,6 +589,77 @@ test("rebuilding a stable bridge symlink invalidates compiler snapshots", { skip
         "a new build behind the stable path must not reuse snapshots from the old compiler image");
 });
 
+test("compiler fingerprints follow explicit, relative, and PATH-selected executables", (t) => {
+    const { directory } = setup(t);
+    const first = path.join(directory, "first"), second = path.join(directory, "second");
+    fs.mkdirSync(first);
+    fs.mkdirSync(second);
+    const command = "fbc-cache-probe";
+    const name = process.platform === "win32" ? `${command}.exe` : command;
+    const firstCompiler = path.join(first, name), secondCompiler = path.join(second, name);
+    fs.mkdirSync(firstCompiler);
+    fs.writeFileSync(secondCompiler, "original compiler", { mode: 0o755 });
+    const environment = { PATH: [first, second].join(path.delimiter), NoDefaultCurrentDirectoryInExePath: "1" };
+    const original = compilerExecutableIdentity(command, directory, environment);
+    assert.equal(original.filePath, fs.realpathSync(secondCompiler), "a directory must not hide the following executable");
+    assert.deepEqual(compilerExecutableIdentity(secondCompiler, directory, environment), original);
+    assert.deepEqual(compilerExecutableIdentity(path.join(".", "second", name), directory, environment), original);
+    fs.appendFileSync(secondCompiler, " rebuilt");
+    assert.notDeepEqual(compilerExecutableIdentity(command, directory, environment), original);
+    fs.renameSync(firstCompiler, path.join(first, "old-directory"));
+    fs.writeFileSync(firstCompiler, "new preferred compiler", { mode: 0o755 });
+    assert.equal(compilerExecutableIdentity(command, directory, environment).filePath, fs.realpathSync(firstCompiler),
+        "a newly installed earlier PATH entry must replace the old compiler identity");
+    assert.equal(compilerExecutableIdentity("missing-compiler", directory, { PATH: first }), null);
+});
+
+test("rebuilding the same compiler filename invalidates bridge and stock snapshots", async (t) => {
+    for (const semanticModelOnly of [false, true]) {
+        const fixture = setup(t, (options, result) => ({
+            ...result, semanticSidecarOnly: options.semanticModelOnly, semanticExpressions: []
+        }));
+        const compiler = path.join(fixture.directory, "compiler.exe");
+        fs.writeFileSync(compiler, "first build", { mode: 0o755 });
+        fixture.values["analysis.compilerPath"] = semanticModelOnly ? "" : compiler;
+        fixture.values["compiler.path"] = compiler;
+        const messages = [];
+        fixture.service.output.appendLine = (message) => messages.push(message);
+        assert.equal(await fixture.service.check(fixture.document), true, messages.join("\n"));
+        assert.ok(fixture.service.getModel(fixture.document.uri));
+        const original = fs.statSync(compiler);
+        fs.writeFileSync(compiler, "other build");
+        /* Do not depend on rapid writes receiving distinct timestamps. */
+        const newer = new Date(original.mtimeMs + 2000);
+        fs.utimesSync(compiler, newer, newer);
+        assert.equal(fs.statSync(compiler).size, original.size, "same-sized builds still need fresh semantic results");
+        assert.equal(fixture.service.getModel(fixture.document.uri), null,
+            "replacing compiler bytes must expire results even when its configured path is unchanged");
+        assert.equal(await fixture.service.check(fixture.document), true);
+        assert.ok(fixture.service.getModel(fixture.document.uri));
+        const replacement = path.join(fixture.directory, "replacement.exe");
+        fs.writeFileSync(replacement, "third build", { mode: 0o755 });
+        fs.utimesSync(replacement, newer, newer);
+        fs.renameSync(replacement, compiler);
+        assert.equal(fixture.service.getModel(fixture.document.uri), null,
+            "an atomic replacement must expire results even when size and modification time are preserved");
+        assert.equal(await fixture.service.check(fixture.document), true);
+        fs.unlinkSync(compiler);
+        assert.equal(fixture.service.getModel(fixture.document.uri), null, "a removed compiler must not keep old semantic results alive");
+    }
+});
+
+test("a compiler rebuilt during analysis cannot publish its obsolete snapshot", async (t) => {
+    const fixture = setup(t, (_options, result) => {
+        fs.appendFileSync(compiler, " rebuilt during analysis");
+        return result;
+    });
+    const compiler = path.join(fixture.directory, "compiler.exe");
+    fs.writeFileSync(compiler, "first build", { mode: 0o755 });
+    fixture.values["analysis.compilerPath"] = compiler;
+    assert.equal(await fixture.service.check(fixture.document), false);
+    assert.equal(fixture.service.snapshots.size, 0);
+});
+
 test("delayed document events retain matching snapshots and cancel stale request inputs", async (t) => {
     const fixture = setup(t, (options, result) => ({ ...result, text: options.overlays.get(fixture.filePath) }));
     fixture.document.isDirty = true;
@@ -379,6 +674,66 @@ test("delayed document events retain matching snapshots and cancel stale request
     fixture.service.runningBuffers.set("file:///pending.bas", new Map([[fixture.filePath, "Dim oldValue As Long\n"]]));
     fixture.service.documentChanged(fixture.document);
     assert.equal(aborted, true, "A request with older immutable input must be stopped");
+});
+
+test("closing saved and unrelated preview documents preserves current compiler work", async (t) => {
+    const fixture = setup(t);
+    assert.equal(await fixture.service.check(fixture.document), true);
+    const model = fixture.service.getModel(fixture.document.uri);
+    let aborted = false;
+    const key = "file:///pending.bas";
+    fixture.service.running.set(key, { abort() { aborted = true; } });
+    fixture.service.runningBuffers.set(key, new Map([[fixture.filePath, fixture.document.getText()]]));
+    fixture.service.documentClosed(fixture.document);
+    fixture.service.documentClosed({ uri: { scheme: "untitled", fsPath: "" } });
+    fixture.service.documentChanged({ uri: { scheme: "untitled", fsPath: "" } });
+    fixture.service.documentClosed({ uri: { scheme: "file", fsPath: "/unrelated/closed.bas" } });
+    assert.equal(aborted, false);
+    assert.equal(fixture.service.getModel(fixture.document.uri), model);
+});
+
+test("expression commands retry a snapshot upgraded while their worker query returns", async (t) => {
+    const { service, document } = setup(t);
+    const position = { line: 0, character: 0 };
+    const expression = { typeName: "Integer" };
+    const upgraded = { expressionAt: async () => expression };
+    let current = { expressionAt: async () => { current = null; return null; } };
+    let checks = 0;
+    service.getModel = () => current;
+    service.check = async () => { checks++; current = upgraded; return true; };
+    assert.deepEqual(await service.expressionForEditor(document, position), { model: upgraded, expression });
+    assert.equal(checks, 1);
+
+    current = { expressionAt: async () => { document.version++; return expression; } };
+    assert.equal(await service.expressionForEditor(document, position), null,
+        "an edit during the query must not publish a type at stale coordinates");
+});
+
+test("expression command retries are bounded when every snapshot is replaced", async (t) => {
+    const { service, document } = setup(t);
+    let current, queries = 0;
+    const model = { expressionAt: async () => { queries++; current = null; return null; } };
+    current = model;
+    service.getModel = () => current;
+    service.check = async () => { current = model; return true; };
+    assert.equal(await service.expressionForEditor(document, { line: 0, character: 0 }), null);
+    assert.equal(queries, 2);
+});
+
+test("closing a discarded dirty overlay retracts only work that captured that file", async (t) => {
+    const fixture = setup(t, (options, result) => ({ ...result, text: options.overlays.get(fixture.filePath) }));
+    fixture.document.isDirty = true;
+    fixture.document.getText = () => "Dim discardedValue As Double\n";
+    assert.equal(await fixture.service.check(fixture.document), true);
+    const aborted = [];
+    fixture.service.running.set("affected", { abort() { aborted.push("affected"); } });
+    fixture.service.runningBuffers.set("affected", new Map([[fixture.filePath, fixture.document.getText()]]));
+    fixture.service.running.set("unrelated", { abort() { aborted.push("unrelated"); } });
+    fixture.service.runningBuffers.set("unrelated", new Map());
+    fixture.service.documentClosed(fixture.document);
+    assert.deepEqual(aborted, ["affected"]);
+    assert.equal(fixture.service.snapshots.size, 0);
+    assert.equal(fixture.service.running.has("unrelated"), true);
 });
 
 test("partial snapshots publish captured-buffer diagnostics and clear them on invalidation", async (t) => {

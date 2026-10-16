@@ -27,10 +27,11 @@ const vscode = require("vscode");
 const { findBracketProblems } = require("./lib/bracket-diagnostics");
 const { FreeBasicCompilerService } = require("./lib/compiler-service");
 const { CompilerAnalysisService } = require("./lib/compiler-analysis-service");
+const { createCompilerLanguageStatus } = require("./lib/compiler-language-status");
 const { CompilerProject } = require("./lib/compiler-project");
 const { runFreeBasicCompiler } = require("./lib/compiler-diagnostics");
 const { compilerExpressionTypeMessage } = require("./lib/compiler-constant-values");
-const { createEditorFeatures } = require("./lib/editor-features");
+const { createEditorFeatures, createDocumentSymbolRegistration, createDocumentLinkRegistration } = require("./lib/editor-features");
 const { loadGrammarSource } = require("./lib/grammar-data");
 const { FreeBasicWorkspaceIndex } = require("./lib/workspace-index");
 
@@ -39,6 +40,8 @@ const LANGUAGE_ID = "freebasic";
 let compilerService = null;
 let workspaceIndex = null;
 let compilerAnalysis = null;
+let documentSymbolRegistration = null;
+let documentLinkRegistration = null;
 
 function activate(context) {
     const grammarData = loadGrammarSource(context.extensionPath);
@@ -145,31 +148,39 @@ function activate(context) {
     });
 
     const features = createEditorFeatures(vscode, workspaceIndex, grammarData);
+    documentSymbolRegistration = createDocumentSymbolRegistration(vscode, selector, features.documentSymbol, compilerAnalysis);
+    context.subscriptions.push(documentSymbolRegistration);
+    documentLinkRegistration = createDocumentLinkRegistration(vscode, selector, features.documentLink, compilerAnalysis);
+    context.subscriptions.push(documentLinkRegistration);
     const fileWatcher = vscode.workspace.createFileSystemWatcher("**/*.{bas,bi,BAS,BI}");
 
     context.subscriptions.push(
+        createCompilerLanguageStatus(vscode, compilerAnalysis),
         outputChannel,
+        /* Stop diagnostics before disposing the collection they own. */
+        compilerService,
         diagnosticCollection,
         bracketDiagnostics,
         inactiveCodeDiagnostics,
         fileWatcher,
-        compilerService,
         workspaceIndex,
         compilerAnalysis,
         ...(bracketSnapshotSubscription ? [bracketSnapshotSubscription] : []),
         vscode.workspace.registerTextDocumentContentProvider("freebasic-preprocessed", compilerAnalysis),
         vscode.commands.registerCommand("freebasic.analyzeModule", () => {
             const document = vscode.window.activeTextEditor?.document;
-            return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Analyzing FreeBASIC source", cancellable: true }, (_progress, token) => compilerAnalysis.check(document, true, token));
+            return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Analyzing FreeBASIC source", cancellable: true }, (_progress, token) => compilerAnalysis.checkCurrent(document, true, token));
         }),
         vscode.commands.registerCommand("freebasic.selectCompilerContext", () => compilerAnalysis.selectContext(vscode.window.activeTextEditor?.document)),
         vscode.commands.registerCommand("freebasic.showPreprocessed", () => compilerAnalysis.showExpanded(vscode.window.activeTextEditor?.document)),
         vscode.commands.registerCommand("freebasic.showExpressionType", async () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) return null;
-            if (!compilerAnalysis.getModel(editor.document.uri) && !await compilerAnalysis.check(editor.document, false)) return null;
-            const model = compilerAnalysis.getModel(editor.document.uri);
-            const expression = await model?.expressionAt(editor.document.uri, editor.selection.start, editor.selection.end);
+            const selected = await compilerAnalysis.expressionForEditor(
+                editor.document, editor.selection.start, editor.selection.end
+            );
+            if (!selected) return null;
+            const { model, expression } = selected;
             const compilerFact = model?.remote ? null : model?.compilerSidecarFactAt?.(
                 editor.document.uri, editor.selection.start, editor.selection.end
             );
@@ -217,16 +228,14 @@ function activate(context) {
         vscode.languages.registerSelectionRangeProvider(selector, features.selectionRange),
         vscode.languages.registerDocumentSemanticTokensProvider(selector, features.semanticTokens, features.semanticLegend),
         vscode.languages.registerDocumentHighlightProvider(selector, features.documentHighlight),
-        vscode.languages.registerDocumentLinkProvider(selector, features.documentLink),
         vscode.languages.registerDocumentFormattingEditProvider(selector, features.documentFormatting),
         vscode.languages.registerDocumentRangeFormattingEditProvider(selector, features.documentRangeFormatting),
-        vscode.languages.registerDocumentSymbolProvider(selector, features.documentSymbol),
         vscode.languages.registerInlayHintsProvider(selector, features.inlayHints),
         vscode.languages.registerFoldingRangeProvider(selector, features.folding),
         vscode.languages.registerHoverProvider(selector, features.hover),
         vscode.languages.registerReferenceProvider(selector, features.reference),
         vscode.languages.registerRenameProvider(selector, features.rename),
-        vscode.languages.registerSignatureHelpProvider(selector, features.signature, "(", "[", ","),
+        vscode.languages.registerSignatureHelpProvider(selector, features.signature, "(", "[", ",", " "),
         vscode.languages.registerWorkspaceSymbolProvider(features.workspaceSymbol),
         vscode.commands.registerCommand("freebasic.checkSyntax", async () => {
             const document = vscode.window.activeTextEditor?.document;
@@ -234,14 +243,18 @@ function activate(context) {
                 vscode.window.showWarningMessage("Open a FreeBASIC module before running a compiler check.");
                 return;
             }
-            if (compilerAnalysis.shouldAnalyzeUnsavedBuffers(document)) {
+            if (compilerAnalysis.shouldCheckWithAnalysis(document)) {
+                const compatibility = await compilerAnalysis.ensureCompilerCompatibility(document.uri);
+                if (compatibility.state === "unsupported") {
+                    return compilerService.checkSelectedContext(document, { showResult: true });
+                }
                 return vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
-                    title: "Checking FreeBASIC source with editor buffers",
+                    title: "Checking FreeBASIC compiler context",
                     cancellable: true
-                }, (_progress, token) => compilerAnalysis.check(document, true, token));
+                }, (_progress, token) => compilerAnalysis.checkCurrent(document, true, token));
             }
-            await compilerService.checkDocument(document, { showResult: true });
+            return compilerService.checkSelectedContext(document, { showResult: true });
         }),
         vscode.commands.registerCommand("freebasic.rebuildWorkspaceIndex", async () => {
             workspaceIndex.invalidateWorkspace();
@@ -267,7 +280,11 @@ function activate(context) {
                 for (const uri of workspaceIndex.getDependentModules(event.document.uri)) compilerService.clearDocument(uri);
             }
         }),
-        vscode.workspace.onDidOpenTextDocument(updateSourceDiagnostics),
+        vscode.workspace.onDidOpenTextDocument((document) => {
+            compilerService.documentOpened(document);
+            compilerAnalysis.documentOpened(document);
+            updateSourceDiagnostics(document);
+        }),
         vscode.workspace.onDidSaveTextDocument(async (document) => {
             if (document.languageId !== LANGUAGE_ID) {
                 return;
@@ -278,14 +295,14 @@ function activate(context) {
                 await compilerAnalysis.check(document, false);
             }
             if (compilerService.shouldCheckOnSave(document)) {
-                if (/\.bas$/i.test(document.uri.fsPath)) await compilerService.checkDocument(document);
+                if (/\.bas$/i.test(document.uri.fsPath)) await compilerService.checkSelectedContext(document);
                 else if (/\.bi$/i.test(document.uri.fsPath)) {
                     await workspaceIndex.ensureInitialized();
                     const affected = new Set(workspaceIndex.getDependentModules(document.uri).map((uri) => uri.toString()));
                     for (const uri of compilerService.getDependentModules(document.uri)) affected.add(uri.toString());
                     /* Only recheck open modules automatically after a header save. */
                     for (const module of vscode.workspace.textDocuments) {
-                        if (affected.has(module.uri.toString()) && compilerService.shouldCheckOnSave(module)) await compilerService.checkDocument(module);
+                        if (affected.has(module.uri.toString()) && compilerService.shouldCheckOnSave(module)) await compilerService.checkSelectedContext(module);
                     }
                 }
             }
@@ -293,7 +310,7 @@ function activate(context) {
         vscode.workspace.onDidCloseTextDocument((document) => {
             bracketDiagnostics.delete(document.uri);
             inactiveCodeDiagnostics.delete(document.uri);
-            if (document.languageId === LANGUAGE_ID) compilerAnalysis.invalidate();
+            if (document.languageId === LANGUAGE_ID) compilerAnalysis.documentClosed(document);
             if (document.uri.scheme === "untitled") {
                 workspaceIndex.removeUri(document.uri);
                 compilerService.clearDocument(document.uri);
@@ -309,21 +326,24 @@ function activate(context) {
                 publication and query time. VS Code can deliver this event
                 after a command has already read the new settings; cancelling
                 that otherwise current analysis would turn a valid command
-                into a false failure. Context changes therefore remain guarded
-                by the snapshot and project checks instead of a blanket abort.
+                into a false failure. Selectively retire obsolete snapshots
+                and diagnostics without aborting work using the new settings.
             */
             if (event.affectsConfiguration("freebasic.index")) {
                 workspaceIndex.invalidateWorkspace();
             }
-            if (event.affectsConfiguration("freebasic.includePaths") || event.affectsConfiguration("freebasic.compiler")) {
+            if (event.affectsConfiguration("freebasic.includePaths") || event.affectsConfiguration("freebasic.compiler") ||
+                event.affectsConfiguration("freebasic.analysis.activeContext") || event.affectsConfiguration("freebasic.analysis.projectContexts")) {
                 workspaceIndex.invalidateWorkspace();
             }
             if (
                 event.affectsConfiguration("freebasic.compiler") ||
                 event.affectsConfiguration("freebasic.diagnostics") ||
-                event.affectsConfiguration("freebasic.includePaths")
+                event.affectsConfiguration("freebasic.includePaths") ||
+                event.affectsConfiguration("freebasic.analysis")
             ) {
-                compilerService.clearAll();
+                compilerAnalysis.refreshContexts();
+                compilerService.refreshContexts();
             }
         }),
         fileWatcher.onDidCreate((uri) => { compilerAnalysis.invalidate(); workspaceIndex.refreshUri(uri); }),
@@ -345,6 +365,10 @@ function activate(context) {
 }
 
 function deactivate() {
+    documentSymbolRegistration?.dispose();
+    documentSymbolRegistration = null;
+    documentLinkRegistration?.dispose();
+    documentLinkRegistration = null;
     compilerService?.dispose();
     const analysisStopped = compilerAnalysis?.dispose();
     workspaceIndex?.dispose();

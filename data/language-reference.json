@@ -1,8 +1,8 @@
 {
-  "title": "FreeBASIC 1.20.4 editor reference",
-  "sourceVersion": "1.20.4",
-  "sourceRevision": "3d17dc284b54a32319a8ae61dac6c8bf5ab51a04",
-  "sourceHash": "ca8cea837b3fe0e5ade59b8250f3d042d4310f3b045cc9ed312234d4a78891f7",
+  "title": "FreeBASIC 1.20.5 editor reference",
+  "sourceVersion": "1.20.5",
+  "sourceRevision": "8ebc975303fb30f1a4c4330547cde11c011e895e",
+  "sourceHash": "6d16dfb86c16811b68fa17254c1e106ae07c11390e41bfac8a988887f18b64ae",
   "attribution": "Manual excerpts: The FreeBASIC documentation contributors, GNU Free Documentation License 1.2. See docs/reference-attribution.md and docs/fdl-1.2.txt.",
   "sourceRepository": "https://github.com/jasonkfirth/fbc",
   "entries": {

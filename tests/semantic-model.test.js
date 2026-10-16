@@ -25,7 +25,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { parseFreeBasicText, maskFreeBasicText, findCallContext } = require("../lib/freebasic-parser");
-const { FreeBasicSemanticModel, tokenize } = require("../lib/semantic-model");
+const { FreeBasicSemanticModel, isPrimitiveTypeName, sourceParameterTypeKey, tokenize } = require("../lib/semantic-model");
+const { semanticTokenType } = require("../lib/semantic-token-data");
 
 function modelFor(text) {
     const uri = { toString: () => "file:///workspace/example.bas" };
@@ -36,6 +37,63 @@ function modelFor(text) {
         members(line, column) { return model.completeMembers(uri, line, column)?.map((entry) => entry.name); }
     };
 }
+
+test("signature type keys retain qualifiers and do not treat nested types or defaults as arrays", () => {
+    assert.deepEqual(sourceParameterTypeKey({ typeName: "Const Long Pointer", label: "ByVal value As Const Long Ptr" }),
+        ["const long ptr", null]);
+    assert.deepEqual(sourceParameterTypeKey({ typeName: "Long Ptr Ptr", label: "ByVal value As Long Ptr Ptr" }),
+        ["long ptr ptr", null]);
+    assert.deepEqual(sourceParameterTypeKey({ typeName: "Long", label: "values( Any, Any ) As Long" }), ["long", "any,any"]);
+    assert.deepEqual(sourceParameterTypeKey({ typeName: "Long", label: "values() As Long" }), ["long", ""]);
+    assert.deepEqual(sourceParameterTypeKey({ typeName: "Long", label: "Optional value = MakeValue()" }), ["long", null]);
+    assert.deepEqual(sourceParameterTypeKey({ typeName: "Function(values() As Long) As Long", label: "ByVal callback As Function(values() As Long) As Long" }),
+        ["function(values() as long) as long", null]);
+});
+
+test("callable identities preserve pointer depth and array dimensions across matching prototypes", () => {
+    const parameters = [
+        ["ByVal value As Long Ptr", "ByVal value As Long Pointer"],
+        ["ByVal value As Long Ptr Ptr", "ByVal value As Long Pointer Pointer"],
+        ["values(Any) As Long", "values( any ) As Long"],
+        ["values(Any, Any) As Long", "values(any,any) As Long"]
+    ];
+    const headerUri = { toString: () => "file:///workspace/shapes.bi" };
+    const sourceUri = { toString: () => "file:///workspace/shapes.bas" };
+    const model = new FreeBasicSemanticModel([
+        { uri: headerUri, parsed: parseFreeBasicText(parameters.map(([prototype]) => `Declare Sub ShapeProbe Overload(${prototype})`).join("\n")) },
+        { uri: sourceUri, parsed: parseFreeBasicText(parameters.map(([_prototype, body]) => `Sub ShapeProbe(${body})\nEnd Sub\n`).join("")),
+            includeUris: new Set([headerUri.toString()]) }
+    ]);
+    const prototypes = model.getDocument(headerUri).entries.filter((entry) => entry.declaration.type === "sub");
+    const bodies = model.getDocument(sourceUri).entries.filter((entry) => entry.declaration.type === "sub");
+    assert.equal(new Set(prototypes.map((entry) => entry.id)).size, parameters.length);
+    for (let index = 0; index < parameters.length; index++) {
+        assert.equal(prototypes[index].id, bodies[index].id, `prototype/body mismatch for ${parameters[index][0]}`);
+    }
+});
+
+test("primitive type classification excludes aggregates and unresolved type expressions", () => {
+    for (const name of ["Long", "Const Integer", "Double Ptr", "Any Pointer", "ZString * 32", "Const WString Ptr"]) {
+        assert.equal(isPrimitiveTypeName(name), true, name);
+    }
+    for (const name of ["", "Object", "Object Ptr", "ValueAlias", "Geometry.Point", "Typeof(BuildValue())"]) {
+        assert.equal(isPrimitiveTypeName(name), false, name);
+    }
+});
+
+test("qualified callable tokens distinguish namespace owners from aggregate owners", () => {
+    const headerUri = { toString: () => "file:///workspace/owners.bi" };
+    const moduleUri = { toString: () => "file:///workspace/main.bas" };
+    const header = "Namespace Helpers\nDeclare Function Calculate() As Long\nEnd Namespace\nType Widget\nnumber As Long\nDeclare Sub Touch()\nEnd Type\n";
+    const source = "Function Helpers.Calculate() As Long\nReturn 1\nEnd Function\nSub Widget.Touch()\nEnd Sub\n";
+    const model = new FreeBasicSemanticModel([
+        { uri: headerUri, parsed: parseFreeBasicText(header) },
+        { uri: moduleUri, parsed: parseFreeBasicText(source), includeUris: new Set([headerUri.toString()]) }
+    ]);
+    for (const entry of model.entries.filter((entry) => ["function", "sub"].includes(entry.declaration.type))) {
+        assert.equal(semanticTokenType(entry), entry.name === "Calculate" ? "function" : "method", entry.declaration.name);
+    }
+});
 
 test("fields and locals with equal names have distinct reference sets", () => {
     const { model, resolve } = modelFor([
@@ -185,6 +243,78 @@ test("lookup follows transitive includes and excludes unrelated modules", () => 
     ]);
     assert.equal(model.resolveAt(main, 1, 2)[0].document.key, nested.toString());
     assert.deepEqual(model.resolveAt(main, 2, 10), []);
+});
+
+test("procedure families follow shared declarations, not unrelated names or utility includes", () => {
+    const uri = (name) => ({ toString: () => `file:///workspace/${name}` });
+    const common = uri("common.bi"), headerA = uri("a/api.bi"), headerB = uri("b/api.bi");
+    const moduleA = uri("a/main.bas"), moduleB = uri("b/main.bas"), consumer = uri("a/consumer.bas");
+    const declaration = "Declare Sub FamilyBoundaryProbe()\n";
+    const implementation = "Sub FamilyBoundaryProbe()\nEnd Sub\nFamilyBoundaryProbe()\n";
+    const model = new FreeBasicSemanticModel([
+        { uri: common, parsed: parseFreeBasicText("Const UtilityFlag = 1\n") },
+        { uri: headerA, parsed: parseFreeBasicText(declaration) },
+        { uri: headerB, parsed: parseFreeBasicText(declaration) },
+        { uri: moduleA, parsed: parseFreeBasicText(implementation), includeUris: new Set([common.toString(), headerA.toString()]) },
+        { uri: moduleB, parsed: parseFreeBasicText("FamilyBoundaryProbe()\n"), includeUris: new Set([common.toString(), headerB.toString()]) },
+        { uri: consumer, parsed: parseFreeBasicText("FamilyBoundaryProbe()\n"), includeUris: new Set([headerA.toString()]) }
+    ]);
+    const target = model.resolveAt(moduleA, 0, "Sub F".length)[0];
+    assert.equal(model.renameProblem(target, "RenamedBoundaryProbe"), null);
+    assert.deepEqual([...new Set(model.references(target).map((entry) => entry.uri.toString()))].sort(),
+        [headerA, moduleA, consumer].map((entry) => entry.toString()).sort(),
+        "an independent header and its consumer must not be included in rename/reference results");
+    const other = model.resolveAt(moduleB, 0, 2)[0];
+    assert.notEqual(other.id, target.id);
+    assert.deepEqual(model.declarationTargets([other]).map((entry) => entry.uri.toString()), [headerB.toString()]);
+});
+
+test("independent same-named UDT methods keep their own declaration families", () => {
+    const documents = [];
+    const uris = [];
+    for (const name of ["first", "second"]) {
+        const header = { toString: () => `file:///workspace/${name}.bi` };
+        const source = { toString: () => `file:///workspace/${name}.bas` };
+        uris.push(source);
+        documents.push({ uri: header, parsed: parseFreeBasicText("Type Widget\nnumber As Long\nDeclare Sub Touch()\nEnd Type\n") });
+        documents.push({ uri: source, includeUris: new Set([header.toString()]),
+            parsed: parseFreeBasicText("Sub Widget.Touch()\nEnd Sub\nDim item As Widget\nitem.Touch()\n") });
+    }
+    const model = new FreeBasicSemanticModel(documents);
+    const first = model.resolveAt(uris[0], 0, "Sub Widget.T".length);
+    const second = model.resolveAt(uris[1], 0, "Sub Widget.T".length);
+    assert.equal(first.length, 1);
+    assert.equal(second.length, 1);
+    assert.notEqual(first[0].id, second[0].id);
+    assert.equal(model.renameProblem(first[0], "Retouch"), null);
+    assert.deepEqual([...new Set(model.references(first[0]).map((entry) => entry.uri.toString()))].sort(),
+        ["file:///workspace/first.bas", "file:///workspace/first.bi"]);
+});
+
+test("namespace families retain co-visible reopenings without unrelated namespace matches", () => {
+    const uri = (name) => ({ toString: () => `file:///workspace/${name}` });
+    const headerA = uri("a/api.bi"), extraA = uri("a/extra.bi"), headerB = uri("b/api.bi"), common = uri("common.bi");
+    const moduleA = uri("a/main.bas"), moduleB = uri("b/main.bas"), consumer = uri("a/consumer.bas");
+    const namespace = (name) => parseFreeBasicText(`Namespace Helpers\nConst ${name} = 1\nEnd Namespace\n`);
+    const model = new FreeBasicSemanticModel([
+        { uri: headerA, parsed: namespace("FirstValue") }, { uri: extraA, parsed: namespace("ExtraValue") },
+        { uri: headerB, parsed: namespace("OtherValue") }, { uri: common, parsed: parseFreeBasicText("Const UtilityFlag = 1\n") },
+        { uri: moduleA, parsed: parseFreeBasicText("Using Helpers\n"),
+            includeUris: new Set([headerA.toString(), extraA.toString(), common.toString()]) },
+        { uri: moduleB, parsed: parseFreeBasicText("Using Helpers\n"), includeUris: new Set([headerB.toString(), common.toString()]) },
+        { uri: consumer, parsed: parseFreeBasicText("Using Helpers\n"), includeUris: new Set([headerA.toString()]) }
+    ]);
+    const first = model.resolveAt(moduleA, 0, "Using H".length);
+    assert.equal(first.length, 1, "co-visible namespace reopenings should resolve as one namespace");
+    assert.deepEqual(model.declarationTargets(first).map((entry) => entry.uri.toString()).sort(),
+        [headerA.toString(), extraA.toString()].sort());
+    assert.deepEqual([...new Set(model.references(first[0]).map((entry) => entry.uri.toString()))].sort(),
+        [headerA, extraA, moduleA, consumer].map((entry) => entry.toString()).sort());
+    const other = model.resolveAt(moduleB, 0, "Using H".length);
+    assert.equal(other.length, 1);
+    assert.notEqual(first[0].id, other[0].id);
+    assert.deepEqual(model.declarationTargets(other).map((entry) => entry.uri.toString()), [headerB.toString()]);
+    assert.match(model.renameProblem(first[0]), /requires compiler analysis/);
 });
 
 test("rename refuses conditionally duplicated locals", () => {

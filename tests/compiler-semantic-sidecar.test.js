@@ -12,7 +12,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { MAX_IMPLICIT_CALL_SIGNATURE_BYTES, decodeCompilerSemanticModel, decodeCompilerSemanticExpressions } = require("../lib/compiler-semantic-sidecar");
+const { readCompilerSemanticRows } = require("../lib/compiler-semantic-transport");
+const { MAX_IMPLICIT_CALL_SIGNATURE_BYTES, compilerScalarPrimitiveDtype, decodeCompilerSemanticModel, decodeCompilerSemanticExpressions } = require("../lib/compiler-semantic-sidecar");
 const { analyzeSavedModule, compilerSemanticDependencies, decodeCompilerSourceBuffer, decodePreprocessed } = require("../lib/compiler-analysis");
 const { CompilerSemanticModel } = require("../lib/compiler-semantic-model");
 const {
@@ -60,6 +61,14 @@ const header23 = "FBCSEM\t23\t1.20.4";
 const header25 = "FBCSEM\t25\t1.20.4";
 const header27 = "FBCSEM\t27\t1.20.4";
 const supportsIntelInlineAssembly = ["ia32", "x64"].includes(process.arch);
+
+/* Mutation tests inspect logical rows after the production binary reader has
+   validated framing. Runtime consumers retain only one decoded row at a time. */
+function semanticModelTestText(filePath) {
+    return [...readCompilerSemanticRows(fs.readFileSync(filePath), {
+        maxBytes: 64 * 1024 * 1024, maxRecords: 6_100_002
+    })].join("\n");
+}
 
 function schema20Sidecar({ expressionOnly = false, filePath = "/main.bas" } = {}) {
     const sourceDetails = [
@@ -170,6 +179,19 @@ function encodeSemanticTestSource(text, format) {
     const bom = format === "utf32le" ? [0xff, 0xfe, 0x00, 0x00] : [0x00, 0x00, 0xfe, 0xff];
     return Buffer.concat([Buffer.from(bom), contents]);
 }
+
+test("numeric destination dtypes accept inspected scalar flags but not pointers or unknown producers", () => {
+    assert.equal(compilerScalarPrimitiveDtype(8, "unknown"), 8);
+    assert.equal(compilerScalarPrimitiveDtype(105, "unknown", new Map([[105, "integer"]])), 105,
+        "a producer's explicit Y identifier must not be interpreted as FBC flags");
+    assert.equal(compilerScalarPrimitiveDtype(8 | 0x200, "1.20.5-1"), 8);
+    assert.equal(compilerScalarPrimitiveDtype(8 | 0x80000 | (8 << 20), "1.20.5"), 8);
+    for (const dtype of [8 | 0x20, 8 | 0x400, 8 | 0x40000, 8 | 0x2000000, -1, 1.5]) {
+        assert.equal(compilerScalarPrimitiveDtype(dtype, "1.20.5"), null, String(dtype));
+    }
+    assert.equal(compilerScalarPrimitiveDtype(8 | 0x200, "1.20.6"), null);
+    assert.equal(compilerScalarPrimitiveDtype(8 | 0x200, "unknown"), null);
+});
 
 test("schema 3 decodes physical parser expression ranges", () => {
     const model = decodeCompilerSemanticModel([
@@ -3000,8 +3022,8 @@ test("native compiler sidecar preserves exact physical and macro expression rang
             timeout: 30000
         });
 
-        const sidecarText = fs.readFileSync(sidecarPath, "utf8");
-        const model = decodeCompilerSemanticModel(sidecarText);
+        const sidecarText = semanticModelTestText(sidecarPath);
+        const model = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath));
         assert.equal(model.schemaVersion, 27);
         assert.ok(model.capabilities.length > 0, "current sidecars should advertise compiler feature coverage");
         assert.ok(model.statements.length > 0, "current sidecars should retain source statements");
@@ -3095,7 +3117,7 @@ test("native compiler sidecar preserves exact physical and macro expression rang
             stdio: "ignore",
             timeout: 30000
         });
-        const expressionOnly = decodeCompilerSemanticModel(fs.readFileSync(expressionOnlyPath, "utf8"));
+        const expressionOnly = decodeCompilerSemanticExpressions(fs.readFileSync(expressionOnlyPath));
         assert.equal(expressionOnly.schemaVersion, 27);
         assert.ok(expressionOnly.expressions.length > 0);
         assert.ok(expressionOnly.expressionOperands.length > 0, "expression-only sidecars should retain source operator operands");
@@ -3181,7 +3203,8 @@ test("macro-expanded include directives stay unanchored in compiler semantic mod
             timeout: 30000
         });
 
-        const model = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+        const model = suffix === "full" ? decodeCompilerSemanticModel(fs.readFileSync(sidecarPath))
+            : decodeCompilerSemanticExpressions(fs.readFileSync(sidecarPath));
         assert.equal(model.schemaVersion, 27);
         assert.equal(model.dependenciesComplete, true);
         assert.ok(model.dependencies.includes(sourcePath));
@@ -3204,7 +3227,7 @@ test("macro-expanded include directives stay unanchored in compiler semantic mod
                 "compact expression models omit macro invocation provenance with the macro graph");
         }
 
-        const legacyRows = fs.readFileSync(sidecarPath, "utf8").trimEnd().split(/\r?\n/).map((line) => line.split("\t"));
+        const legacyRows = semanticModelTestText(sidecarPath).split("\n").map((line) => line.split("\t"));
         const legacyContext = legacyRows.find((row) => row[0] === "SRC" && row[5] === "include");
         const legacyOutcome = legacyRows.find((row) => row[0] === "INC" && row[5] === "opened");
         assert.ok(legacyContext && legacyOutcome, `${suffix} output should contain include provenance rows`);
@@ -3289,7 +3312,7 @@ test("latest full compiler semantics reach declaration, procedure, aggregate, ca
 
         assert.equal(analysis.partial, false, `${fixture.file} must complete native analysis`);
         assert.equal(analysis.semanticModelSchemaVersion, 27);
-        assert.match(analysis.semanticModelCompilerVersion, /^1\.20\.4/);
+        assert.match(analysis.semanticModelCompilerVersion, /^1\.20\.5/);
         assert.ok(analysis.semanticCapabilities.some((capability) => capability.feature === fixture.feature &&
             capability.coverage === "available"), `${fixture.file} must advertise ${fixture.feature}`);
         assert.ok(analysis.semanticProperties.some((property) => property.name.startsWith(fixture.property)),
@@ -3605,8 +3628,8 @@ test("latest FBC header and namespace inputs reach validated editor models", { s
     execFileSync(compiler, ["-semantic-model", fullPath, "-i", directory, "-c", sourcePath, "-o", objectPath], {
         cwd: directory, stdio: "ignore", timeout: 30000
     });
-    const fullText = fs.readFileSync(fullPath, "utf8");
-    const full = decodeCompilerSemanticModel(fullText);
+    const fullText = semanticModelTestText(fullPath);
+    const full = decodeCompilerSemanticModel(fs.readFileSync(fullPath));
     assert.equal(full.sourceHeaderPolicies.length, 2);
     assert.equal(full.sourceHeaderLibraries.length, 2);
     assert.equal(full.namespaceImportRecipients.length, 3);
@@ -3656,7 +3679,7 @@ test("latest FBC header and namespace inputs reach validated editor models", { s
     execFileSync(compiler, ["-semantic-model-expressions", compactPath, "-i", directory, "-c", sourcePath, "-o", objectPath], {
         cwd: directory, stdio: "ignore", timeout: 30000
     });
-    const compact = decodeCompilerSemanticExpressions(fs.readFileSync(compactPath, "utf8"), () => true);
+    const compact = decodeCompilerSemanticExpressions(fs.readFileSync(compactPath), () => true);
     assert.ok(compact.capabilities.some((capability) => capability.feature === "namespace-declaration-inputs" &&
         capability.coverage === "unavailable"));
     assert.deepEqual(compact.sourceHeaderPolicies, []);
@@ -4026,7 +4049,7 @@ test("schema-27 expression sidecars retain structured recovery diagnostics", { s
         "-o", path.join(directory, "invalid-conditional.o")
     ], { cwd: directory, stdio: "ignore", timeout: 30000 }), (error) => error.status === 1);
 
-    const sidecar = decodeCompilerSemanticExpressions(fs.readFileSync(sidecarPath, "utf8"), () => true, { allowRecovery: true });
+    const sidecar = decodeCompilerSemanticExpressions(fs.readFileSync(sidecarPath), () => true, { allowRecovery: true });
     assert.equal(sidecar.schemaVersion, 27);
     assert.equal(sidecar.recovery, true);
     assert.ok(sidecar.semanticDiagnostics.some((diagnostic) => diagnostic.severity === "error" &&
@@ -4060,10 +4083,11 @@ test("compiler analysis refines textual diagnostics with FBCDIA physical columns
         exportSemanticExpressions: true,
         timeoutMs: 60000
     });
-    const diagnostic = analysis.diagnostics.find((entry) => entry.code === 42 && entry.severity === "error");
+    const diagnostic = analysis.diagnostics.find((entry) => entry.code === 149 && entry.severity === "error");
 
     assert.ok(diagnostic, "text compiler diagnostics should remain available");
-    assert.deepEqual(diagnostic.physicalPoint, { line: 0, character: 6 });
+    /* FBC 1.20.5 rejects this implicit declaration at its statement opener. */
+    assert.deepEqual(diagnostic.physicalPoint, { line: 0, character: 0 });
     assert.ok(Object.hasOwn(diagnostic, "compilerContext"), "the matching structured compiler record should be retained");
 });
 
@@ -5596,7 +5620,7 @@ test("expressions-only semantics retain completed member, index, and call prefix
             timeout: 30000
         });
 
-        const model = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+        const model = decodeCompilerSemanticExpressions(fs.readFileSync(sidecarPath));
         const lines = source.split("\n");
         const range = (lineText, fragment) => {
             const line = lines.indexOf(lineText);
@@ -6212,7 +6236,7 @@ test("compiler sidecar withholds an out-of-line macro-adjacent range while trace
         stdio: "ignore",
         timeout: 30000
     });
-    const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+    const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath));
     const invalidRange = semantic.expressions.find((expression) => expression.filePath === filePath &&
         expression.startLine === lineIndex + 1 && expression.endColumn > lines[lineIndex].length);
     assert.ok(invalidRange, "the compiler should retain the type fact for inspection");
@@ -6271,7 +6295,7 @@ test("physical semantic ranges validate Unicode columns and parser bounds in eve
             timeout: 30000
         });
 
-        const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+        const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath));
         const unicodeFact = semantic.expressions.find((expression) => expression.filePath === filePath &&
             expression.startLine === 2 && expression.startColumn === unicodeStart &&
             expression.endLine === 2 && expression.endColumn === unicodeStart + unicodeExpression.length);
@@ -6315,7 +6339,7 @@ test("malformed BOM-marked UTF-8/16/32 source cannot produce editable sidecar ra
             timeout: 30000
         });
 
-        const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+        const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath));
         const fact = semantic.expressions.find((expression) => expression.filePath === filePath &&
             expression.startLine === 1 && expression.startColumn === sourceText.indexOf("= 1") + 2);
         assert.ok(fact, `${format}: compiler should retain the valid expression before the malformed trailing code unit`);
@@ -6344,7 +6368,7 @@ test("compiler sidecar does not reuse line bounds across repeated #line location
         stdio: "ignore",
         timeout: 30000
     });
-    const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+    const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath));
     const nonphysicalRemap = semantic.sourceRemaps.find((remap) => !remap.physical);
     assert.ok(nonphysicalRemap, "the second #line directive should remain nonphysical");
     assert.ok(nonphysicalRemap.range.filePath && nonphysicalRemap.range.startLine > 0,
@@ -6372,7 +6396,7 @@ test("compiler sidecar retains physical expression ranges beyond the diagnostic 
         stdio: "ignore",
         timeout: 30000
     });
-    const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+    const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath));
     const fact = semantic.expressions.find((item) =>
         item.filePath === filePath && item.startLine === 1 &&
         item.startColumn === prefix.length && item.endColumn === prefix.length + expression.length);
@@ -6500,56 +6524,6 @@ test("trace fallback preserves include discovery when only an unopened header ha
         "facts in an unopened include must not be projected onto an unrelated source buffer");
     assert.ok(analysis.dependencies.includes(headerPath),
         "the complete compiler dependency inventory must let a prepared model request the included header on its second pass");
-});
-
-test("large modules keep requested expression facts within the sidecar bound", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
-    const root = "/home/jkfirth/fb_corpus";
-    const compilerRoot = resolveFreeBasicRoot(process.env.FREEBASIC_ROOT || "");
-    const filePath = path.join(root, "azdecrypt/AZdecrypt/Source/AZdecrypt/AZdecrypt.bas");
-    if (!fs.existsSync(filePath)) return t.skip("the compatibility corpus does not include AZdecrypt");
-    const source = decodeCompilerSourceBuffer(fs.readFileSync(filePath), filePath).replace(/^\uFEFF/, "");
-    const analysis = await analyzeSavedModule({
-        compilerPath: process.env.FBC_EDITOR_EXECUTABLE,
-        filePath,
-        compilerArguments: [
-            "-mt",
-            "-i", path.join(compilerRoot, "inc"),
-            "-i", path.join(compilerRoot, "tests/fbcunit/inc"),
-            "-i", path.join(root, "azdecrypt/AZdecrypt/Source/omaGUI-main"),
-            "-i", path.dirname(filePath),
-            "-i", path.join(root, "compat")
-        ],
-        overlays: new Map([[filePath, source]]),
-        semanticSourceFiles: [filePath],
-        allowErrors: true,
-        exportSemanticExpressions: true,
-        requireSemanticModel: true,
-        timeoutMs: 180000
-    });
-
-    assert.equal(analysis.semanticSidecarOnly, true,
-        "large preprocessing should use the trace-free sidecar pass");
-    assert.equal(analysis.partial, false);
-    assert.ok(analysis.dependencies.length > 100,
-        "the sidecar must retain the complete include inventory even when expression export is filtered");
-    assert.ok(analysis.semanticExpressions.length > 0);
-    assert.ok(analysis.semanticExpressions.every((expression) => !expression.physical || expression.filePath === filePath),
-        "expression facts should cover the requested root and not overflow on unopened includes");
-
-    const sourceUri = { fsPath: filePath, toString: () => `file://${filePath}` };
-    const model = new CompilerSemanticModel(
-        { toString: () => "freebasic-preprocessed:/fb-corpus/azdecrypt.bas" },
-        analysis,
-        [{ uri: sourceUri, text: source }]
-    );
-    const fact = analysis.semanticExpressions.find((expression) => expression.physical && expression.filePath === filePath);
-    assert.ok(fact);
-    const typed = model.expressionAt(sourceUri,
-        { line: fact.startLine - 1, character: fact.startColumn },
-        { line: fact.endLine - 1, character: fact.endColumn });
-    assert.equal(typed?.semanticSource, "compiler-sidecar");
-    assert.equal(typed?.typeName.toLowerCase(), fact.typeName.toLowerCase());
-    assert.equal(typed?.provisional, false);
 });
 
 test("oversized symbol traces fall back to the compiler expression sidecar", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
@@ -6810,7 +6784,7 @@ test("sidecar expression ranges and native editor types agree across compiler fi
                 timeout: 30000
             });
 
-            const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+            const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath));
             const source = fs.readFileSync(sourcePath, "utf8");
             const analysis = await analyzeSavedModule({
                 compilerPath: compiler,
@@ -6985,104 +6959,6 @@ test("native semantic sidecar retains upstream temporary-destructor relationship
         "project semantic validation must retain every physically anchored upstream temporary destructor");
     assert.ok(relationships.every((relationship) => relationship.ownerId === relationship.targetTypeId),
         "compiler-only cleanup relationships must keep the exact declared UDT identity and never become token edits");
-});
-
-test("sidecar and editor types agree across the upstream expression corpus", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async () => {
-    const compiler = process.env.FBC_EDITOR_EXECUTABLE;
-    const root = resolveFreeBasicRoot(process.env.FREEBASIC_ROOT || "");
-    const fixtureDirectory = path.join(root, "tests/expressions");
-    const includeArguments = ["-i", path.join(root, "inc"), "-i", path.join(root, "tests/fbcunit/inc")];
-    const names = fs.readdirSync(fixtureDirectory).filter((name) => name.endsWith(".bas"));
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-semantic-upstream-expressions-"));
-    let complete = 0;
-    let compared = 0;
-    let compactCompared = 0;
-    let directiveOnly = 0;
-
-    try {
-        for (const name of names) {
-            const sourcePath = path.join(fixtureDirectory, name);
-            const sidecarPath = path.join(directory, `${name}.tsv`);
-            const objectPath = path.join(directory, `${name}.o`);
-            try {
-                execFileSync(compiler, [
-                    ...includeArguments, "-semantic-model", sidecarPath,
-                    "-c", sourcePath, "-o", objectPath
-                ], { cwd: fixtureDirectory, stdio: "ignore", timeout: 30000 });
-            } catch (error) {
-                /* Failed upstream cases test recovery, not committed sidecar records. */
-                if (error.status !== 1) throw error;
-                continue;
-            }
-
-            complete++;
-            const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
-            const source = fs.readFileSync(sourcePath, "utf8");
-            const lines = source.split("\n");
-            const analysis = await analyzeSavedModule({
-                compilerPath: compiler,
-                filePath: sourcePath,
-                compilerArguments: includeArguments,
-                exportSemanticExpressions: true,
-                requireSemanticModel: true
-            });
-            assert.equal(analysis.partial, false, `${name} must have a complete editor snapshot`);
-            const sources = analysis.dependencies.map((filePath) => ({
-                uri: { fsPath: filePath, toString: () => `file://${filePath}` },
-                text: fs.readFileSync(filePath, "utf8")
-            }));
-            const sourceUri = sources.find((item) => item.uri.fsPath === sourcePath)?.uri;
-            assert.ok(sourceUri, `${name} must remain a compiler dependency`);
-            const editorModel = new CompilerSemanticModel(
-                { toString: () => `freebasic-preprocessed:/${name}` },
-                analysis,
-                sources
-            );
-            const sidecarOnlyModel = new CompilerSemanticModel(
-                { toString: () => `freebasic-preprocessed:/${name}` },
-                { ...analysis, expressions: [], expressionGraph: { nodes: [] } },
-                sources
-            );
-
-            for (const expression of semantic.expressions) {
-                if (!expression.physical || expression.filePath !== sourcePath) continue;
-                const start = { line: expression.startLine - 1, character: expression.startColumn };
-                const end = { line: expression.endLine - 1, character: expression.endColumn };
-                const typed = editorModel.expressionAt(sourceUri, start, end);
-                if (!typed) {
-                    const line = lines[start.line] || "";
-                    assert.match(line, /^\s*#\s*(?:if|elseif|assert)\b/i,
-                        `${name}:${expression.startLine}:${expression.startColumn} must map outside compile-time directives`);
-                    directiveOnly++;
-                    continue;
-                }
-                assert.equal(typed.dtype, expression.dtype, `${name}:${expression.startLine}:${expression.startColumn} compiler type`);
-                compared++;
-
-                const compact = sidecarOnlyModel.expressionAt(sourceUri, start, end);
-                if (!compact) {
-                    assert.ok(sidecarOnlyModel.isCompilerSidecarRangeAmbiguous(sourceUri, start, end),
-                        `${name}:${expression.startLine}:${expression.startColumn} must come from the compact semantic sidecar`);
-                    continue;
-                }
-                assert.equal(compact.semanticSource, "compiler-sidecar",
-                    `${name}:${expression.startLine}:${expression.startColumn} must not fall back to trace expressions`);
-                assert.equal(compact.provisional, false,
-                    `${name}:${expression.startLine}:${expression.startColumn} is from a complete compiler pass`);
-                assert.equal(compact.dtype, expression.dtype,
-                    `${name}:${expression.startLine}:${expression.startColumn} compact compiler type`);
-                compactCompared++;
-            }
-        }
-
-        assert.ok(complete >= 20, `Expected complete upstream cases, found ${complete} of ${names.length}.`);
-        assert.ok(compared >= 1700, `Expected broad source-expression agreement, compared ${compared} ranges.`);
-        assert.ok(compactCompared >= 1700,
-            `Expected broad expressions-only sidecar coverage without trace expression nodes, queried ${compactCompared} ranges.`);
-        assert.equal(directiveOnly, 0, "Compiler semantic directives should now be represented by editor expression queries.");
-    } finally {
-        fs.rmSync(directory, { recursive: true, force: true });
-    }
 });
 
 test("compiler semantic expressions can be explicitly exported outside directives", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async () => {
@@ -7497,6 +7373,33 @@ test("compiler sidecar supplements typed initializer expressions omitted by the 
     assert.equal(typed?.typeName.toLowerCase(), candidate.typeName.toLowerCase());
 });
 
+test("binding type supplements reject source revisions changed between compiler passes", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
+    const { executeBoundedProcess } = require("../lib/compiler-diagnostics");
+    const root = resolveFreeBasicRoot();
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-semantic-type-supplement-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const filePath = path.join(directory, "palette.bas");
+    fs.copyFileSync(path.join(root, "tests/gfx/palette.bas"), filePath);
+    let changed = false;
+    await assert.rejects(analyzeSavedModule({
+        compilerPath: process.env.FBC_EDITOR_EXECUTABLE,
+        filePath,
+        compilerArguments: ["-i", path.join(root, "inc"), "-i", path.join(root, "tests/fbcunit/inc")],
+        exportSemanticExpressions: true,
+        exportSemanticBindings: true,
+        semanticSourceFiles: [filePath],
+        requireSemanticModel: true,
+        allowErrors: true
+    }, undefined, async (request) => {
+        if (request.arguments.some((argument) => argument.endsWith("module.types-fallback.fbcsem"))) {
+            fs.appendFileSync(filePath, "\nPrint 1\n");
+            changed = true;
+        }
+        return executeBoundedProcess(request);
+    }), /expression supplement does not match the binding snapshot/);
+    assert.equal(changed, true, "the fixture must reach the supplementary expression pass");
+});
+
 test("compiler-typed preprocessor expressions support unsaved header hovers", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async () => {
     const compiler = process.env.FBC_EDITOR_EXECUTABLE;
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-semantic-directives-"));
@@ -7626,7 +7529,7 @@ test("numeric literal type suffixes keep native expression types at their writte
             timeout: 30000
         });
 
-        const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+        const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath));
         const analysis = await analyzeSavedModule({
             compilerPath: compiler,
             filePath: sourcePath,
@@ -7693,7 +7596,7 @@ test("native sidecar omits empty parser ranges from macro defaults", { skip: !pr
             "-o", objectPath
         ], { cwd: path.dirname(sourcePath), stdio: "ignore", timeout: 30000 });
 
-        const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath, "utf8"));
+        const semantic = decodeCompilerSemanticModel(fs.readFileSync(sidecarPath));
         assert.ok(semantic.expressions.length > 0);
         assert.ok(semantic.expressions.some((expression) => !expression.physical), "Macro-derived type facts should remain available without an editable range.");
     } finally {

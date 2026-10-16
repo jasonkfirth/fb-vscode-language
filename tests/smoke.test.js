@@ -111,52 +111,13 @@ test("checked-in grammar matches the source-backed generator", () => {
 test("package metadata contributes every runtime command and setting", () => {
     const packageData = readJson("package.json");
     const commandIds = packageData.contributes.commands.map((command) => command.command);
+    /* Every file in lib belongs to the shipped runtime, including worker
+       entry points that are loaded dynamically rather than by require(). */
     const runtimeFiles = [
         "extension.js",
-        "lib/compiler-diagnostics.js",
-        "lib/compiler-process-supervisor.js",
-        "lib/compiler-process-runner.js",
-        "lib/compiler-service.js",
-        "lib/compiler-analysis.js",
-        "lib/compiler-recovery.js",
-        "lib/compiler-symbols.js",
-        "lib/compiler-expressions.js",
-        "lib/compiler-scopes.js",
-        "lib/compiler-inventory.js",
-        "lib/compiler-origins.js",
-        "lib/compiler-macros.js",
-        "lib/compiler-preprocessor.js",
-        "lib/compiler-preprocessor-model.js",
-        "lib/compiler-project.js",
-        "lib/compiler-project-bindings.js",
-        "lib/compiler-project-transaction.js",
-        "lib/compiler-contexts.js",
-        "lib/compiler-worker.js",
-        "lib/compiler-worker-runtime.js",
-        "lib/compiler-worker-entry.js",
-        "lib/compiler-model-store.js",
-        "lib/compiler-model-queries.js",
-        "lib/compiler-document-symbols.js",
-        "lib/compiler-remote-model.js",
-        "lib/semantic-token-data.js",
-        "lib/bounded-text-map.js",
-        "lib/compiler-analysis-service.js",
-        "lib/compiler-workspace-symbols.js",
-        "lib/compiler-workspace-service.js",
-        "lib/compiler-semantic-model.js",
-        "lib/compiler-semantic-sidecar.js",
-        "lib/editor-features.js",
-        "lib/freebasic-parser.js",
-        "lib/grammar-data.js",
-        "lib/workspace-index.js",
-        "lib/include-paths.js",
-        "lib/language-reference.js",
-        "lib/semantic-model.js",
-        "lib/semantic-features.js",
-        "data/language-reference.json",
-        "docs/reference-attribution.md",
-        "docs/compiler-bridge.md",
-        "docs/fdl-1.2.txt"
+        ...fs.readdirSync(path.join(REPOSITORY_ROOT, "lib"))
+            .filter((name) => name.endsWith(".js"))
+            .map((name) => `lib/${name}`)
     ];
     const buildScripts = ["tools/build-vsix.ps1", "tools/build-vsix.sh"].map((relativePath) => ({
         relativePath,
@@ -245,7 +206,7 @@ test("language data covers the configured FreeBASIC source tree", () => {
     const result = auditCoverage(GRAMMAR_SOURCE_PATH, freeBasicRoot);
 
     assert.deepEqual(result.errors, []);
-    assert.equal(result.sourceVersion, "1.20.4");
+    assert.equal(result.sourceVersion, "1.20.5");
     assert.equal(result.versionSurfaceCompatible, true);
 });
 

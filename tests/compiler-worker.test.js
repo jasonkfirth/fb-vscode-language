@@ -12,7 +12,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { performance } = require("perf_hooks");
-const { CompilerAnalysisWorker, HostProcessLaunchQueue } = require("../lib/compiler-worker");
+const { COMPILER_WORKER_BUSY, CompilerAnalysisWorker, HostProcessLaunchQueue } = require("../lib/compiler-worker");
 const { CompilerTraceCache } = require("../lib/compiler-worker-runtime");
 const { analyzeSavedModule, decodePreprocessed } = require("../lib/compiler-analysis");
 
@@ -170,7 +170,7 @@ test("worker rejects excessive queues and invalid inputs without leaking request
     assert.equal(worker.worker, null);
     const waiting = Array.from({ length: 16 }, () => worker.analyze({ ...options, compilerArguments: ["-d", "wait"] }));
     const settled = Promise.allSettled(waiting);
-    await assert.rejects(worker.analyze(options), /queue is full/);
+    await assert.rejects(worker.analyze(options), { code: COMPILER_WORKER_BUSY, message: /queue is full/ });
     worker.cancelAll();
     assert.ok((await settled).every((result) => result.status === "rejected"));
     await worker.dispose();
@@ -199,11 +199,26 @@ test("queued request bytes are bounded independently of request count", async (t
     const overlays = new Map([[options.filePath, " ".repeat(24 * 1024 * 1024)]]);
     const waiting = [worker.analyze({ ...options, overlays, compilerArguments: ["-d", "wait"] }), worker.analyze({ ...options, overlays, compilerArguments: ["-d", "wait"] })];
     const settled = Promise.allSettled(waiting);
-    await assert.rejects(worker.analyze({ ...options, overlays }), /64 MiB/);
+    await assert.rejects(worker.analyze({ ...options, overlays }), { code: COMPILER_WORKER_BUSY, message: /64 MiB/ });
     worker.cancelAll();
     assert.ok((await settled).every((result) => result.status === "rejected"));
     await worker.dispose();
     assert.equal(worker.bytes, 0);
+});
+
+test("oversized individual requests are not classified as temporary queue pressure", async (t) => {
+    const { worker } = setup(t);
+    /* Exercise the 64 MiB admission bound without allocating a large input. */
+    for (const bytes of [64 * 1024 * 1024 + 1, -1, NaN]) {
+        await assert.rejects(worker.enqueue("query", {}, bytes, null, 1000), (error) => {
+            assert.notEqual(error.code, COMPILER_WORKER_BUSY);
+            assert.match(error.message, /64 MiB/);
+            return true;
+        });
+    }
+    assert.equal(worker.worker, null);
+    assert.equal(worker.bytes, 0);
+    assert.equal(worker.pending.length, 0);
 });
 
 test("worker crashes reclaim native child processes and temporary files before restarting", async (t) => {
@@ -212,7 +227,7 @@ test("worker crashes reclaim native child processes and temporary files before r
     const directory = worker.active.directory;
     const rejected = assert.rejects(pending, /Deliberate compiler worker crash/);
     let pid;
-    for (let attempt = 0; attempt < 400 && !pid; attempt++) {
+    for (let attempt = 0; attempt < 1000 && !pid; attempt++) {
         pid = worker.active?.pid;
         if (!pid) await new Promise((resolve) => setTimeout(resolve, 5));
     }
@@ -238,7 +253,9 @@ test("disposal waits for a running child to be reaped and its temporary director
     const rejected = assert.rejects(pending, /invalidated/);
     const directory = worker.active.directory;
     let pid;
-    for (let attempt = 0; attempt < 100 && !pid; attempt++) {
+    // Allow supervisor startup under load, but dispose as soon as a real child
+    // exists. The cleanup assertions below remain independent of startup time.
+    for (let attempt = 0; attempt < 1000 && !pid; attempt++) {
         pid = worker.active?.pid;
         if (!pid) await new Promise((resolve) => setTimeout(resolve, 5));
     }

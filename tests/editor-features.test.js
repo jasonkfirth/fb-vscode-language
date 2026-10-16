@@ -14,6 +14,7 @@
         - verify current built-in hover classification
         - verify compiler and bracket diagnostic Quick Fix edits
         - verify local include-path resolution
+        - keep include completion edits inside literal-safe operand boundaries
 
     This file intentionally does NOT contain:
 
@@ -24,11 +25,16 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const {
     createCompletionProvider,
     createDocumentSymbolProvider,
+    createDocumentSymbolRegistration,
+    createDocumentLinkRegistration,
+    createDocumentLinkProvider,
     createInlayHintsProvider,
     createMissingHeaderCodeActionProvider,
     createHoverProvider,
@@ -45,6 +51,8 @@ const {
 } = require("../lib/semantic-features");
 const { FreeBasicSemanticModel } = require("../lib/semantic-model");
 const { parseFreeBasicText } = require("../lib/freebasic-parser");
+const { COMPILER_MESSAGE_CODE } = require("../lib/compiler-diagnostics");
+const { compilerAwareCodeContext } = require("../lib/compiler-string-context");
 const { loadGrammarSourceFile } = require("../lib/grammar-data");
 
 class Range {
@@ -92,9 +100,13 @@ function createVscodeMock(includePaths = []) {
             }
         },
         workspace: {
-            getConfiguration() {
+            getConfiguration(_section, resource) {
                 return {
                     get(name, defaultValue) {
+                        if (name === "index.maxCompletionResults") {
+                            assert.equal(resource, null, "window-scoped completion limits must not use a document resource");
+                        }
+                        if (name === "compiler.path") return "fb-vscode-unavailable-test-compiler";
                         return name === "includePaths" ? includePaths : defaultValue;
                     }
                 };
@@ -122,6 +134,275 @@ function createDocument(text) {
     };
 }
 
+function snapshotProviderRegistrationFixture(kind, provider) {
+    const listeners = Object.fromEntries(["config", "snapshot", "active"].map((name) => [name, new Set()]));
+    const event = (name) => (listener) => { listeners[name].add(listener); return { dispose: () => listeners[name].delete(listener) }; };
+    const document = { languageId: "freebasic", uri: { toString: () => "file:///workspace/main.bas" } };
+    const registrations = [], state = { configured: true, model: null };
+    const selector = { language: "freebasic" };
+    const method = kind === "symbols" ? "provideDocumentSymbols" : "provideDocumentLinks";
+    const register = (actualSelector, actualProvider) => {
+        assert.equal(actualSelector, selector);
+        assert.equal(typeof actualProvider[method], "function");
+        const registration = { provider: actualProvider, disposals: 0, dispose() { this.disposals++; } };
+        registrations.push(registration);
+        return registration;
+    };
+    const vscode = { languages: { registerDocumentSymbolProvider: register, registerDocumentLinkProvider: register },
+    workspace: { onDidChangeConfiguration: event("config") },
+    window: { activeTextEditor: { document }, onDidChangeActiveTextEditor: event("active") } };
+    const analysis = { onDidChangeSnapshot: event("snapshot"), isConfigured: () => state.configured,
+        getModel: () => state.model, check() { assert.fail("registration refresh must not start compiler work"); } };
+    const createRegistration = kind === "symbols" ? createDocumentSymbolRegistration : createDocumentLinkRegistration;
+    const registration = createRegistration(vscode, selector, provider, analysis);
+    return { document, registrations, registration, state, listeners, window: vscode.window,
+        fire: (name, value) => { for (const listener of [...listeners[name]]) listener(value); },
+        flush: () => new Promise((resolve) => setTimeout(resolve, 40)) };
+}
+
+function documentSymbolRegistrationFixture(provider = { provideDocumentSymbols: () => [] }) {
+    return snapshotProviderRegistrationFixture("symbols", provider);
+}
+
+function documentLinkRegistrationFixture(provider = { provideDocumentLinks: () => [] }) {
+    return snapshotProviderRegistrationFixture("links", provider);
+}
+
+test("include-link registration refreshes selected snapshots and include settings", async (t) => {
+    const fixture = documentLinkRegistrationFixture();
+    t.after(() => fixture.registration.dispose());
+    fixture.fire("snapshot", ["file:///workspace/unrelated.bas"]);
+    fixture.fire("config", { affectsConfiguration: () => false });
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 1);
+    fixture.fire("snapshot", [fixture.document.uri.toString()]);
+    fixture.fire("config", { affectsConfiguration: (name) => name === "freebasic.includePaths" });
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 2);
+    assert.equal(fixture.registrations[0].disposals, 1);
+});
+
+test("include-link snapshots refresh visible split editors without activating them", async (t) => {
+    const fixture = documentLinkRegistrationFixture();
+    t.after(() => fixture.registration.dispose());
+    const other = { languageId: "freebasic", uri: { toString: () => "file:///workspace/split.bas" } };
+    fixture.window.visibleTextEditors = [{ document: fixture.document }, { document: other }];
+    fixture.fire("snapshot", [other.uri.toString()]);
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 2, "visible include targets must not wait for editor focus");
+});
+
+test("include-link refresh waits for lookups and cannot revive a disposed provider", async () => {
+    let finish, calls = 0;
+    const expected = [{ target: "/workspace/selected.bi" }];
+    const provider = { provideDocumentLinks(document, token) {
+        assert.equal(this, provider);
+        assert.ok(document && token);
+        calls++;
+        return new Promise((resolve) => { finish = resolve; });
+    } };
+    const fixture = documentLinkRegistrationFixture(provider);
+    const registered = fixture.registrations[0].provider;
+    fixture.fire("active", { document: fixture.document });
+    const pending = registered.provideDocumentLinks(fixture.document, {});
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 1);
+    finish(expected);
+    assert.equal(await pending, expected);
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 2);
+    const late = fixture.registrations[1].provider.provideDocumentLinks(fixture.document, {});
+    fixture.fire("snapshot", [fixture.document.uri.toString()]);
+    fixture.registration.dispose();
+    finish(expected);
+    await late;
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 2);
+    assert.equal(fixture.registrations[1].disposals, 1);
+    assert.deepEqual(await registered.provideDocumentLinks(fixture.document, {}), []);
+    assert.equal(calls, 2);
+    assert.ok(Object.values(fixture.listeners).every((listeners) => listeners.size === 0));
+});
+
+test("Outline registration coalesces active snapshots and relevant settings", async (t) => {
+    const fixture = documentSymbolRegistrationFixture();
+    t.after(() => fixture.registration.dispose());
+    fixture.fire("snapshot", [fixture.document.uri.toString()]);
+    fixture.fire("snapshot", [fixture.document.uri.toString()]);
+    fixture.fire("config", { affectsConfiguration: (name) => name === "freebasic.analysis" });
+    assert.equal(fixture.registrations.length, 1);
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 2);
+    assert.equal(fixture.registrations[0].disposals, 1);
+});
+
+test("Outline registration ignores unrelated snapshots and settings", async (t) => {
+    const fixture = documentSymbolRegistrationFixture();
+    t.after(() => fixture.registration.dispose());
+    fixture.fire("snapshot", ["file:///workspace/other.bas"]);
+    fixture.fire("config", { affectsConfiguration: () => false });
+    fixture.fire("active", { document: { ...fixture.document, languageId: "plaintext" } });
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 1);
+});
+
+test("Outline registration refreshes when a compiled document becomes active", async (t) => {
+    const fixture = documentSymbolRegistrationFixture();
+    t.after(() => fixture.registration.dispose());
+    fixture.fire("active", { document: fixture.document });
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 2);
+    fixture.state.configured = false;
+    fixture.state.model = {};
+    fixture.fire("active", { document: fixture.document });
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 3, "cached stock-FBC facts also need a fresh Outline");
+    fixture.state.model = null;
+    fixture.fire("active", { document: fixture.document });
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 3, "plain source tab changes do not require provider replacement");
+});
+
+test("Outline registration disposal cancels pending refreshes and detaches listeners", async () => {
+    const fixture = documentSymbolRegistrationFixture();
+    fixture.fire("snapshot", [fixture.document.uri.toString()]);
+    fixture.registration.dispose();
+    fixture.registration.dispose();
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 1);
+    assert.equal(fixture.registrations[0].disposals, 1);
+    assert.ok(Object.values(fixture.listeners).every((listeners) => listeners.size === 0));
+});
+
+test("Outline refresh waits for an active symbol request instead of cancelling it", async (t) => {
+    let finish;
+    const expected = [{ name: "CompiledOutline" }];
+    const provider = { provideDocumentSymbols(document, token) {
+        assert.equal(this, provider, "registration must preserve the provider receiver");
+        assert.ok(document && token);
+        return new Promise((resolve) => { finish = resolve; });
+    } };
+    const fixture = documentSymbolRegistrationFixture(provider);
+    t.after(() => { finish?.(expected); fixture.registration.dispose(); });
+    fixture.fire("active", { document: fixture.document });
+    const pending = fixture.registrations[0].provider.provideDocumentSymbols(fixture.document, {});
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 1, "an activation refresh must not dispose an in-flight provider");
+    fixture.fire("snapshot", [fixture.document.uri.toString()]);
+    fixture.fire("config", { affectsConfiguration: (name) => name === "freebasic.analysis" });
+    await fixture.flush();
+    assert.equal(fixture.registrations[0].disposals, 0);
+    finish(expected);
+    assert.equal(await pending, expected);
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 2);
+    assert.equal(fixture.registrations[0].disposals, 1);
+});
+
+test("Outline refresh waits for all requests and recovers after rejection", async (t) => {
+    const completions = [];
+    const fixture = documentSymbolRegistrationFixture({ provideDocumentSymbols() {
+        return new Promise((resolve, reject) => completions.push({ resolve, reject }));
+    } });
+    t.after(() => { for (const completion of completions) completion.resolve([]); fixture.registration.dispose(); });
+    const registered = fixture.registrations[0].provider;
+    const first = registered.provideDocumentSymbols(fixture.document, {});
+    const second = registered.provideDocumentSymbols(fixture.document, {});
+    fixture.fire("snapshot", [fixture.document.uri.toString()]);
+    completions[0].resolve([]);
+    await first;
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 1, "another pending request still owns the registration");
+    completions[1].reject(new Error("symbol query failed"));
+    await assert.rejects(second, /symbol query failed/);
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 2, "rejection must release the pending refresh");
+});
+
+test("disposing Outline during a request cannot register again or start late work", async () => {
+    let finish, calls = 0;
+    const fixture = documentSymbolRegistrationFixture({ provideDocumentSymbols() {
+        calls++;
+        return new Promise((resolve) => { finish = resolve; });
+    } });
+    const provider = fixture.registrations[0].provider;
+    assert.deepEqual(await provider.provideDocumentSymbols(fixture.document, { isCancellationRequested: true }), []);
+    assert.equal(calls, 0);
+    const pending = provider.provideDocumentSymbols(fixture.document, {});
+    fixture.fire("snapshot", [fixture.document.uri.toString()]);
+    fixture.registration.dispose();
+    fixture.registration.dispose();
+    finish([]);
+    await pending;
+    await fixture.flush();
+    assert.equal(fixture.registrations.length, 1);
+    assert.equal(fixture.registrations[0].disposals, 1);
+    assert.deepEqual(await provider.provideDocumentSymbols(fixture.document, {}), []);
+    assert.equal(calls, 1);
+    assert.ok(Object.values(fixture.listeners).every((listeners) => listeners.size === 0));
+});
+
+test("include links follow a replaced compiler snapshot without exposing inactive includes", async () => {
+    const document = createDocument('#if 0\n#include "inactive.bi"\n#endif\n#include "active.bi"\n');
+    document.uri = { scheme: "file", fsPath: "/workspace/main.bas" };
+    document.version = 1;
+    const vscode = createVscodeMock();
+    vscode.DocumentLink = class { constructor(range, target) { Object.assign(this, { range, target }); } };
+    let queries = 0, preparations = 0;
+    const replacement = { remote: true, query: async () => {
+        queries++;
+        return [{ start: { line: 3, character: 10 }, end: { line: 3, character: 19 },
+            target: "/workspace/active.bi", requested: "active.bi", outcome: "opened" }];
+    } };
+    let current = { remote: true, query: async () => { queries++; current = null; return null; } };
+    const provider = createDocumentLinkProvider(vscode, {
+        compilerAnalysis: {
+            getModel: () => current,
+            getModelForEditor: async (_document, _token, allowSidecar) => {
+                assert.equal(allowSidecar, true);
+                preparations++;
+                current = replacement;
+                return current;
+            }
+        },
+        getParsedDocument: () => assert.fail("compiler-selected links must not fall back to inactive source includes")
+    });
+    const links = await provider.provideDocumentLinks(document);
+    assert.equal(links.length, 1);
+    assert.equal(links[0].target.fsPath, "/workspace/active.bi");
+    assert.match(links[0].tooltip, /Resolved by FreeBASIC/);
+    assert.equal(queries, 2);
+    assert.equal(preparations, 1);
+
+    current = null;
+    assert.equal((await provider.provideDocumentLinks(document)).length, 1,
+        "a lookup starting inside the upgrade gap must join compiler preparation before source fallback");
+    assert.equal(preparations, 2);
+
+    current = { remote: true, query: async () => { document.version++; return []; } };
+    assert.deepEqual(await provider.provideDocumentLinks(document), [], "edits must not publish old link coordinates");
+    current = replacement;
+    assert.deepEqual(await provider.provideDocumentLinks(document, { isCancellationRequested: true }), []);
+});
+
+test("include-link retries remain bounded if every compiler snapshot is replaced", async () => {
+    const document = createDocument('#include "active.bi"\n');
+    document.uri = { scheme: "file", fsPath: "/workspace/main.bas" };
+    let queries = 0, preparations = 0;
+    const model = { remote: true, query: async () => { queries++; current = null; return null; } };
+    let current = model;
+    const provider = createDocumentLinkProvider(createVscodeMock(), {
+        compilerAnalysis: {
+            getModel: () => current,
+            getModelForEditor: async () => { preparations++; current = model; return model; }
+        },
+        getParsedDocument: () => assert.fail("a lost compiler result must not manufacture active includes")
+    });
+    assert.deepEqual(await provider.provideDocumentLinks(document), []);
+    assert.equal(queries, 2);
+    assert.equal(preparations, 1);
+});
+
 test("completion stays inside escaped strings when compiler option context is available", async () => {
     const source = "\uFEFF" + String.raw`#if 1
 Option Escape
@@ -135,17 +416,16 @@ Print "inside \" escapedOnlyName ([)]"`;
     };
     const line = document.lineAt(3).text;
     const character = line.indexOf("escapedOnlyName") + "escapedOnlyName".length;
-    const start = source.indexOf("Print") - 1;
-    const end = source.length - 1;
     const requests = [];
     const model = {
         remote: true,
         async query(operation, _uri, input) {
             requests.push({ operation, offset: input.offset });
-            assert.equal(operation, "compilerDefaultEscapedStringRangeAt");
+            assert.equal(operation, "compilerCodeContext");
             assert.equal(input.offset, document.offsetAt({ line: 3, character }) - 1,
                 "compiler source offsets exclude the UTF-8 BOM");
-            return { start, end };
+            assert.equal(input.offsetAdjustment, 1);
+            return { context: "string" };
         }
     };
     const workspaceIndex = {
@@ -167,9 +447,144 @@ Print "inside \" escapedOnlyName ([)]"`;
 
     assert.deepEqual(await provider.provideCompletionItems(document, { line: 3, character }), []);
     assert.deepEqual(requests, [{
-        operation: "compilerDefaultEscapedStringRangeAt",
+        operation: "compilerCodeContext",
         offset: document.offsetAt({ line: 3, character }) - 1
     }]);
+});
+
+test("compiler string context rejects stale requests and follows one cached replacement", async () => {
+    const source = "\uFEFF" + String.raw`#if 1
+Option Escape
+#endif
+Print "inside \" GhostCall(1)"`;
+    for (const mode of ["replacement", "cleared", "edit", "cancel", "pre-cancel", "churn", "failed edit", "failure", "ordinary code"]) {
+        const document = createDocument(source);
+        document.uri = { scheme: "file", fsPath: "/workspace/string-context-race.bas",
+            toString: () => "file:///workspace/string-context-race.bas" };
+        document.version = 1;
+        const token = { isCancellationRequested: false };
+        const line = document.lineAt(3).text;
+        const character = line.indexOf("GhostCall") + 2;
+        const offset = document.offsetAt({ line: 3, character });
+        let current, queries = 0;
+        const analysis = { generation: 0, getModel: () => current,
+            getModelForEditor() { assert.fail("string context must not start another compiler analysis"); } };
+        const third = { remote: true, query() { assert.fail("replacement retries must remain bounded"); } };
+        const strong = { remote: true, async query(operation, _uri, input) {
+            queries++;
+            assert.equal(operation, "compilerCodeContext");
+            assert.equal(input.offset, offset - 1, "BOM adjustment must not be applied twice on retry");
+            assert.equal(input.offsetAdjustment, 1);
+            if (mode === "churn") { current = third; analysis.generation++; }
+            return { context: "string" };
+        } };
+        current = { remote: true, async query() {
+            queries++;
+            if (mode === "replacement" || mode === "churn") { current = strong; analysis.generation++; }
+            if (mode === "cleared") { current = null; analysis.generation++; }
+            if (mode === "edit" || mode === "failed edit") document.version++;
+            if (mode === "cancel") token.isCancellationRequested = true;
+            if (mode === "failed edit" || mode === "failure") throw new Error("context query failed");
+            return mode === "ordinary code" ? { context: "code" } : null;
+        } };
+        if (mode === "pre-cancel") {
+            token.isCancellationRequested = true;
+            document.getText = () => assert.fail("a cancelled context request must not scan source");
+        }
+        const result = await compilerAwareCodeContext({ compilerAnalysis: analysis }, document, offset,
+            line.slice(0, character), token);
+        assert.equal(result.context, mode === "replacement" ? "string" : mode === "ordinary code" ? "code" : "unknown", mode);
+        assert.equal(queries, mode === "pre-cancel" ? 0 : mode === "replacement" || mode === "churn" ? 2 : 1, mode);
+        assert.deepEqual(result.defaultEscapedStringRanges, [], mode);
+    }
+});
+
+test("compiler string context upgrades missing option facts and retains native call offsets", async () => {
+    const source = "\uFEFF" + String.raw`#if 1
+Option Escape
+#endif
+Print "inside \" ignored" : Work(1)`;
+    const document = createDocument(source);
+    document.uri = { scheme: "file", fsPath: "/workspace/escape-after-literal.bas",
+        toString: () => "file:///workspace/escape-after-literal.bas" };
+    document.version = 1;
+    const offset = source.indexOf("Work(") + "Work(".length;
+    const callContext = { name: "Work", openParenthesisOffset: offset - 1, activeParameter: 0 };
+    let current = { remote: true, semanticBindingsAvailable: false };
+    let upgrades = 0;
+    const strong = { remote: true, semanticBindingsAvailable: true, async query(operation, _uri, input) {
+        assert.equal(operation, "compilerCodeContext");
+        assert.equal(input.offset, offset - 1);
+        assert.equal(input.offsetAdjustment, 1);
+        return { context: "code", callContext, signatureCallContext: callContext };
+    } };
+    const analysis = { getModel: () => current,
+        async getModelForEditor(received, token, needTypes, needBindings) {
+            upgrades++;
+            assert.equal(received, document);
+            assert.equal(needTypes, false);
+            assert.equal(needBindings, true);
+            current = strong;
+            return strong;
+        } };
+    const context = await compilerAwareCodeContext({ compilerAnalysis: analysis }, document, offset, "");
+    assert.equal(context.context, "code");
+    assert.deepEqual(context.callContext, callContext);
+    assert.deepEqual(context.signatureCallContext, callContext);
+    assert.equal(upgrades, 1);
+});
+
+test("unambiguous explicit strings and comments do not request compiler option facts", async () => {
+    for (const source of [
+        String.raw`Print !"inside \" text" : Work(1)`,
+        String.raw`Print $"raw \" : Work(1)`,
+        String.raw`' comment \"`,
+        String.raw`/' comment \" '/ : Work(1)`,
+        'Print "ordinary" : Work(1)',
+        String.raw`Print "ordinary" : Work(1) ' \"`
+    ]) {
+        const document = createDocument(source);
+        const analysis = { getModel() { assert.fail("unambiguous source must not query native facts"); } };
+        const context = await compilerAwareCodeContext({ compilerAnalysis: analysis }, document, source.length, source);
+        assert.equal(context.context, source.startsWith("'") || source.endsWith(String.raw`' \"`) ? "comment" : "code", source);
+    }
+});
+
+test("ambiguous strings acquire native option facts without a cached model", async () => {
+    const source = String.raw`#if 1
+Option Escape
+#endif
+Print "inside \" ignored" : Work(1)`;
+    for (const mode of ["ready", "unavailable", "edit", "cancel"]) {
+        const document = createDocument(source);
+        document.uri = { scheme: "file", fsPath: "/workspace/cold-escape-context.bas",
+            toString: () => "file:///workspace/cold-escape-context.bas" };
+        document.version = 1;
+        const token = { isCancellationRequested: false };
+        let current = null, requests = 0, queries = 0;
+        const native = { remote: true, semanticBindingsAvailable: true, async query(operation) {
+            queries++;
+            assert.equal(operation, "compilerCodeContext");
+            return { context: "code" };
+        } };
+        const index = { compilerAnalysis: {
+            getModel: () => current,
+            async getModelForEditor(received, _token, needTypes, needBindings) {
+                requests++;
+                assert.equal(received, document);
+                assert.equal(needTypes, false);
+                assert.equal(needBindings, true);
+                if (mode === "edit") document.version++;
+                if (mode === "cancel") token.isCancellationRequested = true;
+                current = mode === "unavailable" ? null : native;
+                return current;
+            }
+        } };
+        const context = await compilerAwareCodeContext(index, document, source.indexOf("Work(") + 2, "", token);
+        assert.equal(context.context, mode === "ready" ? "code" : "unknown", mode);
+        assert.equal(requests, 1, mode);
+        assert.equal(queries, mode === "ready" ? 1 : 0, mode);
+    }
 });
 
 test("signature help ignores call-like text inside compiler-confirmed escaped strings", async () => {
@@ -191,9 +606,9 @@ Print "inside \" GhostCall(1)"`;
         remote: true,
         async query(operation, _uri, input) {
             requests.push(operation);
-            assert.equal(operation, "compilerDefaultEscapedStringRangeAt");
+            assert.equal(operation, "compilerCodeContext");
             assert.ok(input.offset >= start);
-            return { start, end: source.length };
+            return { context: "string" };
         }
     };
     const workspaceIndex = {
@@ -205,7 +620,7 @@ Print "inside \" GhostCall(1)"`;
     const provider = createSignatureHelpProvider({}, workspaceIndex);
 
     assert.equal(await provider.provideSignatureHelp(document, { line: 3, character }), null);
-    assert.deepEqual(requests, ["compilerDefaultEscapedStringRangeAt"]);
+    assert.deepEqual(requests, ["compilerCodeContext"]);
 });
 
 test("type and call hierarchy ignore identifiers inside compiler-confirmed escaped strings", async () => {
@@ -226,9 +641,9 @@ Print "inside \" GhostCall(1) GhostType ([)]"`;
         remote: true,
         async query(operation, _uri, input) {
             requests.push(operation);
-            assert.equal(operation, "compilerDefaultEscapedStringRangeAt");
+            assert.equal(operation, "compilerCodeContext");
             assert.ok(input.offset >= range.start);
-            return range;
+            return { context: "string" };
         }
     };
     class SemanticTokensLegend { constructor() {} }
@@ -243,7 +658,44 @@ Print "inside \" GhostCall(1) GhostType ([)]"`;
 
     assert.equal(await features.callHierarchy.prepareCallHierarchy(document, callPosition), null);
     assert.deepEqual(await features.typeHierarchy.prepareTypeHierarchy(document, typePosition), []);
-    assert.deepEqual(requests, ["compilerDefaultEscapedStringRangeAt", "compilerDefaultEscapedStringRangeAt"]);
+    assert.deepEqual(requests, ["compilerCodeContext", "compilerCodeContext"]);
+});
+
+test("Type Hierarchy preserves native identifiers after escaped literals", async () => {
+    class SemanticTokensLegend {}
+    class TypeHierarchyItem {
+        constructor(kind, name, detail, uri, range, selectionRange) {
+            Object.assign(this, { kind, name, detail, uri, range, selectionRange });
+        }
+    }
+    const document = createDocument("\uFEFF" + String.raw`#if 1
+Option Escape
+#endif
+Print "inside \" ignored" : instance.value = 1`);
+    document.uri = { scheme: "file", fsPath: "/workspace/hierarchy-after-string.bas",
+        toString: () => "file:///workspace/hierarchy-after-string.bas" };
+    const line = document.lineAt(3).text;
+    const start = line.indexOf("instance");
+    let queries = 0;
+    const model = { remote: true, semanticBindingsAvailable: true, async query(operation, uri, input) {
+        queries++;
+        if (operation === "compilerCodeContext") {
+            const character = input.offset + 1 - document.offsetAt({ line: 3, character: 0 });
+            assert.equal(input.offsetAdjustment, 1);
+            return { context: "code", maskedLinePrefix: " ".repeat(start) + line.slice(start, character) };
+        }
+        assert.equal(operation, "typeHierarchyPrepare");
+        return [{ name: "Payload", uri, declaration: { type: "type", name: "Payload", detail: "Type",
+            signature: "Type Payload", line: 0, startColumn: 5, endColumn: 12 } }];
+    } };
+    const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, TypeHierarchyItem }, {
+        compilerAnalysis: { getModel: () => model, getModelForEditor: async () => model }
+    }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    for (const relative of [0, 3, "instance".length]) {
+        const items = await features.typeHierarchy.prepareTypeHierarchy(document, { line: 3, character: start + relative });
+        assert.deepEqual(items.map((item) => item.name), ["Payload"], "cursor at identifier offset " + relative);
+    }
+    assert.equal(queries, 6);
 });
 
 test("iterator keyword analysis is gated by a visible matching operator candidate", () => {
@@ -472,7 +924,7 @@ test("stock-sidecar Type Hierarchy requests bindings and reuses the cached model
         fsPath: "/workspace/hierarchy-scalar.bas",
         toString: () => "file:///workspace/hierarchy-scalar.bas"
     };
-    const scalarDeclaration = { declaration: { type: "variable" }, conditional: false, provisional: false };
+    const scalarDeclaration = { declaration: { type: "variable", typeName: "Long" }, conditional: false, provisional: false };
     sourceModel = {
         resolveAt: () => [scalarDeclaration],
         typeEntries: () => []
@@ -490,6 +942,604 @@ test("stock-sidecar Type Hierarchy requests bindings and reuses the cached model
     assert.deepEqual(modelRequests, [[false, true, false]],
         "an explicit stock-sidecar hierarchy request should prepare physical compiler bindings once");
     assert.deepEqual(requests, ["typeHierarchyPrepare", "typeHierarchySupertypes", "typeHierarchySubtypes"]);
+});
+
+for (const [name, declaration] of [
+    ["VAR result", "Var chosen = BuildValue()"],
+    ["TYPEOF result", "Dim chosen As Typeof(BuildValue())"],
+    ["TYPEOF alias", "Type ValueAlias As Typeof(BuildValue())\nDim chosen As ValueAlias"]
+]) test(`stock-sidecar type navigation does not mistake an unknown source type for a primitive (${name})`, async () => {
+    class TypeHierarchyItem {
+        constructor(kind, name, detail, uri, range, selectionRange) {
+            Object.assign(this, { kind, name, detail, uri, range, selectionRange });
+        }
+    }
+    class SemanticTokensLegend { constructor() {} }
+    class Location { constructor(uri, range) { Object.assign(this, { uri, range }); } }
+    const source = ["Type BaseValue", "    value As Long", "End Type", "Type DerivedValue Extends BaseValue",
+        "End Type", "Declare Function BuildValue() As DerivedValue", declaration, "Print chosen.value"].join("\n");
+    const document = createDocument(source);
+    document.uri = { scheme: "file", fsPath: "/workspace/hierarchy.bas", toString: () => "file:///workspace/hierarchy.bas" };
+    const sourceModel = new FreeBasicSemanticModel([{ uri: document.uri, parsed: parseFreeBasicText(source) }]);
+    const selectedLine = source.split("\n").findIndex((line) => line.startsWith("Print chosen"));
+    const position = { line: selectedLine, character: "Print c".length };
+    const targets = sourceModel.resolveAt(document.uri, position.line, position.character);
+    assert.equal(targets.length, 1);
+    assert.equal(targets[0].conditional, false);
+    assert.deepEqual(sourceModel.typeEntries(targets[0]), [], "the source resolver cannot infer this compiler-selected type");
+    const requests = [];
+    const model = { remote: true, semanticSidecarOnly: true, semanticBindingsAvailable: true,
+        async query(operation) {
+            assert.ok(["typeHierarchyPrepare", "compilerSidecarTypeDefinition"].includes(operation));
+            return [{ name: "DerivedValue", uri: document.uri,
+                declaration: { name: "DerivedValue", type: "type", detail: "Type", signature: "Type DerivedValue Extends BaseValue",
+                    line: 3, startColumn: 5, endColumn: 17 } }];
+        } };
+    const index = {
+        compilerAnalysis: {
+            analysisCompilerFor: () => ({ semanticModelOnly: true }),
+            getModelForEditor: async (_document, _token, needTypes, needBindings) => {
+                requests.push([needTypes, needBindings]);
+                return model;
+            },
+            getModel: () => model
+        },
+        getSourceSemanticModel: () => sourceModel,
+        isIncomplete: () => false
+    };
+    const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, TypeHierarchyItem, Location }, index,
+        { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const definitions = await features.typeDefinition.provideTypeDefinition(document, position);
+    assert.deepEqual(definitions.map((item) => [item.uri.fsPath, item.range.start.line]), [[document.uri.fsPath, 3]]);
+    const hierarchy = await features.typeHierarchy.prepareTypeHierarchy(document, position);
+    assert.deepEqual(hierarchy.map((item) => item.name), ["DerivedValue"]);
+    assert.deepEqual(requests, [[true, true], [false, true]], "an unresolved source type must reach the compiler binding model");
+});
+
+for (const constructor of [false, true]) test(`source declaration and implementation navigation keep independent families (${constructor ? "constructor" : "procedure"})`, async () => {
+    class SemanticTokensLegend { constructor() {} }
+    class Location { constructor(uri, range) { Object.assign(this, { uri, range }); } }
+    class CallHierarchyItem {
+        constructor(kind, name, detail, uri, range, selectionRange) {
+            Object.assign(this, { kind, name, detail, uri, range, selectionRange });
+        }
+    }
+    const documents = [], inputs = [];
+    const constructorParameters = ["ByVal value As Long", "ByVal value As Long Ptr", "ByVal value As Long Ptr Ptr",
+        "values(Any) As Long", "values(Any, Any) As Long"];
+    for (const name of ["first", "second"]) {
+        const header = createDocument(constructor ? "Type Record\nnumber As Long\n" +
+            constructorParameters.map((parameter) => `Declare Constructor(${parameter})\n`).join("") + "End Type\n"
+            : "Declare Sub FamilyNavigationProbe()\n");
+        const source = createDocument(constructor ? constructorParameters.map((parameter) =>
+            `Constructor Record(${parameter.replace(/\bPtr\b/g, "Pointer")})\nnumber = 0\nEnd Constructor\n`).join("")
+            : "Sub FamilyNavigationProbe()\nEnd Sub\nFamilyNavigationProbe()\n");
+        for (const [document, extension] of [[header, "bi"], [source, "bas"]]) {
+            const filePath = `/workspace/${name}.${extension}`;
+            document.uri = { scheme: "file", fsPath: filePath, toString: () => `file://${filePath}` };
+            documents.push(document);
+            inputs.push({ uri: document.uri, parsed: parseFreeBasicText(document.getText()),
+                includeUris: document === source ? new Set([header.uri.toString()]) : new Set() });
+        }
+    }
+    const model = new FreeBasicSemanticModel(inputs);
+    const index = { getParsedDocument: (document) => parseFreeBasicText(document.getText()),
+        ensureInitialized: async () => true, getSemanticModel: () => model, getSourceSemanticModel: () => model };
+    const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, Location }, index,
+        { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const declarationPoint = { line: 0, character: constructor ? 2 : "Sub F".length };
+    const declarations = await features.declaration.provideDeclaration(documents[1], declarationPoint);
+    assert.deepEqual(declarations.map((entry) => entry.uri.fsPath), ["/workspace/first.bi"]);
+    const implementationPoint = constructor ? { line: 2, character: "Declare C".length } : { line: 0, character: "Declare Sub F".length };
+    const implementations = await features.implementation.provideImplementation(documents[0], implementationPoint);
+    assert.deepEqual(implementations.map((entry) => entry.uri.fsPath), ["/workspace/first.bas"]);
+    if (!constructor) return;
+    for (let index = 0; index < constructorParameters.length; index++) {
+        const declarations = await features.declaration.provideDeclaration(documents[1], { line: index * 3, character: 2 });
+        assert.deepEqual(declarations.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [["/workspace/first.bi", index + 2]]);
+        const implementations = await features.implementation.provideImplementation(documents[0], { line: index + 2, character: "Declare C".length });
+        assert.deepEqual(implementations.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [["/workspace/first.bas", index * 3]]);
+    }
+
+    const requests = [];
+    const compilerModel = { remote: true, semanticSidecarOnly: true, semanticBindingsAvailable: true,
+        async query(operation, _uri, input) {
+            requests.push([operation, input]);
+            return [];
+        } };
+    const compilerIndex = { ...index, compilerAnalysis: {
+        getModelForEditor: async () => compilerModel, getModel: () => compilerModel
+    } };
+    const compilerFeatures = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, Location, CallHierarchyItem },
+        compilerIndex, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    for (const [document, point] of [[documents[0], implementationPoint], [documents[1], { line: 0, character: "Constructor R".length }]]) {
+        await compilerFeatures.reference.provideReferences(document, point, { includeDeclaration: true });
+        await compilerFeatures.documentHighlight.provideDocumentHighlights(document, point);
+        assert.equal(requests.length, 2);
+        for (const [operation, input] of requests.splice(0)) {
+            assert.ok(["references", "highlights"].includes(operation));
+            assert.deepEqual(input.constructorProcedure, { filePath: "/workspace/first.bas", startLine: 1,
+                declarations: [{ filePath: "/workspace/first.bi", line: 2 }, { filePath: "/workspace/first.bas", line: 0 }] },
+            "compiler constructor queries must retain the connected body and declarations only");
+        }
+    }
+    const hierarchy = await compilerFeatures.callHierarchy.prepareCallHierarchy(documents[1], { line: 0, character: "Constructor R".length });
+    assert.deepEqual(hierarchy.map((entry) => entry.uri.fsPath), ["/workspace/first.bas"]);
+    const headerHierarchy = await compilerFeatures.callHierarchy.prepareCallHierarchy(documents[0], implementationPoint);
+    assert.deepEqual(headerHierarchy.map((entry) => entry.uri.fsPath), ["/workspace/first.bas"],
+        "a constructor prototype must prepare its connected body even though the header cannot include it");
+});
+
+test("lifetime implementations retain their lexical namespace around an unqualified type name", async () => {
+    class SemanticTokensLegend { constructor() {} }
+    class Location { constructor(uri, range) { Object.assign(this, { uri, range }); } }
+    const header = createDocument("Namespace LifetimeScope\nType Value\nnumber As Long\nDeclare Constructor()\nDeclare Destructor()\nEnd Type\nEnd Namespace\n");
+    const source = createDocument("Namespace LifetimeScope\nConstructor Value()\nEnd Constructor\nDestructor Value()\nEnd Destructor\nEnd Namespace\n");
+    for (const [document, extension] of [[header, "bi"], [source, "bas"]]) {
+        const filePath = `/workspace/lifetime.${extension}`;
+        document.uri = { scheme: "file", fsPath: filePath, toString: () => `file://${filePath}` };
+    }
+    const model = new FreeBasicSemanticModel([{ uri: header.uri, parsed: parseFreeBasicText(header.getText()) },
+        { uri: source.uri, parsed: parseFreeBasicText(source.getText()), includeUris: new Set([header.uri.toString()]) }]);
+    const index = { getParsedDocument: (document) => parseFreeBasicText(document.getText()), ensureInitialized: async () => true,
+        getSemanticModel: () => model, getSourceSemanticModel: () => model };
+    const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, Location }, index,
+        { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    for (const [prototypeLine, bodyLine] of [[3, 1], [4, 3]]) {
+        const targets = await features.implementation.provideImplementation(header, { line: prototypeLine, character: "Declare C".length });
+        assert.deepEqual(targets.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[source.uri.fsPath, bodyLine]]);
+    }
+});
+
+for (const namespaced of [false, true]) test(`destructor prototypes retain cleanup and body calls (namespace=${namespaced})`, async () => {
+    class SemanticTokensLegend { constructor() {} }
+    class CallHierarchyItem {
+        constructor(kind, name, detail, uri, range, selectionRange) { Object.assign(this, { kind, name, detail, uri, range, selectionRange }); }
+    }
+    class CallHierarchyIncomingCall { constructor(from, fromRanges) { Object.assign(this, { from, fromRanges }); } }
+    class CallHierarchyOutgoingCall { constructor(to, fromRanges) { Object.assign(this, { to, fromRanges }); } }
+    const documents = [], inputs = [];
+    const prefix = namespaced ? "Namespace CleanupSpace\n" : "", suffix = namespaced ? "End Namespace\n" : "";
+    const lineOffset = namespaced ? 1 : 0;
+    const deleteLine = namespaced ? 8 : 6;
+    const typeName = namespaced ? "CleanupSpace.CleanupOwner" : "CleanupOwner";
+    for (const name of ["first", "second"]) {
+        const header = createDocument(prefix + "Type CleanupOwner\nnumber As Long\nDeclare Destructor()\nEnd Type\n" + suffix);
+        const source = createDocument(prefix + "Sub ObserveDestruction()\nEnd Sub\nDestructor CleanupOwner()\nObserveDestruction()\nEnd Destructor\n" + suffix +
+            `Dim allocated As ${typeName} Ptr = New ${typeName}\nDelete allocated\n`);
+        for (const [document, extension] of [[header, "bi"], [source, "bas"]]) {
+            const filePath = `/workspace/${name}.${extension}`;
+            document.uri = { scheme: "file", fsPath: filePath, toString: () => `file://${filePath}` };
+            documents.push(document);
+            inputs.push({ uri: document.uri, parsed: parseFreeBasicText(document.getText()),
+                includeUris: document === source ? new Set([header.uri.toString()]) : new Set() });
+        }
+    }
+    const model = new FreeBasicSemanticModel(inputs);
+    const compilerModel = { remote: true, semanticSidecarOnly: true, semanticBindingsAvailable: true,
+        async query(operation) {
+            if (operation === "compilerSidecarCallBindingsInSnapshot") return { complete: true, calls: [] };
+            if (operation === "compilerSidecarOperatorOperationsInSnapshot") return { complete: true, operations: [] };
+            if (operation === "compilerSidecarOperatorExpressionsInSnapshot") return { complete: true, expressions: [] };
+            assert.equal(operation, "compilerSidecarImplicitCallsInSnapshot");
+            return { complete: true, calls: [{ physical: true, kind: "delete-destructor", filePath: "/workspace/first.bas",
+                line: deleteLine, startColumn: 0, endLine: deleteLine, endColumn: 16, targetSymbols: [1], targetSignatures: ["Destructor CleanupOwner()"],
+                procedures: [{ filePath: "/workspace/first.bas", startLine: 3 + lineOffset }] }] };
+        } };
+    const index = { getParsedDocument: (document) => parseFreeBasicText(document.getText()),
+        ensureInitialized: async () => true, getSemanticModel: () => model, getSourceSemanticModel: () => model,
+        compilerAnalysis: { getModel: () => compilerModel, getModelForEditor: async () => compilerModel } };
+    const vscode = { ...createVscodeMock(), SemanticTokensLegend, CallHierarchyItem, CallHierarchyIncomingCall, CallHierarchyOutgoingCall };
+    vscode.workspace.textDocuments = documents;
+    const features = createSemanticFeatures(vscode, index, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const prepared = await features.callHierarchy.prepareCallHierarchy(documents[0], { line: 2 + lineOffset, character: "Declare D".length });
+    assert.equal(prepared.length, 1);
+    const incoming = await features.callHierarchy.provideCallHierarchyIncomingCalls(prepared[0]);
+    assert.deepEqual(incoming.flatMap((call) => call.fromRanges.map((range) => [call.from.uri.fsPath, range.start.line])),
+        [["/workspace/first.bas", deleteLine]]);
+    const outgoing = await features.callHierarchy.provideCallHierarchyOutgoingCalls(prepared[0]);
+    assert.deepEqual(outgoing.map((call) => [call.to.uri.fsPath, call.to.name]), [["/workspace/first.bas", "ObserveDestruction"]]);
+});
+
+test("closed module outgoing hierarchy keeps selected constructors without duplicating ordinary calls", async () => {
+    class SemanticTokensLegend { constructor() {} }
+    class CallHierarchyItem {
+        constructor(kind, name, detail, uri, range, selectionRange) { Object.assign(this, { kind, name, detail, uri, range, selectionRange }); }
+    }
+    class CallHierarchyOutgoingCall { constructor(to, fromRanges) { Object.assign(this, { to, fromRanges }); } }
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/namespace-initializer-calls.bas"), "utf8");
+    const document = createDocument(text);
+    document.uri = { scheme: "file", fsPath: "/workspace/namespace-initializers.bas", toString: () => "file:///workspace/namespace-initializers.bas" };
+    const model = new FreeBasicSemanticModel([{ uri: document.uri, parsed: parseFreeBasicText(text) }]);
+    const constructorLine = text.split("\n").findIndex((line) => /^Constructor TrackedValue/.test(line));
+    const constructor = model.entries.find((entry) => entry.declaration.type === "constructor" &&
+        entry.declaration.line === constructorLine);
+    const moduleAction = model.entries.find((entry) => entry.name === "ModuleAction");
+    const calls = [];
+    const moduleLines = [];
+    for (const [line, lineText] of text.split("\n").entries()) {
+        const match = lineText.match(/Dim (?:Shared )?([A-Za-z_]+) As TrackedValue =/);
+        if (!match) continue;
+        if (lineText.includes("Shared")) moduleLines.push(line);
+        const startColumn = lineText.indexOf(match[1]);
+        calls.push({ kind: "initializer-constructor", physical: true, filePath: document.uri.fsPath,
+            line, startColumn, endLine: line, endColumn: startColumn + match[1].length,
+            targetSymbols: [13], targetSignatures: ["Constructor TrackedValue(ByVal initialValue As Long)"],
+            procedures: [{ filePath: document.uri.fsPath, startLine: constructorLine + 1 }] });
+    }
+    for (const sidecar of [true, false]) for (const closed of [true, false]) {
+        let opened = 0;
+        let editDuringQuery = false;
+        let indexed = false;
+        let includesLoaded = false;
+        const queries = [];
+        document.version = 1;
+        const compilerModel = { remote: true, semanticSidecarOnly: sidecar, semanticBindingsAvailable: true,
+            async query(operation) {
+                queries.push(operation);
+                if (["compilerSidecarCallBindingsInSnapshot", "compilerSidecarOperatorOperationsInSnapshot",
+                    "compilerSidecarOperatorExpressionsInSnapshot"].includes(operation)) {
+                    return { complete: true, calls: [], operations: [], expressions: [] };
+                }
+                if (operation === "compilerSidecarImplicitCallsInSnapshot") {
+                    if (editDuringQuery) document.version++;
+                    return { complete: true, calls };
+                }
+                assert.equal(operation, "callHierarchyOutgoing");
+                if (editDuringQuery) document.version++;
+                return [{ ...moduleAction, fromRanges: [{ line: 0, startColumn: 0, endColumn: 1 }] },
+                    { ...constructor, declaration: { ...constructor.declaration, startColumn: 0, endColumn: "Constructor".length },
+                        fromRanges: calls.filter((call) => moduleLines.includes(call.line)) }];
+            } };
+        const sourceModel = () => {
+            assert.equal(indexed, true, "the loaded document must be indexed before resolving its hierarchy item");
+            assert.equal(includesLoaded, true, "reopened include links must be ready before taking the source snapshot");
+            return model;
+        };
+        const index = { getParsedDocument: (current) => { indexed = true; return parseFreeBasicText(current.getText()); },
+            async loadIncludes() { assert.equal(indexed, true); includesLoaded = true; },
+            getSemanticModel: sourceModel, getSourceSemanticModel: sourceModel,
+            compilerAnalysis: { getModel: () => compilerModel, getModelForEditor: async () => compilerModel } };
+        const baseVscode = createVscodeMock();
+        const features = createSemanticFeatures({ ...baseVscode, SemanticTokensLegend, CallHierarchyItem, CallHierarchyOutgoingCall,
+            SymbolKind: { ...baseVscode.SymbolKind, File: 1, Constructor: 8 },
+            workspace: { ...baseVscode.workspace, textDocuments: closed ? [] : [document],
+                async openTextDocument(uri) { assert.equal(uri.toString(), document.uri.toString()); opened++; return document; } }
+        }, index, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+        const moduleItem = {
+            kind: 1, detail: "Module-level calls", uri: document.uri, selectionRange: new Range(0, 0, 0, 0)
+        };
+        const outgoing = await features.callHierarchy.provideCallHierarchyOutgoingCalls(moduleItem);
+        assert.equal(outgoing.filter((call) => call.to.name === "ModuleAction").length, 1);
+        const constructors = outgoing.filter((call) => call.to.kind === 8);
+        assert.equal(constructors.length, 1, `${sidecar ? "stock" : "native"}: closed=${closed}`);
+        assert.equal(constructors[0].to.selectionRange.start.character, 0,
+            "a constructor item must select its callable keyword rather than the owner type");
+        assert.equal(constructors[0].to.selectionRange.end.character, "Constructor".length);
+        assert.deepEqual(constructors[0].fromRanges.map((range) => range.start.line), moduleLines,
+            "local constructor sites must not be added to the module");
+        assert.equal(outgoing.length, 2);
+        if (!sidecar) assert.deepEqual(queries, ["callHierarchyOutgoing"],
+            "native module lifetime calls must come from one worker query, not a source-only merge");
+        assert.equal(opened, closed ? 1 : 0);
+        editDuringQuery = true;
+        assert.equal(await features.callHierarchy.provideCallHierarchyOutgoingCalls(moduleItem), null,
+            "an edit during hierarchy queries must discard the result");
+    }
+});
+
+test("Call Hierarchy cancellation while loading a closed document starts no compiler work", async () => {
+    class SemanticTokensLegend { constructor() {} }
+    const document = createDocument("Sub ClosedTarget()\nEnd Sub\n");
+    document.uri = { toString: () => "file:///workspace/closed-target.bas" };
+    for (const stage of ["document", "includes"]) for (const operation of ["provideCallHierarchyIncomingCalls", "provideCallHierarchyOutgoingCalls"]) {
+        const token = { isCancellationRequested: false };
+        let opened = 0;
+        const unexpected = () => assert.fail("a cancelled load must not index or request compiler assistance");
+        const baseVscode = createVscodeMock();
+        const features = createSemanticFeatures({ ...baseVscode, SemanticTokensLegend,
+            workspace: { ...baseVscode.workspace, textDocuments: [], async openTextDocument() {
+                opened++;
+                if (stage === "document") token.isCancellationRequested = true;
+                return document;
+            } }
+        }, { getParsedDocument: stage === "document" ? unexpected : () => {}, getSemanticModel: unexpected,
+            async loadIncludes() { assert.equal(stage, "includes"); token.isCancellationRequested = true; },
+            compilerAnalysis: { getModel: unexpected, getModelForEditor: unexpected }
+        }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+        assert.equal(await features.callHierarchy[operation]({ uri: document.uri, kind: 11,
+            selectionRange: new Range(0, 0, 0, 0) }, token), null);
+        assert.equal(opened, 1);
+    }
+});
+
+test("native destructor incoming lookup upgrades weak facts without upgrading ordinary methods", async () => {
+    class SemanticTokensLegend { constructor() {} }
+    for (const [text, line, needsBindings] of [
+        ["Destructor Owner()\nEnd Destructor\n", 0, true],
+        ["Sub NormalMethod()\nEnd Sub\n", 0, false],
+        ["Destructor Owner()\nEnd Destructor\n", 99, false]
+    ]) {
+        const document = createDocument(text);
+        document.uri = { scheme: "file", fsPath: "/workspace/lifetime.bas", toString: () => "file:///workspace/lifetime.bas" };
+        const requests = [];
+        const query = async (operation) => { assert.equal(operation, "callHierarchyIncoming"); return []; };
+        const weak = { remote: true, semanticSidecarOnly: false, semanticBindingsAvailable: false, query };
+        const strong = { ...weak, semanticBindingsAvailable: true };
+        const baseVscode = createVscodeMock();
+        const features = createSemanticFeatures({ ...baseVscode, SemanticTokensLegend,
+            workspace: { ...baseVscode.workspace, textDocuments: [document] }
+        }, { getParsedDocument: () => parseFreeBasicText(text), compilerAnalysis: {
+            getModel: () => weak,
+            async getModelForEditor(_document, _token, expressions, bindings) { requests.push([expressions, bindings]); return strong; }
+        } }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+        assert.deepEqual(await features.callHierarchy.provideCallHierarchyIncomingCalls({
+            kind: baseVscode.SymbolKind.Method, uri: document.uri, selectionRange: new Range(line, 0, line, 0)
+        }), []);
+        assert.deepEqual(requests, needsBindings ? [[true, true]] : [], `${text}: line ${line}`);
+    }
+});
+
+test("native lifetime references and highlights retain their native route on the first lookup", async () => {
+    class SemanticTokensLegend { constructor() {} }
+    for (const [header, prefix, expected] of [
+        ["Destructor Owner()", "", true],
+        ["Declare Destructor()", "Declare ", true],
+        ["Private Destructor Owner()", "Private ", true],
+        ["Constructor Owner()", "", true],
+        ["Declare Constructor()", "Declare ", true],
+        ["Sub NormalMethod()", "Sub ", false]
+    ]) {
+        const document = createDocument(header + "\n");
+        document.uri = { scheme: "file", fsPath: "/workspace/lifetime-references.bas", toString: () => "file:///workspace/lifetime-references.bas" };
+        const requests = [];
+        const model = { remote: true, semanticSidecarOnly: false, semanticBindingsAvailable: true,
+            async query(_operation, _uri, input) {
+                assert.equal(input.constructorProcedure, undefined, "a stock-sidecar descriptor must not override native constructor references");
+                assert.equal(input.destructorProcedure, undefined);
+                return [];
+            } };
+        const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend }, {
+            compilerAnalysis: { getModel: () => null, analysisCompilerFor: () => ({ semanticModelOnly: false }),
+                async getModelForEditor(_document, _token, types, bindings) { requests.push([types, bindings]); return model; }
+            }
+        }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+        const position = { line: 0, character: prefix.length + 1 };
+        assert.deepEqual(await features.reference.provideReferences(document, position, { includeDeclaration: true }), []);
+        assert.deepEqual(requests, [[false, expected]], `references: ${header}`);
+        requests.length = 0;
+        assert.deepEqual(await features.documentHighlight.provideDocumentHighlights(document, position), []);
+        assert.deepEqual(requests, [[false, expected]], `highlights: ${header}`);
+    }
+});
+
+test("native lifetime providers follow a superseded binding upgrade", async () => {
+    class SemanticTokensLegend { constructor() {} }
+    class Location { constructor(uri, range) { Object.assign(this, { uri, range }); } }
+    class DocumentHighlight { constructor(range, kind) { Object.assign(this, { range, kind }); } }
+    for (const provider of ["references", "highlights"]) for (const retained of [true, false]) {
+        const document = createDocument("Destructor Owner()\nEnd Destructor\n");
+        document.version = 1;
+        document.uri = { scheme: "file", fsPath: "/workspace/lifetime-upgrade.bas",
+            toString: () => "file:///workspace/lifetime-upgrade.bas" };
+        const reference = { uri: document.uri, occurrence: { line: 1, startColumn: 0, endColumn: 3 }, accessRole: "read" };
+        let requests = 0, weakQueries = 0;
+        const weak = { remote: true, semanticSidecarOnly: false, semanticBindingsAvailable: false,
+            query: async () => { weakQueries++; return []; } };
+        const strong = { ...weak, semanticBindingsAvailable: true,
+            query: async (operation) => { assert.equal(operation, provider); return [reference]; } };
+        const analysis = { generation: 0, getModel: () => retained ? weak : null,
+            analysisCompilerFor: () => ({ semanticModelOnly: false }),
+            async getModelForEditor(_document, _token, types, bindings) {
+                assert.equal(types, false);
+                assert.equal(bindings, true);
+                requests++;
+                if (requests === 1) {
+                    if (!retained) analysis.generation++;
+                    return null;
+                }
+                return strong;
+            }
+        };
+        const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, Location, DocumentHighlight }, {
+            compilerAnalysis: analysis,
+            getParsedDocument() { assert.fail("the successor binding model should avoid source-only fallback"); },
+            ensureInitialized() { assert.fail("the successor binding model should avoid workspace discovery"); }
+        }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+        const position = { line: 0, character: 1 };
+        const result = provider === "references"
+            ? await features.reference.provideReferences(document, position, { includeDeclaration: true })
+            : await features.documentHighlight.provideDocumentHighlights(document, position);
+        assert.equal(result.length, 1, `${provider}: retained=${retained}`);
+        assert.equal(weakQueries, 0, "lifetime lookup must not query the binding-free predecessor");
+        assert.equal(requests, 2, "follow one successor, not an unbounded retry loop");
+    }
+});
+
+test("semantic providers discard a model when its document changes during acquisition", async () => {
+    class SemanticTokensLegend { constructor() {} }
+    const document = createDocument("Destructor Owner()\nEnd Destructor\n");
+    document.uri = { scheme: "file", fsPath: "/workspace/lifetime-edit.bas",
+        toString: () => "file:///workspace/lifetime-edit.bas" };
+    const model = { remote: true, semanticSidecarOnly: false, semanticBindingsAvailable: true,
+        query() { assert.fail("an intervening edit must discard the acquired model"); } };
+    for (const stage of ["compiler", "source initialization"]) {
+        document.version = 1;
+        const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend }, {
+            compilerAnalysis: { async getModelForEditor() {
+                if (stage !== "compiler") return null;
+                document.version++;
+                return model;
+            } },
+            getParsedDocument: () => parseFreeBasicText(document.getText()),
+            async ensureInitialized() { document.version++; return true; },
+            getSemanticModel() { assert.fail("an intervening edit must also prevent source-model fallback"); }
+        }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+        assert.equal(await features.reference.provideReferences(document, { line: 0, character: 1 },
+            { includeDeclaration: true }), null, stage);
+    }
+});
+
+for (const withBody of [true, false]) test(`stock destructor providers send a selected lifetime descriptor (body=${withBody})`, async () => {
+    class SemanticTokensLegend { constructor() {} }
+    const text = withBody ? fs.readFileSync(path.join(__dirname, "fixtures/destructor-hierarchy.bas"), "utf8")
+        : "Type CleanupValue\nvalue As Long\nDeclare Destructor()\nEnd Type\n";
+    const document = createDocument(text);
+    document.uri = { scheme: "file", fsPath: "/workspace/stock-cleanup.bas", toString: () => "file:///workspace/stock-cleanup.bas" };
+    const parsed = parseFreeBasicText(text);
+    const sourceModel = new FreeBasicSemanticModel([{ uri: document.uri, parsed }]);
+    const lines = text.split("\n");
+    const prototypeLine = lines.findIndex((line) => line.includes("Declare Destructor"));
+    const definitionLine = withBody ? lines.findIndex((line) => /^Destructor CleanupValue/.test(line)) : prototypeLine;
+    const operations = [];
+    const compiler = { remote: true, semanticSidecarOnly: true, semanticBindingsAvailable: true,
+        async query(operation, _uri, input) {
+            operations.push(operation);
+            assert.equal(input.constructorProcedure, undefined);
+            assert.deepEqual(input.destructorProcedure, { filePath: document.uri.fsPath, startLine: definitionLine + 1,
+                declarations: [{ filePath: document.uri.fsPath, line: prototypeLine },
+                    ...(withBody ? [{ filePath: document.uri.fsPath, line: definitionLine }] : [])] });
+            return [];
+        } };
+    const index = { getParsedDocument: () => parsed, ensureInitialized: async () => true,
+        getSourceSemanticModel: () => sourceModel, getSemanticModel: () => sourceModel,
+        compilerAnalysis: { getModel: () => compiler, getModelForEditor: async () => compiler,
+            analysisCompilerFor: () => ({ semanticModelOnly: true }) },
+        compilerProject: { hasProjectContexts: () => true, references() {
+            assert.fail("ordinary project bindings must not replace selected destructor cleanup receipts");
+        } }
+    };
+    const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend }, index,
+        { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const point = { line: prototypeLine, character: lines[prototypeLine].indexOf("Destructor") + 1 };
+    assert.deepEqual(await features.reference.provideReferences(document, point, { includeDeclaration: true }), []);
+    assert.deepEqual(await features.documentHighlight.provideDocumentHighlights(document, point), []);
+    assert.deepEqual(operations, ["references", "highlights"]);
+});
+
+test("opaque Call Hierarchy identities keep scalar and pointer CAST callers separate", async () => {
+    class SemanticTokensLegend { constructor() {} }
+    class CallHierarchyItem {
+        constructor(kind, name, detail, uri, range, selectionRange) {
+            Object.assign(this, { kind, name, detail, uri, range, selectionRange });
+        }
+    }
+    class CallHierarchyIncomingCall {
+        constructor(from, fromRanges) { Object.assign(this, { from, fromRanges }); }
+    }
+    const header = createDocument("Type CastOwner\nnumber As Long\nDeclare Operator Cast() As Long\nDeclare Operator Cast() As Long Ptr\nEnd Type\n");
+    const source = createDocument("Operator CastOwner.Cast() As Long\nReturn number\nEnd Operator\n" +
+        "Operator CastOwner.Cast() As Long Ptr\nReturn @number\nEnd Operator\n" +
+        "Dim current As CastOwner\nPrint CLng(current)\nDim pointer As Long Ptr = Cast(Long Ptr, current)\n");
+    for (const [document, extension] of [[header, "bi"], [source, "bas"]]) {
+        const filePath = `/workspace/cast.${extension}`;
+        document.uri = { scheme: "file", fsPath: filePath, toString: () => `file://${filePath}` };
+    }
+    const model = new FreeBasicSemanticModel([
+        { uri: header.uri, parsed: parseFreeBasicText(header.getText()) },
+        { uri: source.uri, parsed: parseFreeBasicText(source.getText()), includeUris: new Set([header.uri.toString()]) }
+    ]);
+    const operations = [7, 8].map((line, index) => {
+        const startColumn = source.lineAt(line).text.indexOf(index ? "Cast(" : "CLng(");
+        return { operatorCode: "cast", physical: true, targetSymbols: [index + 1],
+            procedures: [{ filePath: source.uri.fsPath, startLine: index * 3 + 1 }], filePath: source.uri.fsPath,
+            line, startColumn, endLine: line, endColumn: startColumn + 4 };
+    });
+    const compilerModel = { remote: true, semanticSidecarOnly: true, semanticBindingsAvailable: true,
+        async query(operation) {
+            if (operation === "compilerSidecarImplicitCallsInSnapshot") return { complete: true, calls: [] };
+            assert.equal(operation, "compilerSidecarOperatorOperationsInSnapshot");
+            return { complete: true, operations };
+        } };
+    const index = { getParsedDocument: (document) => parseFreeBasicText(document.getText()),
+        ensureInitialized: async () => true, getSemanticModel: () => model, getSourceSemanticModel: () => model,
+        compilerAnalysis: { getModelForEditor: async () => compilerModel, getModel: () => compilerModel } };
+    const vscode = createVscodeMock();
+    vscode.workspace.textDocuments = [header, source];
+    const features = createSemanticFeatures({ ...vscode, SemanticTokensLegend, CallHierarchyItem, CallHierarchyIncomingCall }, index,
+        { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const items = [];
+    // Command-based editor tests drop opaque item data. Retain it here as
+    // the Call Hierarchy UI does when requesting incoming calls.
+    for (const [prototypeLine, callLine] of [[2, 7], [3, 8]]) {
+        const prepared = await features.callHierarchy.prepareCallHierarchy(header, { line: prototypeLine, character: "Declare Operator C".length });
+        assert.equal(prepared.length, 1);
+        items.push(prepared[0]);
+        const incoming = await features.callHierarchy.provideCallHierarchyIncomingCalls(prepared[0]);
+        assert.deepEqual(incoming.flatMap((call) => call.fromRanges.map((range) => range.start.line)), [callLine],
+            "retained editor item data must resolve the selected CAST result type");
+    }
+    assert.notEqual(items[0].data.implicitCallEntryId, items[1].data.implicitCallEntryId);
+});
+
+for (const namespaced of [false, true]) for (const operator of ["+", "Cast", "[]"]) test(`operator navigation keeps connected declarations and exact overloads (${operator}, namespace=${namespaced})`, async () => {
+    class SemanticTokensLegend { constructor() {} }
+    class Location { constructor(uri, range) { Object.assign(this, { uri, range }); } }
+    class CallHierarchyItem {
+        constructor(kind, name, detail, uri, range, selectionRange) { Object.assign(this, { kind, name, detail, uri, range, selectionRange }); }
+    }
+    class CallHierarchyOutgoingCall { constructor(to, fromRanges) { Object.assign(this, { to, fromRanges }); } }
+    const prototype = operator === "+"
+        ? "Declare Operator +(ByRef value As OperatorRecord, ByVal other As Long) As OperatorRecord"
+        : operator === "Cast" ? "Declare Operator Cast() As Long" : "Declare Operator [](ByVal index As Long) ByRef As Long";
+    const body = operator === "+"
+        ? "Operator +(ByRef value As OperatorRecord, ByVal other As Long) As OperatorRecord\nObserveOperatorBody()\nReturn value\nEnd Operator\n"
+        : operator === "Cast" ? "Operator OperatorRecord.Cast() As Long\nObserveOperatorBody()\nReturn number\nEnd Operator\n"
+            : "Operator OperatorRecord.[](ByVal index As Long) ByRef As Long\nObserveOperatorBody()\nReturn number\nEnd Operator\n";
+    const pointerPrototype = operator === "Cast" ? "Declare Operator Cast() As Long Ptr"
+        : prototype.replace(/As Long\)/, "As Long Ptr)");
+    const pointerBody = operator === "Cast" ? "Operator OperatorRecord.Cast() As Long Ptr\nObserveOperatorBody()\nReturn @number\nEnd Operator\n"
+        : body.replace(/As Long\)/, "As Long Pointer)");
+    const headerText = operator === "+" ? `Type OperatorRecord\nnumber As Long\nEnd Type\n${prototype}\n${pointerPrototype}\n`
+        : `Type OperatorRecord\nnumber As Long\n${prototype}\n${pointerPrototype}\nEnd Type\n`;
+    const bodyText = body + pointerBody + "Sub ObserveOperatorBody()\nEnd Sub\n";
+    const prefix = namespaced ? "Namespace OperatorScope\n" : "", suffix = namespaced ? "End Namespace\n" : "";
+    const sourceText = prefix + bodyText + suffix;
+    const documents = [], inputs = [];
+    for (const name of ["first", "second"]) {
+        const header = createDocument(prefix + headerText + "Declare Sub ObserveOperatorBody()\n" + suffix), source = createDocument(sourceText);
+        for (const [document, extension] of [[header, "bi"], [source, "bas"]]) {
+            const filePath = `/workspace/${name}.${extension}`;
+            document.uri = { scheme: "file", fsPath: filePath, toString: () => `file://${filePath}` };
+            documents.push(document);
+            inputs.push({ uri: document.uri, parsed: parseFreeBasicText(document.getText()),
+                includeUris: document === source ? new Set([header.uri.toString()]) : new Set() });
+        }
+    }
+    const model = new FreeBasicSemanticModel(inputs);
+    const index = { getParsedDocument: (document) => parseFreeBasicText(document.getText()),
+        ensureInitialized: async () => true, getSemanticModel: () => model, getSourceSemanticModel: () => model };
+    const vscode = { ...createVscodeMock(), SemanticTokensLegend, Location, CallHierarchyItem, CallHierarchyOutgoingCall };
+    vscode.workspace.textDocuments = documents;
+    const features = createSemanticFeatures(vscode, index,
+        { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const prototypes = model.getDocument(documents[0].uri).entries.filter((entry) => entry.declaration.type === "operator");
+    const bodies = model.getDocument(documents[1].uri).entries.filter((entry) => entry.declaration.type === "operator");
+    for (let index = 0; index < prototypes.length; index++) {
+        const declaration = prototypes[index].declaration, implementation = bodies[index].declaration;
+        const declarations = await features.declaration.provideDeclaration(documents[1], { line: implementation.line, character: implementation.endColumn });
+        assert.deepEqual(declarations.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [["/workspace/first.bi", declaration.line]]);
+        for (const provider of [features.definition.provideDefinition, features.implementation.provideImplementation]) {
+            const targets = await provider(documents[0], { line: declaration.line, character: declaration.endColumn });
+            assert.deepEqual(targets.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [["/workspace/first.bas", implementation.line]]);
+        }
+        const hierarchy = await features.callHierarchy.prepareCallHierarchy(documents[0], { line: declaration.line, character: declaration.endColumn });
+        assert.equal(hierarchy.length, 1);
+        const outgoing = await features.callHierarchy.provideCallHierarchyOutgoingCalls(hierarchy[0]);
+        assert.deepEqual(outgoing.map((call) => [call.to.uri.fsPath, call.to.name]), [["/workspace/first.bas", "ObserveOperatorBody"]],
+            "an operator prototype must expose calls from its connected implementation, not an unrelated family");
+    }
+    const duplicate = createDocument(sourceText);
+    duplicate.uri = { scheme: "file", fsPath: "/workspace/duplicate.bas", toString: () => "file:///workspace/duplicate.bas" };
+    const ambiguous = new FreeBasicSemanticModel([...inputs, { uri: duplicate.uri, parsed: parseFreeBasicText(sourceText),
+        includeUris: new Set([documents[0].uri.toString()]) }]);
+    const ambiguousFeatures = createSemanticFeatures(vscode, { ...index, getSemanticModel: () => ambiguous, getSourceSemanticModel: () => ambiguous },
+        { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const point = { line: prototypes[0].declaration.line, character: prototypes[0].declaration.endColumn };
+    const prepared = await ambiguousFeatures.callHierarchy.prepareCallHierarchy(documents[0], point);
+    assert.equal(prepared.length, 1);
+    assert.deepEqual(await ambiguousFeatures.callHierarchy.provideCallHierarchyOutgoingCalls(prepared[0]), [],
+        "two connected implementations must remain ambiguous");
 });
 
 test("stock-sidecar Type Definition uses the compiler-selected subtype location", async () => {
@@ -573,7 +1623,7 @@ test("stock-sidecar Type Definition uses the compiler-selected subtype location"
         toString: () => "file:///workspace/type-definition-scalar.bas"
     };
     sourceModel = {
-        resolveAt: () => [{ declaration: { type: "variable" }, conditional: false, provisional: false }],
+        resolveAt: () => [{ declaration: { type: "variable", typeName: "Long" }, conditional: false, provisional: false }],
         typeEntries: () => []
     };
     assert.deepEqual(await features.typeDefinition.provideTypeDefinition(scalarDocument, { line: 1, character: 8 }), []);
@@ -1880,9 +2930,43 @@ test("built-in hover identifies current language data and its target release", (
 
     assert.match(hover, /Initializes a graphics mode/);
     assert.match(hover, /byval width as long/);
-    assert.match(hover, /FreeBASIC 1\.20\.4/);
+    assert.match(hover, /FreeBASIC 1\.20\.5/);
     assert.match(getBuiltInHover(grammarData, "Sin#"), /Returns the sine of an angle/);
     assert.match(getBuiltInHover(grammarData, "GetMouse"), /`x`: x coordinate value/);
+});
+
+test("missing-header fixes recognize FBC's rejected implicit-name diagnostic", async () => {
+    class Position { constructor(line, character) { Object.assign(this, { line, character }); } }
+    class CodeAction { constructor(title, kind) { Object.assign(this, { title, kind }); } }
+    class WorkspaceEdit {
+        constructor() { this.edits = []; }
+        insert(uri, position, text) { this.edits.push({ uri, position, text }); }
+    }
+    const document = createDocument('Dim surface As Any Ptr = Gfx3SurfaceLoad("missing.png")\n');
+    document.positionAt = (offset) => {
+        const lines = document.getText().slice(0, offset).split(/\r\n|\n|\r/);
+        return new Position(lines.length - 1, lines.at(-1).length);
+    };
+    document.uri = { scheme: "file", fsPath: "/workspace/missing-header.bas",
+        toString: () => "file:///workspace/missing-header.bas" };
+    const provider = createMissingHeaderCodeActionProvider({ ...createVscodeMock(), Position, CodeAction, WorkspaceEdit,
+        DiagnosticSeverity: { Error: 0, Warning: 1 },
+        CodeActionKind: { QuickFix: "quickfix", RefactorRewrite: "refactor.rewrite" }
+    }, { getParsedDocument: () => parseFreeBasicText(document.getText()),
+        ensureInitialized: async () => true, getSemanticModel: () => null });
+    const diagnostic = { source: "fbc", code: 149, severity: 0,
+        message: "Implicit variables are only valid in -lang deprecated or fblite or qb, found 'Gfx3SurfaceLoad'",
+        range: new Range(0, 0, 0, document.lineAt(0).text.length) };
+    const actions = await provider.provideCodeActions(document, diagnostic.range, { diagnostics: [diagnostic] });
+    const header = actions.find((action) => action.title.includes("fbgfx3.bi"));
+    assert.ok(header);
+    assert.match(header.edit.edits[0].text, /#include once "fbgfx3.bi"[\r\n]+Using fb/);
+    assert.deepEqual(await provider.provideCodeActions(document, diagnostic.range, {
+        diagnostics: [{ ...diagnostic, code: 999 }]
+    }), []);
+    assert.deepEqual(await provider.provideCodeActions(document, diagnostic.range, {
+        diagnostics: [{ ...diagnostic, code: COMPILER_MESSAGE_CODE, message: "Variable not declared, Gfx3SurfaceLoad" }]
+    }), [], "a user-supplied preprocessor message must not trigger compiler-specific source edits");
 });
 
 test("outer unclosed-bracket Quick Fix inserts nested closers in the required order", async () => {
@@ -1986,6 +3070,64 @@ test("unexpected bracket Quick Fix offers a direct repair when one opener is una
         new Position(0, closerOffset), new Position(0, closerOffset + 1)
     ));
     assert.ok(actions[1].edit.deletion);
+});
+
+test("ON branch lists retain label-only completion through commas and continuations", async () => {
+    class CompletionItem { constructor(label, kind) { Object.assign(this, { label, kind }); } }
+    class MarkdownString { constructor(value = "") { this.value = value; } }
+    class SnippetString {
+        constructor() { this.value = ""; }
+        appendText(value) { this.value += value; }
+        appendPlaceholder(value) { this.value += value; }
+        appendTabstop() {}
+    }
+    const vscode = { ...createVscodeMock(), CompletionItem, MarkdownString, SnippetString,
+        CompletionItemKind: { Reference: 17, Variable: 5, Function: 2, Keyword: 13 } };
+    for (const [statement, labelsExpected] of [
+        ["On selector Goto firstTarget, fin", true],
+        ["On selector Gosub firstTarget, finishTarget, ", true],
+        ["On Pick(1, 2) Goto firstTarget, fin", true],
+        ["On selector Goto _\n        firstTarget, _\n        fin", true],
+        ["On selector Gosub firstTarget, _ ' branch note\n        fin", true],
+        ["If selector Then On selector Goto firstTarget, fin", true],
+        ["If selector Then Goto firstTarget Else Goto fin", true],
+        ["If selector Then On 1 Goto firstTarget, finishTarget Else On 2 Gosub firstTarget, fin", true],
+        ["If selector Then On 1 Goto firstTarget, finishTarget Else Goto firstTarget, fin", false],
+        ["On selector . Else Goto firstTarget, fin", true],
+        ["On selector Goto firstTarget: Print fin", false],
+        ["On selector Goto firstTarget,\n        fin", false],
+        ["Goto firstTarget, fin", false],
+        ["On Error Goto firstTarget, fin", false],
+        ["On Local Error Goto firstTarget, fin", false],
+        ["On selector Goto firstTarget,, fin", false],
+        ["Print firstTarget, fin", false],
+        ["Call Filter(firstTarget, fin", false],
+        [["On selector Goto firstTarget, _", ...Array(128).fill("        _"), "        fin"].join("\n"), false],
+        ["On selector Goto firstTarget, _\n" + " ".repeat(65536) + "fin", false]
+    ]) {
+        const text = ["Sub Work(ByVal selector As Long)", "    " + statement, "firstTarget:",
+            "    Print 1", "finishTarget:", "    Print 2", "End Sub",
+            "Sub Other()", "otherTarget:", "End Sub", ""].join("\n");
+        const document = createDocument(text);
+        document.uri = { scheme: "file", fsPath: "/workspace/on-label-completion.bas",
+            toString: () => "file:///workspace/on-label-completion.bas" };
+        const parsed = parseFreeBasicText(text);
+        const model = new FreeBasicSemanticModel([{ uri: document.uri, parsed }]);
+        const provider = createCompletionProvider(vscode, {
+            getParsedDocument: () => parsed, ensureInitialized: async () => true,
+            getSemanticModel: () => model
+        }, {
+            preprocessorDirectives: [], operatorKeywords: [], keywords: [], types: [],
+            libraryTypes: [], typeModifiers: [], intrinsicFunctions: [], runtimeFunctions: [],
+            graphicsFunctions: [], bundledFunctions: [], constants: [], compilerDefines: [], symbolicConstants: []
+        });
+        const lines = statement.split("\n");
+        const position = { line: lines.length, character: lines.at(-1).length + (lines.length === 1 ? 4 : 0) };
+        const items = await provider.provideCompletionItems(document, position);
+        const labels = items.filter((item) => item.kind === vscode.CompletionItemKind.Reference).map((item) => item.label).sort();
+        assert.deepEqual(labels, labelsExpected ? ["finishTarget", "firstTarget"] : [], statement);
+        if (labelsExpected) assert.equal(items.length, labels.length, "label targets must not mix in variables or keywords");
+    }
 });
 
 test("completion documentation preserves overloads and compiler-selected declaration facts", async () => {
@@ -5444,7 +6586,13 @@ test("stock-sidecar hover uses compiler bindings for keyword and runtime spellin
 
     const line = 4;
     const column = document.lineAt(line).text.lastIndexOf(name);
-    const hover = await provider.provideHover(document, { line, character: column + 1 });
+    const position = { line, character: column + 1 };
+    const offsetAt = document.offsetAt;
+    document.offsetAt = (actual) => {
+        assert.equal(actual, position, "offsetAt must receive the editor's Position, not a synthesized plain object");
+        return offsetAt(actual);
+    };
+    const hover = await provider.provideHover(document, position);
     assert.deepEqual(requests, [[false, false], [true, true]],
         "an unresolved keyword spelling after NOKEYWORD should request exact compiler bindings");
     assert.match(hover.contents.value, /variable Abs As integer/);
@@ -5962,7 +7110,9 @@ test("stock-sidecar array hovers upgrade for array declarations and uses but not
     arrayDocument.uri = { scheme: "file", fsPath: "/workspace/array-index-hover.bas",
         toString: () => "file:///workspace/array-index-hover.bas" };
     arrayDocument.positionAt = (offset) => ({ line: 0, character: offset });
-    sourceDocument = arrayDocument;
+    sourceDocument = new FreeBasicSemanticModel([{
+        uri: arrayDocument.uri, parsed: parseFreeBasicText(arraySource)
+    }]).getDocument(arrayDocument.uri);
     resolvedEntries = [{
         name: "local_values",
         uri: arrayDocument.uri,
@@ -10700,6 +11850,53 @@ test("hover explains an unresolved deferred macro reference without inventing a 
     assert.match(ambiguousHover.contents.value, /Observed expansions select different macro definitions/);
 });
 
+test("stock-sidecar hover uses the compiler-selected variable from conditional declarations", async () => {
+    class MarkdownString {
+        constructor(value = "") { this.value = value; }
+        appendMarkdown(value) { this.value += value; }
+        appendCodeblock(value) { this.value += `\n${value}\n`; }
+    }
+    class Hover { constructor(contents) { this.contents = contents; } }
+    const text = "#if 1\nDim selectedValue As Long\n#else\nDim selectedValue As Double\n#endif\nPrint selectedValue\n";
+    const document = createDocument(text);
+    document.uri = { scheme: "file", fsPath: "/workspace/conditional-hover.bas",
+        toString: () => "file:///workspace/conditional-hover.bas" };
+    const parsed = parseFreeBasicText(text);
+    const model = new FreeBasicSemanticModel([{ uri: document.uri, parsed }]);
+    const declaration = parsed.declarations.find((entry) => entry.name === "selectedValue");
+    const requests = [];
+    const native = {
+        remote: true, semanticSidecarOnly: true, semanticBindingsAvailable: true,
+        async query(operation) {
+            assert.equal(operation, "hover");
+            return {
+                entries: [{ uri: document.uri, name: "selectedValue", compilerSymbolId: 17, declaration }],
+                expression: { typeName: "Long" }
+            };
+        }
+    };
+    const index = {
+        compilerAnalysis: {
+            analysisCompilerFor: () => ({ semanticModelOnly: true }),
+            getModelForEditor: (_document, _token, needTypes, needBindings) => {
+                requests.push([needTypes, needBindings]);
+                return needTypes ? native : model;
+            },
+            getModel: () => model
+        },
+        getSemanticModel: () => model,
+        getParsedDocument: () => parsed,
+        ensureInitialized: async () => true
+    };
+    const hover = await createHoverProvider({ ...createVscodeMock(), MarkdownString, Hover }, index, {})
+        .provideHover(document, { line: 5, character: 8 });
+    assert.match(hover.contents.value, /Dim selectedValue As Long/i);
+    assert.doesNotMatch(hover.contents.value, /Dim selectedValue As Double/i,
+        "the inactive declaration must not be shown as an alternative to the compiler-selected variable");
+    assert.deepEqual(requests, [[false, false], [true, true]],
+        "ambiguous source declarations should explicitly request FBC bindings, not depend on another provider's cache");
+});
+
 test("resolved remote symbol hovers do not build the source operator index", async () => {
     class MarkdownString {
         constructor(value = "") { this.value = value; }
@@ -11121,6 +12318,24 @@ test("stock-sidecar highlights request bindings for REM identifiers masked insid
     assert.deepEqual(queries, ["highlights", "semanticTokens"]);
 });
 
+test("source semantic tokens do not publish an incomplete workspace model", async () => {
+    class SemanticTokensLegend {}
+    class SemanticTokensBuilder {
+        build() { return []; }
+    }
+    const document = createDocument("Function Helpers.Calculate() As Long\nEnd Function\n");
+    let parsed = false;
+    const index = {
+        getParsedDocument() { parsed = true; },
+        async ensureInitialized() { return false; },
+        getSemanticModel() { assert.fail("cancelled initialization must not publish partially resolved tokens"); }
+    };
+    const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, SemanticTokensBuilder },
+        index, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    assert.deepEqual(await features.semanticTokens.provideDocumentSemanticTokens(document), []);
+    assert.equal(parsed, true);
+});
+
 test("stock-sidecar semantic tokens request bindings for NOKEYWORD identifiers", async () => {
     class SemanticTokensLegend {
         constructor() {}
@@ -11173,6 +12388,221 @@ test("stock-sidecar semantic tokens request bindings for NOKEYWORD identifiers",
     assert.ok(result.data instanceof Uint32Array);
     assert.deepEqual(requests, [{ needExpressionTypes: false, needSemanticBindings: true }]);
     assert.deepEqual(queries, ["semanticTokens"]);
+});
+
+test("argument navigation follows replacement snapshots without querying a failed upgrade's predecessor", async () => {
+    class SemanticTokensLegend {}
+    class Location {
+        constructor(uri, range) { Object.assign(this, { uri, range }); }
+    }
+    const document = createDocument("Print TwiceValue(createdValue + 1)\n");
+    document.uri = { scheme: "file", fsPath: "/workspace/generated-variable.bas",
+        toString: () => "file:///workspace/generated-variable.bas" };
+    const target = { name: "createdValue", uri: document.uri, declaration: {
+        name: "createdValue", type: "variable", line: 0, startColumn: 17, endColumn: 29, modifiers: []
+    } };
+    const sourceModel = { resolveAt: () => [] };
+    let released = false, bindingRequests = 0, mode = "selected";
+    let queries = [];
+    const weak = { remote: true, semanticBindingsAvailable: false, async query() {
+        assert.equal(released, false, "navigation must not query the released snapshot after a binding upgrade");
+        return [];
+    } };
+    const strong = { remote: true, semanticBindingsAvailable: true, async query(operation) {
+        queries.push(operation);
+        return [target];
+    } };
+    const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, Location }, {
+        compilerAnalysis: {
+            getModelForEditor(_document, _token, _types, bindings) {
+                if (bindings) {
+                    released = true;
+                    bindingRequests++;
+                    if (mode === "unavailable" || mode === "superseded" && bindingRequests === 1) return null;
+                    if (mode === "edited") document.version++;
+                    return strong;
+                }
+                return weak;
+            },
+            getModel: () => weak
+        },
+        getSourceSemanticModel: () => sourceModel
+    }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    for (const outcome of ["selected", "superseded", "unavailable", "edited"]) {
+        mode = outcome;
+        for (const [provider, operation] of [[features.definition, "provideDefinition"],
+            [features.declaration, "provideDeclaration"], [features.implementation, "provideImplementation"]]) {
+            released = false;
+            bindingRequests = 0;
+            document.version = 1;
+            queries = [];
+            const result = await provider[operation](document, { line: 0, character: 20 });
+            if (mode === "unavailable" || mode === "edited") {
+                assert.equal(result, null, `${operation}: ${mode}`);
+                assert.deepEqual(queries, [], "an interrupted upgrade must not issue a binding query");
+            } else {
+                assert.equal(result.length, operation === "provideImplementation" ? 0 : 1);
+                assert.ok(released && queries.length > 0);
+            }
+            assert.equal(bindingRequests, ["superseded", "unavailable"].includes(mode) ? 2 : 1,
+                `${operation}: ${mode} must have bounded compiler requests`);
+        }
+    }
+});
+
+test("operator navigation keeps the replacement model when its source index cannot map the selected header", async () => {
+    class SemanticTokensLegend {}
+    class Location { constructor(uri, range) { Object.assign(this, { uri, range }); } }
+    class DocumentHighlight { constructor(range, kind) { Object.assign(this, { range, kind }); } }
+    const text = ["Type Operand", "    value As Long", "End Type",
+        "Declare Operator +(ByRef left As Operand, ByRef right As Operand) As Operand",
+        "Dim leftValue As Operand, rightValue As Operand", "Dim combined As Operand = leftValue + rightValue", ""].join("\n");
+    const document = createDocument(text);
+    document.uri = { scheme: "file", fsPath: "/workspace/operator-fallback.bas",
+        toString: () => "file:///workspace/operator-fallback.bas" };
+    const source = new FreeBasicSemanticModel([{ uri: document.uri, parsed: parseFreeBasicText(text) }]);
+    const header = { scheme: "file", fsPath: "/workspace/unindexed-operator.bi",
+        toString: () => "file:///workspace/unindexed-operator.bi" };
+    const target = { uri: header, name: "Operator +", declaration: { name: "Operator +", type: "operator",
+        line: 0, startColumn: 0, endColumn: 10, modifiers: [] } };
+    const position = { line: 5, character: text.split("\n")[5].indexOf("+") };
+    const occurrence = { uri: document.uri, occurrence: { line: 5,
+        startColumn: position.character, endColumn: position.character + 1 } };
+    for (const operation of ["definition", "declaration", "implementation", "references", "highlights"]) {
+        let current, released = false, staleQueries = 0, bindingRequests = 0;
+        const weak = { remote: true, semanticBindingsAvailable: false,
+            expressionAt: async () => ({ operatorKind: "overloaded", operatorCode: "add" }),
+            async query() { if (released) staleQueries++; return null; } };
+        const strong = { remote: true, semanticBindingsAvailable: true,
+            async query(query) {
+                if (query === "compilerSidecarOperatorOperationAt") return { complete: true, operations: [{
+                    targetSymbols: [42], procedures: [{ filePath: header.fsPath, startLine: 1, endLine: 3 }]
+                }] };
+                assert.equal(query, operation === "implementation" ? "definition" : operation);
+                return [operation === "references" || operation === "highlights" ? occurrence : target];
+            } };
+        current = weak;
+        const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, Location, DocumentHighlight }, {
+            getSourceSemanticModel: () => source,
+            compilerAnalysis: { getModel: () => current,
+                getModelForEditor(_document, _token, _types, bindings) {
+                    if (bindings) { bindingRequests++; released = true; current = strong; }
+                    return current;
+                }
+            }
+        }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+        const result = operation === "references"
+            ? await features.reference.provideReferences(document, position, { includeDeclaration: true })
+            : operation === "highlights"
+                ? await features.documentHighlight.provideDocumentHighlights(document, position)
+                : await features[operation]["provide" + operation[0].toUpperCase() + operation.slice(1)](document, position);
+        assert.equal(result.length, 1, operation);
+        assert.equal(bindingRequests, 1, "an unmapped source target must not trigger another compiler pass");
+        assert.equal(staleQueries, 0, "native fallback must use the replacement snapshot");
+    }
+});
+
+test("stock-sidecar index navigation uses the compiler-selected overload without a bridge graph", async () => {
+    class SemanticTokensLegend {}
+    class DocumentHighlight {
+        constructor(range, kind) { Object.assign(this, { range, kind }); }
+    }
+    class Location {
+        constructor(uri, range) { Object.assign(this, { uri, range }); }
+    }
+    const source = [
+        "Type Indexed",
+        "    Declare Operator [](ByVal index As Long) As Long",
+        "    Declare Operator [](ByVal index As Double) As Long",
+        "End Type",
+        "Operator Indexed.[](ByVal index As Long) As Long",
+        "    Return index",
+        "End Operator",
+        "Operator Indexed.[](ByVal index As Double) As Long",
+        "    Return index",
+        "End Operator",
+        "Dim item As Indexed",
+        "Print item[1]",
+        "Print item[CDbl(1)]",
+        "Dim indexPosition As Long",
+        "Print item[indexPosition]"
+    ].join("\n");
+    const document = createDocument(source);
+    document.uri = { scheme: "file", fsPath: "/workspace/index-navigation.bas",
+        toString: () => "file:///workspace/index-navigation.bas" };
+    document.positionAt = (offset) => {
+        const lines = source.slice(0, offset).split("\n");
+        return { line: lines.length - 1, character: lines.at(-1).length };
+    };
+    const sourceModel = new FreeBasicSemanticModel([{ uri: document.uri, parsed: parseFreeBasicText(source) }]);
+    let complete = true;
+    const compilerModel = {
+        remote: true, semanticSidecarOnly: true, semanticBindingsAvailable: true,
+        async query(operation, _uri, input) {
+            if (["definition", "declaration"].includes(operation)) return sourceModel.resolveAt(document.uri, 13, 6);
+            if (["references", "highlights"].includes(operation)) return [{
+                uri: document.uri, occurrence: { line: 14, startColumn: 11, endColumn: 24 }
+            }];
+            if (["compilerSidecarOperatorExpressions", "compilerSidecarOperatorExpressionsInSnapshot"].includes(operation)) return { complete, expressions: [{
+                filePath: document.uri.fsPath, line: 11, startColumn: 6, endLine: 11, endColumn: 13,
+                targetSymbols: [1], procedures: [{ filePath: document.uri.fsPath, startLine: 5, endLine: 7 }]
+            }, {
+                filePath: document.uri.fsPath, line: 12, startColumn: 6, endLine: 12, endColumn: 19,
+                targetSymbols: [2], procedures: [{ filePath: document.uri.fsPath, startLine: 8, endLine: 10 }]
+            }] };
+            assert.equal(operation, "compilerSidecarOperatorExpressionAt");
+            assert.equal(input.position.line, 11, "An operator declaration must not be queried as an index expression.");
+            return { complete, expressions: [{ targetSymbols: [1], procedures: [{
+                filePath: document.uri.fsPath, startLine: 5, endLine: 7
+            }] }] };
+        }
+    };
+    const features = createSemanticFeatures({ ...createVscodeMock(), SemanticTokensLegend, Location,
+        DocumentHighlight, DocumentHighlightKind: { Text: 0 }, Uri: { file: () => document.uri }
+    }, {
+        compilerAnalysis: {
+            analysisCompilerFor: () => ({ semanticModelOnly: true }),
+            getModelForEditor: () => compilerModel,
+            getModel: () => compilerModel
+        },
+        getSourceSemanticModel: () => sourceModel
+    }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const position = { line: 11, character: 11 };
+    const definitions = await features.definition.provideDefinition(document, position);
+    const declarations = await features.declaration.provideDeclaration(document, position);
+    const implementations = await features.implementation.provideImplementation(document, position);
+    assert.deepEqual(definitions.map((entry) => entry.range.start.line), [4]);
+    assert.deepEqual(declarations.map((entry) => entry.range.start.line), [1]);
+    assert.deepEqual(implementations.map((entry) => entry.range.start.line), [4]);
+    const highlights = await features.documentHighlight.provideDocumentHighlights(document, position);
+    assert.ok(highlights.some((entry) => entry.range.start.line === 11));
+    assert.equal(highlights.some((entry) => entry.range.start.line === 12), false);
+    const references = await features.reference.provideReferences(document, position, { includeDeclaration: true });
+    assert.ok(references.some((entry) => entry.range.start.line === 11));
+    assert.equal(references.some((entry) => entry.range.start.line === 12), false);
+    for (const declaration of [{ line: 1, character: 22 }, { line: 4, character: 18 }]) {
+        const declarationReferences = await features.reference.provideReferences(
+            document, declaration, { includeDeclaration: true }
+        );
+        assert.ok(declarationReferences.some((entry) => entry.range.start.line === 11));
+        assert.equal(declarationReferences.some((entry) => entry.range.start.line === 12), false);
+        const declarationHighlights = await features.documentHighlight.provideDocumentHighlights(document, declaration);
+        assert.ok(declarationHighlights.some((entry) => entry.range.start.line === 11));
+        assert.equal(declarationHighlights.some((entry) => entry.range.start.line === 12), false);
+    }
+    const argumentPosition = { line: 14, character: 14 };
+    assert.deepEqual((await features.definition.provideDefinition(document, argumentPosition))
+        .map((entry) => entry.range.start.line), [13]);
+    assert.deepEqual((await features.declaration.provideDeclaration(document, argumentPosition))
+        .map((entry) => entry.range.start.line), [13]);
+    assert.deepEqual((await features.reference.provideReferences(document, argumentPosition, { includeDeclaration: true }))
+        .map((entry) => entry.range.start.line), [14]);
+    assert.deepEqual((await features.documentHighlight.provideDocumentHighlights(document, argumentPosition))
+        .map((entry) => entry.range.start.line), [14]);
+    complete = false;
+    assert.deepEqual(await features.definition.provideDefinition(document, position), []);
+    assert.deepEqual(await features.documentHighlight.provideDocumentHighlights(document, position), []);
+    assert.deepEqual(await features.reference.provideReferences(document, position, { includeDeclaration: true }), []);
 });
 
 test("stock-sidecar document highlights request bindings for NOKEYWORD identifiers", async () => {
@@ -11229,7 +12659,13 @@ test("stock-sidecar document highlights request bindings for NOKEYWORD identifie
         }
     }, { keywords: ["print"], types: [], operatorKeywords: [], constants: [] });
 
-    const highlights = await features.documentHighlight.provideDocumentHighlights(document, { line: 5, character: 6 });
+    const position = { line: 5, character: 6 };
+    const offsetAt = document.offsetAt;
+    document.offsetAt = (actual) => {
+        assert.equal(actual, position, "offsetAt must receive the editor's Position, not a synthesized plain object");
+        return offsetAt(actual);
+    };
+    const highlights = await features.documentHighlight.provideDocumentHighlights(document, position);
     assert.deepEqual(highlights.map((highlight) => highlight.kind), [0, 2, 2, 1]);
     assert.deepEqual(requests, [[false, true, false]]);
     assert.deepEqual(queries, ["highlights"]);
@@ -11591,12 +13027,12 @@ test("stock-sidecar Signature Help requests the selected constructor for Return 
         "nested aliased constructor calls should request the compiler-selected signature");
     assert.match(nestedHelp.signatures[0].label, /ByVal wholeCount As Long/);
     assert.deepEqual(requests, [
-        { needTypes: false, needBindings: true, needMacroBindings: undefined },
-        { needTypes: false, needBindings: true, needMacroBindings: undefined },
-        { needTypes: false, needBindings: true, needMacroBindings: undefined },
-        { needTypes: false, needBindings: true, needMacroBindings: undefined },
-        { needTypes: false, needBindings: true, needMacroBindings: undefined },
-        { needTypes: false, needBindings: true, needMacroBindings: undefined }
+        { needTypes: false, needBindings: true, needMacroBindings: false },
+        { needTypes: false, needBindings: true, needMacroBindings: false },
+        { needTypes: false, needBindings: true, needMacroBindings: false },
+        { needTypes: false, needBindings: true, needMacroBindings: false },
+        { needTypes: false, needBindings: true, needMacroBindings: false },
+        { needTypes: false, needBindings: true, needMacroBindings: false }
     ], "source-resolved constructor calls should request binding-capable sidecar overload selection");
     assert.deepEqual(queries, ["signature", "signature", "signature", "signature", "signature", "signature"]);
 });
@@ -11875,7 +13311,7 @@ test("Go to Definition extends a project-local prototype to its configured imple
     assert.deepEqual(queries, ["definition", "implementation", "definition", "definition"]);
 });
 
-test("semantic tokens reuse cached stock-sidecar read/write access roles", async () => {
+test("semantic tokens reuse cached stock-sidecar read/write and readonly facts", async () => {
     class SemanticTokensLegend {
         constructor(types, modifiers) { Object.assign(this, { types, modifiers }); }
     }
@@ -11922,6 +13358,7 @@ test("semantic tokens reuse cached stock-sidecar read/write access roles", async
         references: () => references
     };
     const bindingRequests = [];
+    let readonlyMode = false;
     const cachedSidecarModel = {
         remote: true,
         semanticSidecarOnly: true,
@@ -11930,6 +13367,7 @@ test("semantic tokens reuse cached stock-sidecar read/write access roles", async
             bindingRequests.push(operation);
             if (operation === "compilerSidecarAccessRolesAtSites") {
                 assert.equal(input.sites.length, 2);
+                if (readonlyMode) return [{ index: 0, role: "write" }, { index: 1, readonly: true }];
                 return [{ index: 0, role: "write" }, { index: 1, role: "read" }];
             }
             assert.equal(operation, "highlights");
@@ -11968,6 +13406,75 @@ test("semantic tokens reuse cached stock-sidecar read/write access roles", async
     assert.deepEqual(modelRequests, [[false, false]],
         "document highlights should reuse the cached binding-capable sidecar without requesting another model");
     assert.deepEqual(bindingRequests, ["compilerSidecarAccessRolesAtSites", "highlights"]);
+    readonlyMode = true;
+    const readonlyTokens = await features.semanticTokens.provideDocumentSemanticTokens(document);
+    assert.ok(readonlyTokens[1].modifiers.includes("readonly"), "readonly facts need no ACC read/write record");
+    assert.ok(readonlyTokens[0].modifiers.includes("modification"));
+    assert.deepEqual(modelRequests, [[false, false], [false, false]], "readonly coloring must not request binding analysis");
+});
+
+test("source hover and Call Hierarchy keep index arguments separate from the operator", async () => {
+    class SemanticTokensLegend {}
+    class MarkdownString {
+        constructor(value = "") { this.value = value; }
+        appendMarkdown(value) { this.value += value; }
+        appendCodeblock(value) { this.value += `\n${value}\n`; }
+    }
+    class Hover { constructor(contents) { this.contents = contents; } }
+    class Location { constructor(uri, range) { Object.assign(this, { uri, range }); } }
+    class CallHierarchyItem {
+        constructor(kind, name, detail, uri, range, selectionRange) {
+            Object.assign(this, { kind, name, detail, uri, range, selectionRange });
+        }
+    }
+    const text = [
+        "Type IndexedValue",
+        "    value As Double",
+        "    Declare Operator [](ByVal index As Long) As Double",
+        "End Type",
+        "Function ReadIndex() As Long",
+        "    Return 1",
+        "End Function",
+        "Dim item As IndexedValue",
+        "Dim indexChoice As Long",
+        "Print item[indexChoice]",
+        "Print item[ReadIndex()]"
+    ].join("\n");
+    const document = createDocument(text);
+    document.uri = { scheme: "file", fsPath: "/workspace/index-arguments.bas",
+        toString: () => "file:///workspace/index-arguments.bas" };
+    document.positionAt = (offset) => {
+        const prefix = text.slice(0, offset);
+        return { line: prefix.split("\n").length - 1, character: offset - prefix.lastIndexOf("\n") - 1 };
+    };
+    const parsed = parseFreeBasicText(text);
+    const model = new FreeBasicSemanticModel([{ uri: document.uri, parsed }]);
+    const index = {
+        getParsedDocument: () => parsed,
+        getSemanticModel: () => model,
+        getSourceSemanticModel: () => model,
+        ensureInitialized: async () => true,
+        isIncomplete: () => false
+    };
+    const vscode = { ...createVscodeMock(), SemanticTokensLegend, MarkdownString, Hover, Location, CallHierarchyItem };
+    const features = createSemanticFeatures(vscode, index, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const argument = { line: 9, character: 14 };
+    const hover = await createHoverProvider(vscode, index, {}).provideHover(document, argument);
+    assert.match(hover.contents.value, /Dim indexChoice As Long/i);
+    assert.doesNotMatch(hover.contents.value, /Operator/i);
+    index.compilerAnalysis = {
+        analysisCompilerFor: () => ({ semanticModelOnly: true }),
+        getModelForEditor: () => null,
+        getModel: () => null
+    };
+    const stockHover = await createHoverProvider(vscode, index, {}).provideHover(document, argument);
+    assert.match(stockHover.contents.value, /Dim indexChoice As Long/i,
+        "ordinary variable hover must accept semantic documents without VS Code's lineAt method");
+    assert.deepEqual(await features.callHierarchy.prepareCallHierarchy(document, argument), []);
+    assert.deepEqual((await features.definition.provideDefinition(document, argument))
+        .map((entry) => entry.range.start.line), [8]);
+    const nestedCall = await features.callHierarchy.prepareCallHierarchy(document, { line: 10, character: 13 });
+    assert.deepEqual(nestedCall.map((entry) => entry.name), ["ReadIndex"]);
 });
 
 test("remote Call Hierarchy prepares ordinary calls without building the source index", async () => {
@@ -12108,6 +13615,13 @@ test("stock-sidecar Call Hierarchy follows a bare call with omitted optional arg
         getSourceSemanticModel: () => sourceModel
     };
     const baseVscode = createVscodeMock();
+    let opened = 0;
+    const workspace = { ...baseVscode.workspace, textDocuments: [document], async openTextDocument(uri) {
+        assert.equal(uri.toString(), document.uri.toString());
+        opened++;
+        this.textDocuments.push(document);
+        return document;
+    } };
     const features = createSemanticFeatures({
         ...baseVscode,
         CallHierarchyItem,
@@ -12115,7 +13629,7 @@ test("stock-sidecar Call Hierarchy follows a bare call with omitted optional arg
         CallHierarchyOutgoingCall,
         SemanticTokensLegend,
         SymbolKind: { File: 1, Function: 11 },
-        workspace: { ...baseVscode.workspace, textDocuments: [document] }
+        workspace
     }, index, { keywords: [], types: [], operatorKeywords: [], constants: [] });
     const functionItem = await features.callHierarchy.prepareCallHierarchy(document, { line: 6, character: 29 });
     assert.equal(functionItem.length, 1);
@@ -12135,6 +13649,40 @@ test("stock-sidecar Call Hierarchy follows a bare call with omitted optional arg
     assert.deepEqual(callees.map((callee) => [callee.to.name, callee.fromRanges.length]), [
         ["OptionalValue", 1], ["OptionalAction", 1]
     ]);
+    workspace.textDocuments.length = 0;
+    assert.deepEqual((await features.callHierarchy.provideCallHierarchyIncomingCalls(functionItem[0]))
+        .map((caller) => [caller.from.name, caller.fromRanges.length]), [["Caller", 1]],
+    "closed functions must retain compiler-selected bare calls with omitted arguments");
+    assert.equal(opened, 1);
+    workspace.textDocuments.length = 0;
+    assert.deepEqual((await features.callHierarchy.provideCallHierarchyOutgoingCalls(callerItem[0]))
+        .map((callee) => [callee.to.name, callee.fromRanges.length]), [["OptionalValue", 1], ["OptionalAction", 1]]);
+    assert.equal(opened, 2);
+});
+
+test("Signature Help supports bare qualified and continued procedure arguments", async () => {
+    class SignatureHelp { constructor() { this.signatures = []; } }
+    class SignatureInformation { constructor(label) { this.label = label; this.parameters = []; } }
+    class ParameterInformation { constructor(label) { this.label = label; } }
+    const text = 'Namespace BareScope\nDeclare Sub Work(ByVal first As Long, ByVal second As String, ByVal third As Long = 0)\nEnd Namespace\n' +
+        'BareScope.Work 1, _\n "x,y", _\n 3\n';
+    const document = createDocument(text);
+    document.uri = { scheme: "file", fsPath: "/workspace/bare-help.bas", toString: () => "file:///workspace/bare-help.bas" };
+    document.positionAt = (offset) => { const prefix = text.slice(0, offset).split("\n"); return { line: prefix.length - 1, character: prefix.at(-1).length }; };
+    const model = new FreeBasicSemanticModel([{ uri: document.uri, parsed: parseFreeBasicText(text) }]);
+    const index = { getParsedDocument: () => parseFreeBasicText(text), ensureInitialized: async () => true, getSemanticModel: () => model,
+        getSourceSemanticModel: () => model };
+    const provider = createSignatureHelpProvider({ ...createVscodeMock(), SignatureHelp, SignatureInformation, ParameterInformation }, index);
+    const help = await provider.provideSignatureHelp(document, { line: 5, character: 2 });
+    assert.ok(help);
+    assert.match(help.signatures[0].label, /Sub Work\(/i);
+    assert.equal(help.activeParameter, 2);
+    const sleep = createDocument("Sleep 1, ");
+    sleep.uri = document.uri;
+    sleep.positionAt = (offset) => ({ line: 0, character: offset });
+    const builtin = await provider.provideSignatureHelp(sleep, { line: 0, character: sleep.getText().length });
+    assert.ok(builtin?.signatures.length);
+    assert.equal(builtin.activeParameter, 1);
 });
 
 test("Signature Help skips compiler analysis when a trigger is outside a call", async () => {
@@ -12147,11 +13695,62 @@ test("Signature Help skips compiler analysis when a trigger is outside a call", 
             }
         }
     });
-    const document = createDocument("first, second\n");
-    const help = await provider.provideSignatureHelp(document, { line: 0, character: 9 });
-
-    assert.equal(help, null);
+    for (const text of ["first, second", "Dim value As Long, other As Long", "Return value, other", "' Work 1, ", 'Work "unfinished,']) {
+        const document = createDocument(text);
+        const help = await provider.provideSignatureHelp(document, { line: 0, character: text.length });
+        assert.equal(help, null, text);
+    }
     assert.equal(modelRequests, 0);
+});
+
+test("Signature Help follows a superseded native constructor binding upgrade", async () => {
+    class SignatureHelp {}
+    class SignatureInformation { constructor(label) { this.label = label; } }
+    class ParameterInformation { constructor(label) { this.label = label; } }
+    const document = createDocument("Dim value As Choice Ptr = New Choice(CDbl(5))\n");
+    document.uri = { scheme: "file", fsPath: "/workspace/constructor-upgrade.bas",
+        toString: () => "file:///workspace/constructor-upgrade.bas" };
+    const declaration = (typeName, id) => ({ compilerSymbolId: id,
+        declaration: { type: "constructor", name: "Choice", signature: `Constructor Choice(ByVal source As ${typeName})`,
+            parameters: [{ name: "source", label: `ByVal source As ${typeName}`, typeName }], modifiers: [] } });
+    const entries = [declaration("Long", 1), declaration("Double", 2)];
+    const context = { name: "Choice", activeParameter: 0 };
+    const strong = { remote: true, semanticSidecarOnly: false, semanticBindingsAvailable: true,
+        query: async () => ({ context, entries: [entries[1]], selectedCompilerSymbolId: 2 }) };
+    const source = new FreeBasicSemanticModel([{ uri: document.uri, parsed: parseFreeBasicText(document.getText()) }]);
+    for (const retained of [true, false]) {
+        let requests = 0, weakQueries = 0;
+        const weak = { remote: true, semanticSidecarOnly: false, semanticBindingsAvailable: false,
+            query: async () => { weakQueries++; return { context, entries }; } };
+        const analysis = {
+            generation: 0,
+            getModelForEditor: async (_document, _token, needTypes, needBindings) => {
+                assert.equal(needTypes, false);
+                assert.equal(needBindings, true);
+                requests++;
+                if (requests === 1) {
+                    if (!retained) analysis.generation++;
+                    return null;
+                }
+                return strong;
+            },
+            getModel: () => retained ? weak : null,
+            analysisCompilerFor: () => ({ semanticModelOnly: false })
+        };
+        const provider = createSignatureHelpProvider({ ...createVscodeMock(), SignatureHelp, SignatureInformation, ParameterInformation }, {
+            compilerAnalysis: analysis,
+            getParsedDocument: () => parseFreeBasicText(document.getText()),
+            ensureInitialized: async () => true,
+            getSemanticModel: () => source
+        });
+        const result = await provider.provideSignatureHelp(document,
+            { line: 0, character: document.getText().indexOf("Choice(CDbl") + "Choice(".length });
+        assert.ok(result, retained ? "retained weak predecessor" : "cleared predecessor after invalidation");
+        assert.equal(result.signatures.length, 1);
+        assert.match(result.signatures[0].label, /source As Double/);
+        assert.equal(weakQueries, 0, "a weak cached model cannot satisfy a request for selected-constructor facts");
+        assert.equal(requests, 2, "a superseded upgrade gets one bounded retry");
+    }
 });
 
 test("Signature Help activates the compiler-selected ordinary overload", async () => {
@@ -12588,6 +14187,41 @@ test("Inlay Hints render compiler-selected parameter names on positional argumen
     assert.deepEqual(requests, ["compilerInlayHints"]);
 });
 
+test("parameter hint labels link only validated physical declaration locations", async () => {
+    class Position { constructor(line, character) { Object.assign(this, { line, character }); } }
+    class InlayHint { constructor(position, label, kind) { Object.assign(this, { position, label, kind }); } }
+    class InlayHintLabelPart { constructor(value) { this.value = value; } }
+    class Location { constructor(uri, range) { Object.assign(this, { uri, range }); } }
+    const location = { filePath: "/workspace/api.bi", line: 2, startColumn: 20, endColumn: 31 };
+    let declarationLocation = location;
+    const model = { remote: true, async query() { return { types: [], parameters: [{
+        position: { line: 0, character: 18 }, label: "wholeNumber:", parameterName: "wholeNumber",
+        passingMode: "byval", declarationLocation
+    }] }; } };
+    const index = {
+        compilerAnalysis: { getModel: () => null, analysisCompilerFor: () => ({ semanticModelOnly: false }),
+            getModelForEditor: () => model },
+        getParsedDocument: (document) => parseFreeBasicText(document.getText())
+    };
+    const provider = createInlayHintsProvider({ ...createVscodeMock(), Position, InlayHint, InlayHintLabelPart, Location,
+        InlayHintKind: { Type: 1, Parameter: 2 } }, index);
+    const document = createDocument("Print SelectValue(1)\n");
+    document.uri = { scheme: "file", fsPath: "/workspace/calls.bas", toString: () => "file:///workspace/calls.bas" };
+    const range = { start: { line: 0, character: 0 }, end: { line: 0, character: document.lineAt(0).text.length } };
+    const [hint] = await provider.provideInlayHints(document, range);
+    assert.ok(Array.isArray(hint.label));
+    assert.equal(hint.label[0].value, "wholeNumber:");
+    assert.equal(hint.label[0].location.uri.fsPath, location.filePath);
+    assert.deepEqual(hint.label[0].location.range, new Range(2, 20, 2, 31));
+    assert.equal(hint.tooltip, "Compiler-selected parameter: wholeNumber (ByVal).");
+    for (const invalid of [undefined, { ...location, filePath: "relative.bi" }, { ...location, filePath: "/bad\0path.bi" },
+        { ...location, line: -1 }, { ...location, startColumn: 31 }, { ...location, endColumn: 1.5 }]) {
+        declarationLocation = invalid;
+        assert.equal((await provider.provideInlayHints(document, range))[0].label, "wholeNumber:",
+            "unknown or malformed locations must retain the ordinary text hint");
+    }
+});
+
 test("FBC FOR-entry semantics mark a skipped loop body with an inline hint", async () => {
     class Position {
         constructor(line, character) { Object.assign(this, { line, character }); }
@@ -12708,6 +14342,53 @@ test("stock FBC sidecar supplies compiler-confirmed skipped-FOR hints", async ()
     assert.ok(typeHint);
     assert.deepEqual(typeHint.position, new Position(0, loopIndexStart + "loopIndex".length));
     assert.match(typeHint.tooltip, /compiler-selected type: Integer/);
+});
+
+test("constant IF inlays request current compiler facts and refuse dirty stock inputs", async () => {
+    class Position { constructor(line, character) { Object.assign(this, { line, character }); } }
+    class InlayHint { constructor(position, label) { Object.assign(this, { position, label }); } }
+    for (const semanticModelOnly of [true, false]) {
+        const document = createDocument("If 0 Then Print 1\n");
+        document.uri = { scheme: "file", fsPath: "/workspace/constant-if.bas", toString: () => "file:///workspace/constant-if.bas" };
+        const requests = [];
+        const model = { remote: true, semanticSidecarOnly: semanticModelOnly, semanticBindingsAvailable: true,
+            async query(operation, _uri, input) {
+                assert.equal(operation, "compilerInlayHints");
+                assert.equal(input.parameterHints, false);
+                return { types: [], parameters: [], ifConditions: [{ position: { line: 0, character: 4 },
+                    label: "always false", tooltip: "The compiler proves this predicate is always false." }] };
+            }
+        };
+        const provider = createInlayHintsProvider({ Position, InlayHint }, {
+            compilerAnalysis: {
+                getModel: () => null,
+                analysisCompilerFor: () => ({ semanticModelOnly }),
+                getModelForEditor(_document, _token, types, bindings) {
+                    requests.push([types, bindings]);
+                    return model;
+                }
+            }, getParsedDocument: (current) => parseFreeBasicText(current.getText())
+        });
+        const range = { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } };
+        const hints = await provider.provideInlayHints(document, range);
+        assert.deepEqual(requests, [[false, true]]);
+        assert.deepEqual(hints.map((hint) => [hint.position, hint.label]), [[new Position(0, 4), "always false"]]);
+        assert.match(hints[0].tooltip, /compiler proves/);
+        assert.equal(hints[0].paddingLeft, true);
+        for (const source of ["#if 0\nDim value As Long\n#endif\n", "End If\n"]) {
+            const nonPredicate = createDocument(source);
+            nonPredicate.uri = document.uri;
+            assert.deepEqual(await provider.provideInlayHints(nonPredicate, {
+                start: { line: 0, character: 0 }, end: { line: 1, character: 0 }
+            }), [], "preprocessor directives and closing statements must not request runtime predicate analysis");
+            assert.equal(requests.length, 1);
+        }
+        if (semanticModelOnly) {
+            document.isDirty = true;
+            assert.deepEqual(await provider.provideInlayHints(document, range), []);
+            assert.equal(requests.length, 1, "unsaved stock inputs must not trigger disk-backed analysis");
+        }
+    }
 });
 
 test("FBC control-flow hints mark only compiler-proven unreachable statements", async () => {
@@ -13435,6 +15116,27 @@ test("native bridge requests type hints for an unsaved FBLite first-read variabl
         "the native bridge should analyze an unsaved first-read local even though it is not a write statement");
 });
 
+test("Inlay Hints expose model refresh notifications even before producing hints", async () => {
+    const listeners = new Set();
+    const onDidChangeModel = (listener) => {
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+    };
+    const provider = createInlayHintsProvider({}, {
+        onDidChangeModel,
+        compilerAnalysis: { getModelForEditor() { assert.fail("a refresh notification must not compile by itself"); } }
+    });
+    assert.equal(provider.onDidChangeInlayHints, onDidChangeModel,
+        "VS Code must retain the empty provider and refresh it after compiler/context changes");
+    let refreshes = 0;
+    const subscription = provider.onDidChangeInlayHints(() => refreshes++);
+    for (const listener of listeners) listener();
+    assert.equal(refreshes, 1);
+    subscription.dispose();
+    for (const listener of listeners) listener();
+    assert.equal(refreshes, 1, "the registration owns and disposes its refresh subscription");
+});
+
 test("stock FBC Inlay Hints request bindings only for visible calls and render selected names", async () => {
     class Position {
         constructor(line, character) { Object.assign(this, { line, character }); }
@@ -13487,13 +15189,70 @@ test("stock FBC Inlay Hints request bindings only for visible calls and render s
     assert.deepEqual(hints.map((hint) => hint.label), ["wholeNumber:", "fraction:"]);
     assert.ok(hints.every((hint) => hint.kind === 2 && hint.paddingRight));
 
+    for (const text of [
+        "ParameterTarget 7, 2.5\n",
+        "ParameterTarget\t7, 2.5\n",
+        "Scoped.ParameterTarget 7, 2.5\n",
+        "receiver->ParameterTarget 7, 2.5\n",
+        "If 1 Then ParameterTarget 7, 2.5 Else ParameterTarget 8, 3.5\n",
+        'ParameterTarget "literal only"\n'
+    ]) {
+        analysisRequests.length = 0;
+        operations.length = 0;
+        const bare = createDocument(text);
+        bare.uri = document.uri;
+        const bareHints = await provider.provideInlayHints(bare, {
+            start: { line: 0, character: 0 }, end: { line: 0, character: bare.lineAt(0).text.length }
+        });
+        assert.deepEqual(analysisRequests, [[false, true]], text);
+        assert.deepEqual(operations, ["compilerInlayHints"], text);
+        assert.equal(bareHints.length, 2, text);
+    }
+
     analysisRequests.length = 0;
-    const noCalls = createDocument("Dim explicitValue As Long\n");
-    noCalls.uri = { scheme: "file", fsPath: "/workspace/no-sidecar-inlays.bas", toString: () => "file:///workspace/no-sidecar-inlays.bas" };
-    assert.deepEqual(await provider.provideInlayHints(noCalls, {
-        start: { line: 0, character: 0 }, end: { line: 0, character: noCalls.lineAt(0).text.length }
-    }), []);
+    index.getSourceSemanticModel = () => ({ resolveAt: () => [{ declaration: { type: "variable", typeName: "Long" } }] });
+    for (const text of ["Dim explicitValue As Long\n", "explicitValue = 7\n", "Print 1, 2\n", "' ParameterTarget 1, 2\n"]) {
+        const noCalls = createDocument(text);
+        noCalls.uri = { scheme: "file", fsPath: "/workspace/no-sidecar-inlays.bas", toString: () => "file:///workspace/no-sidecar-inlays.bas" };
+        assert.deepEqual(await provider.provideInlayHints(noCalls, {
+            start: { line: 0, character: 0 }, end: { line: 0, character: noCalls.lineAt(0).text.length }
+        }), [], text);
+    }
     assert.deepEqual(analysisRequests, [], "a range with no calls should not start a sidecar binding pass");
+});
+
+test("native parameter hints request receiver facts only for visible member calls", async () => {
+    for (const cached of [false, true]) {
+        for (const [text, bindings] of [
+            ["ParameterTarget 7, 2.5", false],
+            ["receiver.ParameterTarget 7, 2.5", true],
+            ["receiver->ParameterTarget(7, 2.5)", true],
+            ['receiver.ParameterTarget "literal only"', true]
+        ]) {
+            const requests = [];
+            const model = {
+                remote: true, semanticSidecarOnly: false,
+                query: async () => ({ types: [], parameters: [] })
+            };
+            const document = createDocument(text);
+            document.uri = { scheme: "file", fsPath: "/workspace/native-inlays.bas", toString: () => "file:///workspace/native-inlays.bas" };
+            const provider = createInlayHintsProvider({}, {
+                compilerAnalysis: {
+                    getModel: () => cached ? model : null,
+                    analysisCompilerFor: () => ({ semanticModelOnly: false }),
+                    getModelForEditor(_document, _token, expressions, needBindings) {
+                        requests.push([expressions, needBindings]);
+                        return model;
+                    }
+                },
+                getParsedDocument: (current) => parseFreeBasicText(current.getText())
+            });
+            assert.deepEqual(await provider.provideInlayHints(document, {
+                start: { line: 0, character: 0 }, end: { line: 0, character: text.length }
+            }), []);
+            assert.deepEqual(requests, [[true, bindings]], `${cached ? "cached" : "cold"}: ${text}`);
+        }
+    }
 });
 
 test("stock FBC Inlay Hints request full macro facts only for source macro calls", async () => {
@@ -13751,6 +15510,64 @@ test("include links resolve paths relative to the current source file", () => {
     );
 
     assert.equal(resolvedPath, path.join(__dirname, "fixtures", "dim-forms.bas"));
+});
+
+test("include completions retain valid quoted operands and repair incomplete or C-style delimiters", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-include-completion-test-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const sourceDirectory = path.join(directory, "source");
+    fs.mkdirSync(sourceDirectory);
+    fs.mkdirSync(path.join(sourceDirectory, "headers"));
+    fs.writeFileSync(path.join(sourceDirectory, "alpha.bi"), "");
+    fs.writeFileSync(path.join(sourceDirectory, "headers", "alpha.bi"), "");
+    fs.writeFileSync(path.join(sourceDirectory, "alpha.txt"), "");
+    if (process.platform !== "win32") {
+        for (const name of ['alpha"broken.bi', "alpha\nbroken.bi", "alpha\\broken.bi"]) {
+            fs.writeFileSync(path.join(sourceDirectory, name), "");
+        }
+    }
+    const vscode = {
+        ...createVscodeMock(),
+        CompletionItem: class { constructor(label, kind) { Object.assign(this, { label, kind }); } },
+        CompletionItemKind: { File: 17, Folder: 18 },
+        TextEdit: { replace: (range, newText) => ({ range, newText }) }
+    };
+    vscode.workspace.getWorkspaceFolder = () => ({ uri: { fsPath: directory } });
+    const provider = createCompletionProvider(vscode, {}, {});
+    const applyCompletion = (source, item) => {
+        const edits = [{ range: item.range, newText: item.insertText }, ...(item.additionalTextEdits || [])]
+            .sort((first, second) => second.range.start.character - first.range.start.character);
+        for (const edit of edits) source = source.slice(0, edit.range.start.character) + edit.newText + source.slice(edit.range.end.character);
+        return source;
+    };
+    for (const [input, expected] of [
+        ['#include once "al|"', '#include once "alpha.bi"'],
+        ['#include "al|', '#include "alpha.bi"'],
+        ['#include <al|>', '#include "alpha.bi"'],
+        ['#include <al|', '#include "alpha.bi"'],
+        ['#include <al|pha.bi> \' keep comment', '#include "alpha.bi" \' keep comment'],
+        ['#include "headers/al|"', '#include "headers/alpha.bi"'],
+        ['#include <headers/al|>', '#include "headers/alpha.bi"'],
+        ['#include "al|>', '#include "alpha.bi"']
+    ]) {
+        const source = input.replace("|", "");
+        const document = createDocument(source);
+        document.uri = { scheme: "file", fsPath: path.join(sourceDirectory, "main.bas") };
+        document.version = 1;
+        const items = await provider.provideCompletionItems(document, { line: 0, character: input.indexOf("|") });
+        assert.equal(items.length, 1, `only the literal-safe matching header should be offered for ${input}`);
+        assert.equal(applyCompletion(source, items[0]), expected, input);
+    }
+    for (const input of ['#include "hea|', '#include <hea|>']) {
+        const source = input.replace("|", "");
+        const document = createDocument(source);
+        document.uri = { scheme: "file", fsPath: path.join(sourceDirectory, "main.bas") };
+        const items = await provider.provideCompletionItems(document, { line: 0, character: input.indexOf("|") });
+        const folder = items.find((item) => item.kind === vscode.CompletionItemKind.Folder);
+        assert.ok(folder);
+        assert.equal(applyCompletion(source, folder), input.includes(">") ? '#include "headers/"' : '#include "headers/');
+        assert.equal(folder.command.command, "editor.action.triggerSuggest");
+    }
 });
 
 test("compiler FOR/NEXT mismatch offers removal and only an exact active-counter correction", async () => {

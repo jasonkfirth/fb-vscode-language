@@ -13,7 +13,7 @@ const fs = require("fs");
 const os = require("os");
 const { execFileSync } = require("node:child_process");
 const { executeBoundedProcess } = require("../lib/compiler-diagnostics");
-const { MAX_ANALYSIS_BYTES, analysisArguments, analyzeSavedModule, decodeCompilerSourceBuffer, decodePreprocessed } = require("../lib/compiler-analysis");
+const { MAX_ANALYSIS_BYTES, analysisArguments, analyzeSavedModule, compilerSemanticTemporaryConstructions, decodeCompilerSourceBuffer, decodePreprocessed } = require("../lib/compiler-analysis");
 const { CompilerSemanticModel } = require("../lib/compiler-semantic-model");
 const { CompilerUri } = require("../lib/compiler-model-store");
 const { ARCHITECTURE_ARGUMENTS, isBoundedAnalysisFailure, isIncompleteAnalysisFailure, measureExpressionCoverage, measureSemanticSidecarCoverage, measureSemanticBindingCoverage, measureSemanticCallKindCoverage, semanticCallKindCoverageFailures, parseNativeCorpusArguments } = require("../tools/audit-native-corpus");
@@ -32,11 +32,43 @@ const { SCOPE_FILES, instrumentScopes } = require("../tools/compiler-scope-hooks
 const { MACRO_FILES, instrumentMacros } = require("../tools/compiler-macro-hooks");
 const { PREPROCESSOR_FILES, instrumentPreprocessor } = require("../tools/compiler-preprocessor-hooks");
 const { createSymbolDecoder } = require("../lib/compiler-symbols");
+const { projectNativeTokens } = require("../lib/compiler-origins");
 
 function uri(filePath) { return { fsPath: filePath, toString: () => `file://${filePath}` }; }
 function marker(file, line, generated = false) { return `''@fb-editor-v1 ${line + 1} ${generated ? 1 : 0} ${Buffer.from(file).toString("hex")}`; }
 function marker2(file, serial, line, generated = false) { return marker(file, line, generated).replace("v1", `v2 ${serial}`); }
 function binding(kind, serial, column, id, name) { return `''@fb-editor-bind ${kind} ${serial} ${column} ${id} ${Buffer.from(name).toString("hex")}`; }
+
+test("temporary construction inputs require closed observations and mapped source receipts", () => {
+    const fixture = () => ({ schemaVersion: 27, recovery: false,
+        capabilities: [{ module: 1, feature: "temporary-construction-inputs", coverage: "available" }],
+        sourceContexts: [{ id: 4, file: 2, module: 1 }], sourceFiles: [{ id: 2, kind: "regular", filePath: "/workspace/main.bas" }],
+        properties: [{ module: 1, domain: "symbol", identity: 7, name: "temporary-construction:1", value: "11\t3\t4\t0" },
+            { module: 1, domain: "symbol", identity: 1, name: "temporary-construction-count:1", value: "1" }],
+        physicalLocations: [{ domain: "source-context", subject: 4, role: "temporary-construction:1", source: 4,
+            startLine: 8, startColumn: 9, endLine: 8, endColumn: 14, status: "mapped" }]
+    });
+    assert.deepEqual(compilerSemanticTemporaryConstructions(fixture(), "/workspace"), [{ kind: "explicit-constructor",
+        owner: 7, type: 7, target: 11, physical: true, filePath: "/workspace/main.bas",
+        startLine: 8, startColumn: 9, endLine: 8, endColumn: 14 }]);
+    for (const mutate of [
+        (sidecar) => { sidecar.recovery = true; },
+        (sidecar) => { sidecar.properties.pop(); },
+        (sidecar) => { sidecar.properties[1].value = "2"; },
+        (sidecar) => { sidecar.properties[1].value = "5001"; },
+        (sidecar) => { sidecar.properties.push(sidecar.properties[0]); },
+        (sidecar) => { sidecar.properties[0].provisional = true; },
+        (sidecar) => { sidecar.properties[0].value = "11\t3\t4\t1"; },
+        (sidecar) => { sidecar.properties[0].value = "11\t3\t99\t0"; },
+        (sidecar) => { sidecar.physicalLocations = []; },
+        (sidecar) => { sidecar.physicalLocations[0].status = "unmapped"; },
+        (sidecar) => { sidecar.physicalLocations.push(sidecar.physicalLocations[0]); }
+    ]) {
+        const sidecar = fixture();
+        mutate(sidecar);
+        assert.deepEqual(compilerSemanticTemporaryConstructions(sidecar, "/workspace"), []);
+    }
+});
 
 test("expression type coverage audit checks deduplicated ranges and native identities", () => {
     const position = (character) => ({ line: 0, character });
@@ -534,7 +566,7 @@ test("compiler selected-call inventory assigns every active implicit call builde
     assert.deepEqual(report.implicitCallRoutes.supportedKinds, report.implicitCallRoutes.emittedKinds);
     assert.deepEqual(report.implicitCallRoutes.supportedKinds, [
         "argument-constructor", "default-constructor", "delete-destructor", "destructor-call",
-        "initializer-constructor", "new-constructor", "return-constructor",
+        "initializer-constructor", "new-constructor", "redim-constructor", "return-constructor",
         "scope-exit-destructor", "temporary-destructor"
     ]);
     const routeByKey = new Map(report.routes.map((route) => [route.routeKey, route]));
@@ -717,6 +749,28 @@ test("native QB REM-suffixed symbols remain analyzable but cannot be renamed fro
         [{ uri: uri(filePath), text: fs.readFileSync(filePath, "utf8") }]
     );
     assert.ok(model);
+});
+
+test("literal origin receipts never become identifier or recovery projections", () => {
+    const filePath = path.resolve("literal-anchor.bas");
+    const sourceUri = uri(filePath);
+    const text = '"looksLikeName"';
+    /* A presentation lexer can lack the compiler's escape options. Even if it
+       exposes a word inside a literal, the native literal must remain opaque. */
+    const token = { kind: "identifier", name: "looksLikeName", key: "lookslikename", offset: 1,
+        end: text.length - 1, line: 0, startColumn: 1, endColumn: text.length - 1, index: 0 };
+    for (const invalid of [false, true]) {
+        const document = { uri: sourceUri, text, tokens: [token], lineOffsets: [0] };
+        const model = { sources: new Map([[sourceUri.toString(), document]]), sourceEpochs: new Map(),
+            sourceToExpanded: new Map(), expandedToSource: new Map(),
+            recoverySourceToExpanded: new Map(), recoveryExpandedToSource: new Map() };
+        projectNativeTokens(model, [{ kind: "source", sourceMap: 0, filePath,
+            sourceStart: 0, sourceEnd: Buffer.byteLength(text), start: { line: 0, character: 0 },
+            end: { line: 0, character: text.length }, epoch: 1, invalid }], document);
+        for (const mapping of [model.sourceToExpanded, model.expandedToSource, model.recoverySourceToExpanded,
+            model.recoveryExpandedToSource, model.sourceEpochs]) assert.equal(mapping.size, 0);
+        assert.equal(document.compilerLiteralCompletionAnchors.length, 1);
+    }
 });
 
 test("physical token decoding validates origins independently of logical lines", () => {
@@ -1087,8 +1141,8 @@ test("compiler hooks still match the pinned compiler source", () => {
         assert.match(graph["ast-node-arg.bas"], /fbSemanticModelExportImplicitCall\(param, astGetSymbol\(arg\), "argument-constructor", editor_semantic_site\)/);
     }
     assert.match(graph["ast-node-idx.bas"], /editorOriginal_astNewIDX/);
-    const nativeSemanticMemoryOperations = readCompilerSource("parser-quirk-mem.bas")
-        .includes("fbSemanticModelExportOperation(semantic_operator,");
+    const nativeSemanticMemoryOperations = /fbSemanticModel(?:ExportOperation|SourceMemoryApplication)\(semantic_operator,/
+        .test(readCompilerSource("parser-quirk-mem.bas"));
     assert.match(graph["ast-node-mem.bas"], nativeSemanticMemoryOperations
         ? /semantic_operator = operator_call/
         : /editor_selected = symbGetCompOpOvlHead/);

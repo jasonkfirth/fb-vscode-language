@@ -16,7 +16,7 @@ const { CompilerAnalysisWorker } = require("../lib/compiler-worker");
 const { CompilerAnalysisService } = require("../lib/compiler-analysis-service");
 const { CompilerRemoteModel } = require("../lib/compiler-remote-model");
 const { CompilerModelStore, CompilerUri } = require("../lib/compiler-model-store");
-const { CompilerSemanticModel } = require("../lib/compiler-semantic-model");
+const { CompilerSemanticModel, compilerParameterDeclarationLocation, freeBasicCallArgumentRanges } = require("../lib/compiler-semantic-model");
 const { queryCompilerModel } = require("../lib/compiler-model-queries");
 const { CompilerWorkspaceSymbols, WORKSPACE_SYMBOL_STRIDE, compactWorkspaceEntries, mapPackedWorkspaceEntries, packWorkspaceSymbols, workspaceSymbolKey, workspaceSymbolKeyFromPacked } = require("../lib/compiler-workspace-symbols");
 const { indexWorkspaceJobs } = require("../lib/compiler-workspace-service");
@@ -50,6 +50,135 @@ function decodeSemanticTokenRecords(data) {
     return records;
 }
 
+test("native cursor context uses all preceding escape spans without exporting their table", () => {
+    const { tokenize } = require("../lib/semantic-model");
+    const { getCodeContext } = require("../lib/freebasic-parser");
+    const uri = CompilerUri.file("/workspace/escape-context.bas");
+    for (const bom of [0, 1]) {
+        for (const literal of [String.raw`"inside \" Fake(99, 2)"`, String.raw`"inside \" /' still text"`]) {
+            const text = `Print ${literal} : Work(1)\nWork 1, 2\n`;
+            const ranges = [{ start: 0, end: text.indexOf(" :") },
+                { start: text.indexOf("Work("), end: text.indexOf("\n") }];
+            const document = { text, ...tokenize(text, null, ranges), defaultEscapedStringRanges: ranges };
+            const model = Object.create(CompilerSemanticModel.prototype);
+            model.getDocument = () => document;
+            const offset = text.indexOf("Work(") + "Work(".length;
+            assert.notEqual(getCodeContext(text, offset), "code", "source-only scanning must reproduce the bug");
+            const context = queryCompilerModel(model, "compilerCodeContext", {
+                uri, offset, offsetAdjustment: bom
+            }, () => {});
+            assert.equal(context.context, "code");
+            assert.deepEqual(context.callContext, {
+                name: "Work", openParenthesisOffset: offset - 1 + bom, activeParameter: 0
+            });
+            assert.deepEqual(context.signatureCallContext, context.callContext);
+            assert.ok(context.maskedLinePrefix.endsWith(" : Work("));
+            assert.equal(context.defaultEscapedStringRanges, undefined);
+            const inside = model.compilerCodeContext(uri, text.indexOf("inside") + 2, bom);
+            assert.deepEqual(inside, { context: "string" });
+            const bare = model.compilerCodeContext(uri, text.indexOf("Work 1,") + "Work 1,".length, bom);
+            assert.equal(bare.callContext, null);
+            assert.deepEqual(bare.signatureCallContext, {
+                name: "Work", openParenthesisOffset: text.indexOf("Work 1,") + 4 + bom,
+                activeParameter: 1, bare: true
+            });
+            for (const invalid of [-1, 0.5, text.length + 1, NaN]) assert.equal(model.compilerCodeContext(uri, invalid), null);
+            assert.equal(model.compilerCodeContext(uri, offset, 2), null);
+        }
+    }
+});
+
+test("argument hint ranges handle bare calls and malformed delimiters", () => {
+    const { tokenize } = require("../lib/semantic-model");
+    const scan = (text, bare = true, remainingCharacters = 4096) => {
+        const document = { text, ...tokenize(text) };
+        const opening = bare ? { ...document.tokens[0], bare: true } : document.tokens[1];
+        const result = freeBasicCallArgumentRanges(document, opening, () => {}, remainingCharacters);
+        assert.ok(result, "malformed code must still return a scanner result");
+        return { result, arguments: result.arguments?.map((argument) => argument && text.slice(argument.start, argument.end).trim()) };
+    };
+    for (const [text, expected] of [
+        ['Target 1, "a,b", Nested(2, 3)', ['1', '"a,b"', 'Nested(2, 3)']],
+        ['Target 1, _\n    "continued", _\n    3', ['1', '"continued"', '3']],
+        ['Target _\r\n    1, 2\r\nOther 3, 4', ['1', '2']],
+        ['Target 1, "text": Other 2, 3', ['1', '"text"']],
+        ['Target 1, "text" Else Other 2, 3', ['1', '"text"']],
+        ['Target "first" & Chr(65), ""', ['"first" & Chr(65)', '""']],
+        ["Target 1, 2 ' comment, ignored\nOther 3", ['1', "2 ' comment, ignored"]],
+        ['Target 1, 2\nOther 3, 4', ['1', '2']]
+    ]) assert.deepEqual(scan(text).arguments, expected, text);
+    assert.deepEqual(scan('Target("first" & Chr(65), "")', false).arguments, ['"first" & Chr(65)', '""']);
+    for (const text of ['Target(1, [2))', 'Target(1, 2']) {
+        assert.equal(scan(text, false).result.arguments, null, text);
+    }
+    assert.equal(scan('Target 1, [2)', true).result.arguments, null);
+    assert.equal(scan('Target 1, 2', true, 3).result.exceeded, true);
+    assert.equal(scan('Target ' + Array(256).fill('1').join(',')).arguments.length, 256);
+    assert.equal(scan('Target ' + Array(257).fill('1').join(',')).result.exceeded, true);
+});
+
+test("parameter hint navigation rejects ambiguous and nonphysical source targets", () => {
+    const uri = CompilerUri.file("/workspace/parameter-target.bas");
+    const text = "Declare Sub Work(ByVal amount As Long)\nDeclare Sub Other(ByVal amount As Long)\n";
+    const { createDocumentModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const source = createDocumentModel(uri, parseFreeBasicText(text));
+    const parameters = source.entries.filter((entry) => entry.declaration.type === "parameter");
+    const model = { getDocument: (target) => target.toString() === uri.toString() ? source : null };
+    const location = { filePath: uri.fsPath, line: 0, startColumn: 23, endColumn: 29 };
+    assert.deepEqual(compilerParameterDeclarationLocation(model, [parameters[0]], "amount"), location);
+    assert.deepEqual(compilerParameterDeclarationLocation(model, [parameters[0], parameters[0]], "amount"), location);
+    assert.equal(compilerParameterDeclarationLocation(model, parameters, "amount"), null);
+    assert.equal(compilerParameterDeclarationLocation(model, [parameters[0]], "differentName"), null);
+    assert.equal(compilerParameterDeclarationLocation(model, [{ ...parameters[0], provisional: true }], "amount"), null);
+    assert.equal(compilerParameterDeclarationLocation(model, [{ ...parameters[0], uri: {
+        scheme: "freebasic-preprocessed", toString: () => "freebasic-preprocessed:/generated.bas"
+    } }], "amount"), null);
+    assert.equal(compilerParameterDeclarationLocation(model, [{ ...parameters[0], declaration: {
+        ...parameters[0].declaration, startColumn: 0, endColumn: 6
+    } }], "amount"), null, "matching metadata must not link a token whose physical spelling disagrees");
+});
+
+test("destructor cleanup does not join coincident IDs without a source declaration", () => {
+    const { createDocumentModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const uri = CompilerUri.file("/workspace/guarded-destructor.bas");
+    const document = createDocumentModel(uri, parseFreeBasicText("Destructor Guarded()\nEnd Destructor\nDelete value\n"));
+    const target = document.entries.find((entry) => entry.declaration.type === "destructor");
+    target.compilerSymbolId = 42;
+    const model = { expandedUri: uri, canonicalSymbolIds: new Map(), semanticSymbolNativeIds: new Map(),
+        semanticProcedures: [], procedureBindings: [],
+        semanticImplicitCalls: [{ kind: "delete-destructor", physical: true, filePath: uri.fsPath,
+            startLine: 3, endLine: 3, startColumn: 0, endColumn: 12, target: 42 }],
+        getDocument: () => document, resolveAt: () => [target],
+        inner: { entries: [target], getDocument: () => document },
+        projectPositions() { assert.fail("a coincident semantic/native number must not become a cleanup edge"); }
+    };
+    assert.deepEqual(queryCompilerModel(model, "callHierarchyIncoming", { uri, position: { line: 0, character: 0 } }, () => {}), []);
+});
+
+test("navigation serialization omits macro bodies at every result position", () => {
+    const { createDocumentModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const uri = CompilerUri.file("/workspace/macros.bas");
+    const document = createDocumentModel(uri, parseFreeBasicText("Print ScopedMacro\n"));
+    const entries = Array.from({ length: 3 }, (_value, index) => ({
+        id: `macro:${index}`, name: "ScopedMacro", qualifiedName: "Scope.ScopedMacro", uri,
+        compilerPreprocessorId: index + 1,
+        declaration: { name: "ScopedMacro", type: "macro", detail: "Macro", signature: "#define ScopedMacro value",
+            line: index, startColumn: 8, endColumn: 19, modifiers: [], parameters: [],
+            compilerMacroDefinition: "macro replacement text\n".repeat(4096) }
+    }));
+    const model = { getDocument: () => document, resolveAt: () => entries, declarationSources: (targets) => targets };
+    const records = queryCompilerModel(model, "declaration", { uri, position: { line: 0, character: 8 } }, () => {});
+    assert.equal(records.length, entries.length);
+    assert.deepEqual(records.map((entry) => entry.qualifiedName), entries.map((entry) => entry.qualifiedName),
+        "navigation identities must keep their existing qualified names");
+    assert.ok(records.every((entry) => entry.declaration.compilerMacroDefinition === ""),
+        "a result index must not enable macro previews in a navigation reply");
+    assert.ok(Buffer.byteLength(JSON.stringify(records)) < 4096, "navigation should carry locations and signatures, not replacement bodies");
+});
+
 test("compact workspace replies preserve symbol fields and host dedupe keys", () => {
     const entries = [
         {
@@ -69,6 +198,7 @@ test("compact workspace replies preserve symbol fields and host dedupe keys", ()
             qualifiedName: "Module.ReadValue",
             signature: "function Module.ReadValue() as double",
             deprecated: false,
+            callableKind: "method",
             uri: { scheme: "file", fsPath: "/workspace/module.bas" },
             selection: { start: { line: 12, character: 8 }, end: { line: 12, character: 17 } }
         }
@@ -80,6 +210,15 @@ test("compact workspace replies preserve symbol fields and host dedupe keys", ()
     assert.ok(full.entries instanceof Int32Array);
     assert.ok(compact.entries instanceof Int32Array);
     assert.deepEqual(compactSymbols, entries);
+    const namespaceProcedure = { ...entries[1], type: "Sub", callableKind: "function", deprecated: true };
+    const namespacePacked = packWorkspaceSymbols([namespaceProcedure]);
+    assert.deepEqual(mapPackedWorkspaceEntries(namespacePacked.entries, namespacePacked.strings), [namespaceProcedure]);
+    for (const flags of [6, 8, -1]) {
+        const invalid = full.entries.slice();
+        invalid[12] = flags;
+        assert.throws(() => mapPackedWorkspaceEntries(invalid, full.strings), /presentation flags/,
+            "unknown or contradictory callable flags must not be published");
+    }
     assert.deepEqual(mapPackedWorkspaceEntries(compact.entries, compact.strings, workspaceSymbolKeyFromPacked),
         mapPackedWorkspaceEntries(full.entries, full.strings, workspaceSymbolKeyFromPacked));
     assert.deepEqual(compactSymbols.map((entry) => workspaceSymbolKey(entry)),
@@ -146,6 +285,47 @@ test("workspace projection memory sampling is opt-in", async (t) => {
     assert.equal(Object.hasOwn(ordinary, "workspaceMemory"), false,
         "normal workspace requests must not sample profiling data");
     workspace.discard(ordinaryPass.workspaceId);
+});
+
+test("workspace symbol caches and publication guards notice rebuilt compiler files", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-workspace-compiler-test-"));
+    const workspace = new CompilerWorkspaceSymbols();
+    t.after(() => { workspace.clear(); fs.rmSync(directory, { recursive: true, force: true }); });
+    const compilerPath = path.join(directory, "compiler.exe");
+    fs.writeFileSync(compilerPath, "first compiler", { mode: 0o755 });
+    let calls = 0, changeDuringPreparation = false;
+    const models = {
+        models: new Map(),
+        async prepare() {
+            calls++;
+            if (changeDuringPreparation) fs.appendFileSync(compilerPath, " changed during preparation");
+            const snapshotId = `compiler-freshness-${calls}`;
+            this.models.set(snapshotId, { model: { inventory: null }, sources: [] });
+            return { snapshotId, text: "" };
+        },
+        remove(id) { this.models.delete(id); }
+    };
+    const options = { compilerPath, filePath: path.join(directory, "main.bas"), compilerArguments: [] };
+    const index = async () => {
+        const { workspaceId } = workspace.begin(new Map(), "", 10);
+        const result = await workspace.index(options, { id: workspaceId }, models, async () => {}, () => {});
+        workspace.finish(workspaceId, new Map(), () => {});
+        return result;
+    };
+    assert.equal((await index()).cached, false);
+    assert.equal((await index()).cached, true);
+    assert.equal(calls, 1);
+    fs.appendFileSync(compilerPath, " rebuilt");
+    assert.equal((await index()).cached, false, "an unchanged filename must not reuse the previous compiler's symbols");
+    assert.equal(calls, 2);
+    const { workspaceId } = workspace.begin(new Map(), "", 10);
+    assert.equal((await workspace.index(options, { id: workspaceId }, models, async () => {}, () => {})).cached, true);
+    fs.appendFileSync(compilerPath, " changed before publication");
+    assert.throws(() => workspace.finish(workspaceId, new Map(), () => {}), /Compiler executable changed/);
+    changeDuringPreparation = true;
+    const next = workspace.begin(new Map(), "", 10);
+    await assert.rejects(workspace.index(options, { id: next.workspaceId }, models, async () => {}, () => {}),
+        /Compiler executable changed/);
 });
 
 test("foreground worker idle barriers wait for queued work and honor cancellation", async (t) => {
@@ -318,6 +498,776 @@ function setup(t, real = false) {
     return { directory, filePath, worker, options, preparation, input };
 }
 
+test("editor bridge retains native assistance after conditional escaped literals", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const text = String.raw`#lang "fblite"
+#if 1
+Option Escape
+#endif
+#define EscapeValue 1
+Declare Sub Work(ByVal amount As Long)
+Print "inside \" Fake(99, 2)" : Work(1)
+Print "inside \" /' still text" : Print EscapeValue
+`;
+    const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+        exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        const position = pointAt(text, " : Work(", " : Work(".length);
+        const signature = (await worker.query(reply.snapshotId, "signature", { ...input, position })).result;
+        assert.equal(signature?.context.name, "Work");
+        assert.equal(signature.context.activeParameter, 0);
+        assert.ok(signature.entries.some((entry) => entry.name === "Work"));
+        const completion = (await worker.query(reply.snapshotId, "completion", {
+            ...input, position: pointAt(text, " : Print EscapeValue", " : Print EscapeVa".length), limit: 100
+        })).result;
+        assert.ok(completion.entries.some((entry) => entry.name === "EscapeValue"));
+        const inside = pointAt(text, "Fake(99,", "Fake(".length);
+        assert.equal((await worker.query(reply.snapshotId, "signature", { ...input, position: inside })).result, null);
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("native member completion retains selected receivers in broken unsaved statements", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const original = fs.readFileSync(filePath, "utf8");
+    const source = fs.readFileSync(path.join(__dirname, "integration/workspace/compiler-scopes.bas"), "utf8")
+        .replace("Dim instance As Child", [
+            "Dim instance As Child",
+            "Dim pointerValue As Child Ptr",
+            "Dim arrayValues(1) As Child",
+            "Declare Function MakeChild() As Child"
+        ].join("\n"));
+    for (const [statement, internal] of [
+        ["Print instance.", false], ["Print instance.pub", false], ["Print instance.   pub", false],
+        ["Print pointerValue->", false], ["Print pointerValue->pub", false],
+        ["Print arrayValues(0).", false], ["Print MakeChild().", false],
+        ["    Print This.", true], ["    Print This.prot", true], ["    Return This.prot", true]
+    ]) {
+        const replaced = internal ? "    Print This.protectedValue" : "Print instance.publicValue";
+        const text = source.replace(replaced, statement);
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+        try {
+            assert.equal(reply.partial, true, statement);
+            const position = pointAt(text, statement, statement.length);
+            const completion = (await worker.query(reply.snapshotId, "completion", {
+                ...input, openFiles: [filePath], position, limit: 100
+            })).result;
+            assert.equal(completion.member, true, statement);
+            const names = completion.entries.map((entry) => entry.name);
+            assert.ok(names.includes("publicValue"), statement);
+            assert.ok(names.includes("ownValue"), statement);
+            assert.equal(names.includes("protectedValue"), internal, statement);
+            assert.ok(!names.includes("privateValue"), statement);
+            const receiver = statement.match(/(?:This|instance|pointerValue|arrayValues|MakeChild)/)[0];
+            const receiverPosition = pointAt(text, statement, statement.indexOf(receiver));
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", {
+                ...input, openFiles: [filePath], position: receiverPosition
+            })).result, [], "completion receipts must not revive retracted navigation bindings");
+            assert.equal((await worker.query(reply.snapshotId, "expression", {
+                ...input, openFiles: [filePath], position: receiverPosition,
+                end: { ...receiverPosition, character: receiverPosition.character + receiver.length }
+            })).result, null, "completion receipts must not revive invalid expression types");
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), original, "completion must leave the saved input unchanged");
+});
+
+test("native name completion retains lexical scope in broken unsaved statements", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const original = fs.readFileSync(filePath, "utf8");
+    const source = "#define VISIBLE_EDIT_MACRO 1\n#define REMOVED_EDIT_MACRO 1\n#undef REMOVED_EDIT_MACRO\n" +
+        fs.readFileSync(path.join(__dirname, "integration/workspace/compiler-scopes.bas"), "utf8")
+            .replace("    Dim localValue As Long", "    Dim brokenLocal As\n    Dim localValue As Long")
+            .replace("    Print localValue", "    Print localValue\n    Dim declaredLater As Long");
+    for (const [before, after, expected, excluded] of [
+        ["    Print localValue", "    Print loc", ["localValue", "amount", "ownValue"], ["branchValue", "loopValue", "declaredLater"]],
+        ["    Print localValue", "    Print loc" + " ".repeat(2048), ["localValue", "amount"], ["branchValue", "loopValue", "declaredLater"]],
+        ["        Print branchValue", "        Print bra", ["branchValue", "localValue", "amount", "ownValue"], ["loopValue", "declaredLater"]],
+        ["Print instance.ownValue", "Print inst", ["instance", "sharedValue"], ["localValue", "amount", "branchValue"]]
+    ]) {
+        const text = source.replace(before, after);
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+        try {
+            assert.equal(reply.partial, true, after);
+            const position = { line: text.split("\n").findIndex((line) => line === after), character: after.length };
+            assert.ok(position.line >= 0, after);
+            const completion = (await worker.query(reply.snapshotId, "completion", {
+                ...input, openFiles: [filePath], position, limit: 2000
+            })).result;
+            assert.equal(completion.member, false, after);
+            const names = completion.entries.map((entry) => entry.name);
+            for (const name of [...expected, "VISIBLE_EDIT_MACRO"]) assert.ok(names.includes(name), after + ": " + name);
+            for (const name of [...excluded, "brokenLocal", "REMOVED_EDIT_MACRO"]) assert.ok(!names.includes(name), after + ": " + name);
+            if (expected.includes("ownValue")) {
+                assert.equal(completion.entries.find((entry) => entry.name === "ownValue").declaration.typeName, "double",
+                    "an enclosing local must shadow the implicit field even inside a nested block");
+            }
+            if (expected.includes("branchValue")) {
+                assert.equal(completion.entries.find((entry) => entry.name === "branchValue").declaration.typeName, "long",
+                    "the sibling ELSE declaration must not replace the current IF-local identity");
+            }
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", {
+                ...input, openFiles: [filePath], position
+            })).result, [], "an incomplete name must remain unresolved");
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), original);
+});
+
+test("native completion retains compiler scopes on empty unsaved lines", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const original = fs.readFileSync(filePath, "utf8");
+    const source = "#define EMPTY_LINE_MACRO 1\n" +
+        fs.readFileSync(path.join(__dirname, "integration/workspace/compiler-scopes.bas"), "utf8");
+    for (const [before, expected, excluded, gap = "    \n"] of [
+        ["    Print localValue", ["localValue", "amount", "ownValue"], ["branchValue", "loopValue", "index"]],
+        ["    Print localValue", ["localValue", "amount"], ["branchValue", "loopValue", "index"], "    /' scope note '/\n    \n"],
+        ["        Print branchValue", ["branchValue", "localValue", "amount"], ["loopValue", "index"]],
+        ["Print instance.ownValue", ["instance", "sharedValue"], ["localValue", "amount", "branchValue"]]
+    ]) {
+        const insertion = source.indexOf(before);
+        assert.ok(insertion >= 0);
+        const text = source.slice(0, insertion) + gap + source.slice(insertion);
+        const position = { line: pointAt(text, before).line - 1, character: 4 };
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            const completion = (await worker.query(reply.snapshotId, "completion", {
+                ...input, openFiles: [filePath], position, limit: 2000
+            })).result;
+            const names = completion.entries.map((entry) => entry.name);
+            assert.ok(names.includes("EMPTY_LINE_MACRO"));
+            for (const name of expected) assert.ok(names.includes(name), before + ": " + name);
+            for (const name of excluded) assert.ok(!names.includes(name), before + ": " + name);
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", {
+                ...input, openFiles: [filePath], position
+            })).result, [], "empty-line completion must not create a navigation binding");
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+    for (const literal of ['"literal"', '!"escaped\\ntext"', '"Unicode café 😀"']) {
+        const statement = "    Print " + literal;
+        const literalGap = (literal.includes("Unicode") ? "\uFEFF" : "") +
+            source.replace("    Print localValue", statement + "\n    \n    Print localValue");
+        const literalReply = await worker.analyze({ ...options, overlays: new Map([[filePath, literalGap]]) }, preparation);
+        try {
+            assert.equal(literalReply.partial, false, literal);
+            const line = pointAt(literalGap, statement).line + 1;
+            const completion = (await worker.query(literalReply.snapshotId, "completion", {
+                ...input, openFiles: [filePath], position: { line, character: 4 }, limit: 2000
+            })).result;
+            const names = completion.entries.map((entry) => entry.name);
+            assert.ok(names.includes("EMPTY_LINE_MACRO"), "literal anchors must retain the compiler's macro epoch");
+            for (const name of ["localValue", "amount", "ownValue"]) assert.ok(names.includes(name), literal + ": " + name);
+            for (const name of ["branchValue", "loopValue", "index"]) assert.ok(!names.includes(name), literal + ": " + name);
+            const literalPosition = pointAt(literalGap, statement, statement.indexOf(literal) + 1);
+            assert.deepEqual((await worker.query(literalReply.snapshotId, "definition", {
+                ...input, openFiles: [filePath], position: literalPosition
+            })).result, [], "completion literal anchors must not become navigation bindings");
+        } finally {
+            worker.releaseModel(literalReply.snapshotId);
+        }
+    }
+    const inactive = source.replace("    Print localValue", "    #if 0\n    \n    #endif\n    Print localValue");
+    const inactiveReply = await worker.analyze({ ...options, overlays: new Map([[filePath, inactive]]) }, preparation);
+    try {
+        const line = pointAt(inactive, "    #if 0").line + 1;
+        const completion = (await worker.query(inactiveReply.snapshotId, "completion", {
+            ...input, openFiles: [filePath], position: { line, character: 4 }, limit: 2000
+        })).result;
+        assert.deepEqual(completion.entries.filter((entry) => entry.declaration.type !== "macro"), [],
+            "an unmapped preprocessor branch must not inherit a nearby native scope");
+    } finally {
+        worker.releaseModel(inactiveReply.snapshotId);
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), original);
+});
+
+test("native EOF completion uses compiler module closure without leaking previous scopes", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const sources = [
+        ["Dim moduleValue As Double", "Sub Work(ByVal hidden As Long)", "    Dim localOnly As Long", "End Sub", "    ", ""],
+        ["Namespace Imported", "    Dim Shared importedValue As Long", "End Namespace", "Using Imported", "    ", ""],
+        ["Dim moduleValue As Double", 'Print "literal café 😀"', "    ", ""],
+        ["Dim moduleValue As Double", "#define LATER_MACRO 2", "    ", ""],
+        ["Dim moduleValue As Double", "#define RETIRED_MACRO 2", "#undef RETIRED_MACRO", "    ", ""],
+        ["Dim moduleValue As Double", "    ", "' trailing module note", ""]
+    ];
+    for (const lines of sources) {
+        const text = "#define END_MACRO 1\n" + lines.join("\n");
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            const position = { line: text.split("\n").findIndex((line) => line === "    "), character: 4 };
+            const completion = (await worker.query(reply.snapshotId, "completion", {
+                ...input, openFiles: [filePath], position, limit: 2000
+            })).result;
+            const names = completion.entries.map((entry) => entry.name);
+            assert.ok(names.includes("END_MACRO"));
+            assert.ok(names.includes(text.includes("importedValue") ? "importedValue" : "moduleValue"));
+            assert.ok(!names.includes("hidden") && !names.includes("localOnly"));
+            assert.ok(!names.includes("RETIRED_MACRO"));
+            if (text.includes("LATER_MACRO")) assert.ok(names.includes("LATER_MACRO"));
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", {
+                ...input, openFiles: [filePath], position
+            })).result, [], "the module-end completion point is not an identifier origin");
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+});
+
+test("native EOF completion preserves module facts after independently positioned errors", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    for (const lines of [
+        ["Dim moduleValue As Double", "Print missingValue", "    ", ""],
+        ["Dim moduleValue As Double", "Sub Work(ByVal hidden As Long)", "    Dim localOnly As Long",
+            "    Print missingValue", "End Sub", "    ", ""],
+        ["Namespace Imported", "    Dim Shared importedValue As Long", "    Print missingValue",
+            "End Namespace", "Using Imported", "    ", ""],
+        ["Dim moduleValue As Double", "Print missingValue", "Print otherMissingValue", "    ", ""],
+        ["Dim moduleValue As Double", '#line 200 "logical-name.bas"', "Print missingValue", "    ", ""]
+    ]) {
+        const text = "#define ACTIVE_EOF_MACRO 1\n" + lines.join("\n");
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const position = { line: text.split("\n").findIndex((line) => line === "    "), character: 4 };
+            const completion = (await worker.query(reply.snapshotId, "completion", {
+                ...input, openFiles: [filePath], position, limit: 2000
+            })).result;
+            const names = completion.entries.map((entry) => entry.name);
+            const expected = text.includes("importedValue") ? "importedValue" : "moduleValue";
+            assert.ok(names.includes(expected), expected);
+            assert.ok(names.includes("ACTIVE_EOF_MACRO"));
+            for (const excluded of ["hidden", "localOnly", "missingValue", "otherMissingValue"]) {
+                assert.ok(!names.includes(excluded), excluded);
+            }
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", {
+                ...input, openFiles: [filePath], position
+            })).result, [], "completion must not restore an EOF navigation binding");
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+});
+
+test("native EOF completion withholds unproven root scopes and included-header contexts", native, async (t) => {
+    const { directory, worker, filePath, options, preparation, input } = setup(t, true);
+    for (const text of [
+        "Dim moduleValue As Long\nSub Work(ByVal hidden As Long)\n    Dim localOnly As Long\n    \n",
+        "Dim moduleValue As Long\nNamespace OpenSpace\n    Dim nestedOnly As Long\n    \n",
+        "Dim moduleValue As Long\nIf 1 Then\n    Dim nestedOnly As Long\n    \n",
+        "Dim moduleValue As Long\nFor counter As Long=0 To 1\n    Dim nestedOnly As Long\n    \n",
+        "Dim moduleValue As Long\nType OpenType\n    fieldOnly As Long\n    \n",
+        "Dim moduleValue As Long\nEnum OpenEnum\n    memberOnly\n    \n",
+        "Dim moduleValue As Long\nSelect Case moduleValue\nCase 1\n    Dim nestedOnly As Long\n    \n",
+        "Dim moduleValue As Long\nPrint moduleValue\n#macro Wrapped(a)\n Print a\n    \n",
+        "Dim moduleValue As Long\n#if 1\n    \n",
+        "Dim moduleValue As Long\n/' unfinished comment\n    \n"
+    ]) {
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const completion = (await worker.query(reply.snapshotId, "completion", {
+                ...input, openFiles: [filePath], position: pointAt(text, "    \n", 4), limit: 2000
+            })).result;
+            assert.deepEqual(completion.entries.filter((entry) => entry.declaration.type !== "macro"), [],
+                "unclosed scopes and unpositioned errors do not prove an EOF context");
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+    const headerPath = path.join(directory, "completion-eof.bi");
+    const header = "Dim headerLocal As Long\n    \n";
+    fs.writeFileSync(headerPath, header);
+    const text = ["Dim moduleValue As Long", "Sub Work(ByVal hidden As Long)",
+        '#include "completion-eof.bi"', "    Print hidden + headerLocal", "End Sub", ""].join("\n");
+    const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        const completion = (await worker.query(reply.snapshotId, "completion", {
+            uri: { scheme: "file", fsPath: headerPath }, openFiles: [filePath, headerPath],
+            position: pointAt(header, "    \n", 4), limit: 2000
+        })).result;
+        assert.deepEqual(completion.entries.filter((entry) => entry.declaration.type !== "macro"), [],
+            "module closure is not a receipt for an included header's lexical scope");
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("native completion includes forward labels without leaking another procedure's labels", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = [
+        "If 0 Then", "moduleFinish:", "End If", "Goto mod",
+        "Sub Work()", "    Goto fin", "    If 0 Then", "finish:", "    Print 1", "    End If", "End Sub",
+        "Sub Other()", "otherFinish:", "    Print 2", "End Sub", "Work()", ""
+    ].join("\n");
+    const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+    try {
+        assert.equal(reply.partial, true);
+        const completion = (await worker.query(reply.snapshotId, "completion", {
+            ...input, openFiles: [filePath], position: pointAt(text, "    Goto fin", "    Goto fin".length), limit: 100
+        })).result;
+        assert.deepEqual(completion.entries.filter((entry) => entry.declaration.type === "label").map((entry) => entry.name),
+            ["finish"], "labels are procedure-wide, but another procedure is a separate compiler scope");
+        const moduleCompletion = (await worker.query(reply.snapshotId, "completion", {
+            ...input, openFiles: [filePath], position: pointAt(text, "Goto mod", "Goto mod".length), limit: 100
+        })).result;
+        assert.deepEqual(moduleCompletion.entries.filter((entry) => entry.declaration.type === "label").map((entry) => entry.name),
+            ["moduleFinish"], "a module-owned label remains visible outside its physical IF block");
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+for (const sidecar of [true, false]) test(`compiler parameter hints cover bare calls (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/bare-signature-help.bas"), "utf8")
+        .replace("Sub SelectValues Overload(ByVal first As Long", "Sub SelectValues Overload(ByVal wholeValue As Long")
+        .replace("Sub SelectValues Overload(ByVal first As Double", "Sub SelectValues Overload(ByVal fractionalValue As Double")
+        .replace("'' end of bare-signature-help.bas", [
+            'BareCalls.AcceptValues 4, "optional"',
+            'receiver.SetValues(3, "parenthesized")',
+            'Sub AssignValue(ByRef destination As Long)',
+            'End Sub',
+            'Dim suppliedResult As Long',
+            'AssignValue suppliedResult',
+            'Type StaticReceiver',
+            '    value As Long',
+            '    Declare Static Sub ApplyValue(ByVal amount As Long)',
+            'End Type',
+            'Sub StaticReceiver.ApplyValue(ByVal amount As Long)',
+            'End Sub',
+            'StaticReceiver.ApplyValue 8',
+            'BareCalls.AcceptValues 5, "first" & Chr(65), 6',
+            "'' end of bare-signature-help.bas"
+        ].join("\n"));
+    fs.writeFileSync(filePath, text);
+    const compilerPath = sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath;
+    const compiled = spawnSync(compilerPath, ["-c", filePath, "-o", path.join(path.dirname(filePath), "bare-inlays.o")], { encoding: "utf8" });
+    assert.equal(compiled.status, 0, `${compiled.stdout}\n${compiled.stderr}`);
+    const reply = await worker.analyze({
+        ...options,
+        compilerPath,
+        semanticModelOnly: sidecar,
+        exportSemanticExpressions: true,
+        exportSemanticBindings: true
+    }, preparation);
+    assert.equal(reply.partial, false);
+    try {
+        const hints = (await worker.query(reply.snapshotId, "compilerParameterInlayHints", {
+            ...input, position: { line: 0, character: 0 }, end: pointAt(text, "'' end of bare-signature-help.bas")
+        })).result;
+        for (const [spelling, prefix, label] of [
+            ['BareCalls.AcceptValues CLng(1)', 'BareCalls.AcceptValues ', 'first:'],
+            ['"a,b", 3', '', 'second:'],
+            ['"continued,argument", _', '', 'second:'],
+            ['    3\nBareCalls.SelectValues', '    ', 'third:'],
+            ['BareCalls.SelectValues CDbl(2)', 'BareCalls.SelectValues ', 'fractionalValue:'],
+            ['receiver.SetValues 1, "member"', 'receiver.SetValues ', 'first:'],
+            ['"member"', '', 'second:'],
+            ['receiverPointer->SetValues 2, "pointer"', 'receiverPointer->SetValues ', 'first:'],
+            ['"pointer"', '', 'second:'],
+            ['"inline", 2 Else', '', 'second:'],
+            ['"else", 3', '', 'second:'],
+            ['BareCalls.AcceptValues 4, "optional"', 'BareCalls.AcceptValues ', 'first:'],
+            ['"optional"', '', 'second:'],
+            ['receiver.SetValues(3, "parenthesized")', 'receiver.SetValues(', 'first:'],
+            ['"parenthesized"', '', 'second:'],
+            ['AssignValue suppliedResult', 'AssignValue ', 'destination:'],
+            ['StaticReceiver.ApplyValue 8', 'StaticReceiver.ApplyValue ', 'amount:'],
+            ['"first" & Chr(65)', '', 'second:']
+        ]) {
+            const position = pointAt(text, spelling, prefix.length);
+            assert.ok(hints.some((hint) => hint.label === label && hint.position.line === position.line &&
+                hint.position.character === position.character), `${spelling}: ${JSON.stringify(hints)}`);
+        }
+        assert.ok(hints.some((hint) => hint.label === "destination:" && hint.passingMode === "byref"));
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+for (const sidecar of [true, false]) test(`parameter hint navigation selects physical header parameters (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "hint-api.bi");
+    const header = [
+        "Declare Function SelectHint Overload(ByVal wholeNumber As Long, _",
+        "    ByRef labelText As String) As Long",
+        "Declare Function SelectHint Overload(ByVal fractionalNumber As Double) As Double",
+        "Type HintOwner", "    number As Long",
+        "    Declare Constructor(ByVal seed As Long)",
+        "    Declare Sub SetValue(ByVal nextValue As Long)", "End Type", ""
+    ].join("\n");
+    const text = [
+        '#include "hint-api.bi"',
+        "Function SelectHint(ByVal wholeNumber As Long, ByRef labelText As String) As Long",
+        "    Return wholeNumber", "End Function",
+        "Function SelectHint(ByVal fractionalNumber As Double) As Double",
+        "    Return fractionalNumber", "End Function",
+        "Constructor HintOwner(ByVal seed As Long)", "    number = seed", "End Constructor",
+        "Sub HintOwner.SetValue(ByVal nextValue As Long)", "    number = nextValue", "End Sub",
+        'Dim description As String = "label"', "Print SelectHint(1, description)",
+        "Print SelectHint(1.5)", "Dim receiver As HintOwner = HintOwner(3)",
+        "receiver.SetValue(7)", ""
+    ].join("\n");
+    fs.writeFileSync(headerPath, header);
+    fs.writeFileSync(filePath, text);
+    const compilerPath = sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath;
+    const reply = await worker.analyze({ ...options, compilerPath, semanticModelOnly: sidecar,
+        exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    try {
+        const hints = (await worker.query(reply.snapshotId, "compilerParameterInlayHints", {
+            ...input, position: { line: 0, character: 0 }, end: { line: text.split("\n").length - 1, character: 0 }
+        })).result;
+        for (const [call, argument, parameter] of [
+            ["Print SelectHint(1, description)", "1", "wholeNumber"],
+            ["Print SelectHint(1, description)", "description", "labelText"],
+            ["Print SelectHint(1.5)", "1.5", "fractionalNumber"],
+            ["HintOwner(3)", "3", "seed"],
+            ["receiver.SetValue(7)", "7", "nextValue"]
+        ]) {
+            const position = pointAt(text, call, call.indexOf(argument));
+            const hint = hints.find((hint) => hint.position.line === position.line && hint.position.character === position.character);
+            assert.equal(hint?.parameterName, parameter, `${call}: ${JSON.stringify(hints)}`);
+            const target = pointAt(header, parameter);
+            assert.deepEqual(hint.declarationLocation, { filePath: headerPath, line: target.line,
+                startColumn: target.character, endColumn: target.character + parameter.length },
+            "the selected overload's physical parameter, not its body or another overload, should be clickable");
+        }
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("native document links retain selected include paths across contexts", native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    fs.writeFileSync(filePath, '#ifdef FIRST_LINK\n#include once "selected.bi"\n#else\n#include once "selected.bi"\n#endif\nPrint selectedIncludeValue\n');
+    for (const [name, value] of [["first", 1], ["second", 2]]) {
+        fs.mkdirSync(path.join(directory, name));
+        fs.writeFileSync(path.join(directory, name, "selected.bi"), `Const selectedIncludeValue = ${value}\n`);
+    }
+    for (const [name, line] of [["first", 1], ["second", 3]]) {
+        const reply = await worker.analyze({ ...options, exportSemanticExpressions: true,
+            compilerArguments: [...(name === "first" ? ["-d", "FIRST_LINK"] : []), "-i", path.join(directory, name)]
+        }, preparation);
+        assert.equal(reply.partial, false);
+        try {
+            const links = (await worker.query(reply.snapshotId, "documentLinks", input)).result;
+            assert.equal(links.length, 1, `${name}: ${JSON.stringify(links)}`);
+            assert.equal(links[0].target, path.join(directory, name, "selected.bi"));
+            assert.equal(links[0].start.line, line);
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+});
+
+test("native destructor callers expand through selected cleanup receipts", native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/destructor-hierarchy.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    const executable = path.join(directory, "destructor-hierarchy");
+    const root = resolveFreeBasicRoot(process.env.FREEBASIC_ROOT || "");
+    const compiled = spawnSync(process.env.FBC_EXECUTABLE || options.compilerPath,
+        ["-prefix", root, filePath, "-x", executable], { encoding: "utf8" });
+    assert.equal(compiled.status, 0, `${compiled.stdout}\n${compiled.stderr}`);
+    const executed = spawnSync(executable, [], { encoding: "utf8" });
+    assert.equal(executed.status, 0, executed.stderr);
+    const reply = await worker.analyze({ ...options, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    try {
+        const helper = pointAt(text, "Sub RecordCleanup", "Sub ".length + 1);
+        const incoming = (await worker.query(reply.snapshotId, "callHierarchyIncoming", { ...input, position: helper })).result;
+        const destructor = incoming.find((entry) => entry.declaration.type === "destructor");
+        assert.ok(destructor, "the destructor body must remain the helper's caller");
+        const position = { line: destructor.declaration.line, character: destructor.declaration.startColumn };
+        const callers = (await worker.query(reply.snapshotId, "callHierarchyIncoming", { ...input, position })).result;
+        assert.deepEqual(callers.map((entry) => entry.name).sort(), ["LeaveEarly", "LeaveScope", "ReleaseOne", "main.bas"],
+            "cleanup sites must retain their owning procedure and exclude the other destructor");
+        const receipts = (await worker.query(reply.snapshotId, "compilerSidecarImplicitCallsInSnapshot", input)).result;
+        const kinds = new Set(receipts.calls.filter((call) => call.procedures.some((procedure) =>
+            procedure.filePath === filePath && procedure.startLine === destructor.declaration.line + 1)).map((call) => call.kind));
+        for (const kind of ["delete-destructor", "destructor-call", "scope-exit-destructor", "temporary-destructor"]) {
+            assert.ok(kinds.has(kind), `the compiler fixture must cover ${kind}: ${[...kinds]}`);
+        }
+        const references = (await worker.query(reply.snapshotId, "references", { ...input, position, includeDeclaration: true })).result;
+        const highlights = (await worker.query(reply.snapshotId, "highlights", { ...input, position })).result;
+        const sites = callers.flatMap((entry) => entry.fromRanges);
+        for (const site of sites) {
+            assert.ok(references.some((reference) => reference.occurrence.line === site.line &&
+                reference.occurrence.startColumn === site.startColumn), "selected cleanup must also be a destructor reference");
+            assert.ok(highlights.some((reference) => reference.occurrence.line === site.line &&
+                reference.occurrence.startColumn === site.startColumn), "selected cleanup must also be highlighted");
+        }
+        const outgoing = (await worker.query(reply.snapshotId, "callHierarchyOutgoing", { ...input, position })).result;
+        assert.deepEqual(outgoing.map((entry) => entry.name), ["RecordCleanup"]);
+        for (const caller of callers) {
+            const module = caller.declaration.type === "module";
+            const callees = (await worker.query(reply.snapshotId, "callHierarchyOutgoing", { ...input,
+                position: { line: caller.declaration.line, character: caller.declaration.startColumn }, module
+            })).result;
+            const cleanup = callees.filter((entry) => entry.declaration.type === "destructor" &&
+                entry.declaration.line === destructor.declaration.line);
+            assert.equal(cleanup.length, 1, `${caller.name}: outgoing calls must retain the selected cleanup routine`);
+            const siteKey = (site) => `${site.line}:${site.startColumn}:${site.endLine ?? site.line}:${site.endColumn}`;
+            assert.deepEqual(cleanup[0].fromRanges.map(siteKey).sort(), caller.fromRanges.map(siteKey).sort(),
+                "incoming and outgoing cleanup must describe the same physical sites");
+            const constructors = callees.filter((entry) => entry.declaration.type === "constructor");
+            assert.equal(constructors.length, 1, `${caller.name}: initialization must retain its selected constructor`);
+            assert.equal(new Set(constructors[0].fromRanges.map(siteKey)).size, constructors[0].fromRanges.length,
+                "an explicit constructor already present in procedure bindings must not be duplicated");
+            if (!module) assert.equal(callees.some((entry) => entry.declaration.type === "destructor" &&
+                entry.declaration.line !== destructor.declaration.line), false, "unrelated cleanup must not leak into this procedure");
+        }
+        const prototype = pointAt(text, "Declare Destructor", "Declare ".length + 1);
+        const prototypeCallers = (await worker.query(reply.snapshotId, "callHierarchyIncoming", { ...input, position: prototype })).result;
+        assert.deepEqual(prototypeCallers.map((entry) => entry.name).sort(), callers.map((entry) => entry.name).sort(),
+            "the native prototype must join its body before looking up semantic cleanup targets");
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("native constructor graph calls do not duplicate qualified initializer receipts", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/namespace-initializer-calls.bas"), "utf8")
+        .replace("Type TrackedValue\n", "Namespace TypeScope\nType TrackedValue\n")
+        .replace("End Constructor\n", "End Constructor\nEnd Namespace\n")
+        .replace(/As TrackedValue = TrackedValue/g, "As TypeScope.TrackedValue = TypeScope.TrackedValue");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    try {
+        const position = pointAt(text, "Constructor TrackedValue(");
+        const incoming = (await worker.query(reply.snapshotId, "callHierarchyIncoming", { ...input, position })).result;
+        const module = incoming.find((entry) => entry.declaration.type === "module");
+        assert.equal(module?.fromRanges.length, 3, "one declaration initialization must remain one incoming constructor site");
+        assert.equal(incoming.filter((entry) => entry.declaration.type !== "module").length, 1);
+        const outgoing = (await worker.query(reply.snapshotId, "callHierarchyOutgoing", { ...input,
+            position: { line: 0, character: 0 }, module: true })).result;
+        const constructor = outgoing.filter((entry) => entry.declaration.type === "constructor");
+        assert.equal(constructor.length, 1);
+        assert.deepEqual(constructor[0].fromRanges, module.fromRanges, "both directions must use the same deduplicated receipts");
+        assert.equal(outgoing.filter((entry) => entry.name === "ModuleAction").length, 1);
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+function temporaryConstructorSource() {
+    return fs.readFileSync(path.join(__dirname, "fixtures/temporary-constructor-calls.bas"), "utf8");
+}
+
+test("native explicit temporary constructors retain selected hierarchy without implicit receipts", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = temporaryConstructorSource();
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    try {
+        const receipts = (await worker.query(reply.snapshotId, "compilerSidecarImplicitCallsInSnapshot", input)).result;
+        assert.deepEqual(receipts.calls, [], "this fixture must exercise native CALLs rather than implicit I receipts");
+        for (const [spelling, type, module, call] of [
+            ["Sub MakeTemporary()", "Long", false, "TemporaryValue(CLng(1))"],
+            ["", "Double", true, "TemporaryValue(CDbl(2))"]
+        ]) {
+            const position = module ? { line: 0, character: 0 } : pointAt(text, spelling, "Sub ".length + 1);
+            const outgoing = (await worker.query(reply.snapshotId, "callHierarchyOutgoing", { ...input, position, module })).result;
+            const constructors = outgoing.filter((entry) => entry.declaration.type === "constructor");
+            assert.equal(constructors.length, 1, `${type}: the written temporary needs one constructor edge`);
+            assert.match(constructors[0].declaration.signature, new RegExp(`initialValue As ${type}`, "i"));
+            const site = pointAt(text, call);
+            const prepared = (await worker.query(reply.snapshotId, "callHierarchyPrepare", { ...input, position: site })).result;
+            assert.equal(prepared.length, 1, "preparing a written temporary must use its native selected constructor");
+            assert.equal(prepared[0].declaration.type, "constructor");
+            assert.deepEqual(constructors[0].fromRanges.map((range) => [range.line, range.startColumn, range.endColumn]),
+                [[site.line, site.character, site.character + "TemporaryValue".length]]);
+            const target = { line: constructors[0].declaration.line, character: constructors[0].declaration.startColumn };
+            const incoming = (await worker.query(reply.snapshotId, "callHierarchyIncoming", { ...input, position: target })).result;
+            assert.deepEqual(incoming.map((entry) => entry.name), [module ? "main.bas" : "MakeTemporary"],
+                "the other constructor overload must not acquire this call");
+            const references = (await worker.query(reply.snapshotId, "references", { ...input, position: target })).result;
+            assert.ok(references.some((entry) => entry.occurrence.line === site.line && entry.occurrence.startColumn === site.character));
+            assert.equal(references.some((entry) => entry.occurrence.line === (module ? pointAt(text, "TemporaryValue(CLng(1))").line :
+                pointAt(text, "TemporaryValue(CDbl(2))").line)), false, "constructor references must retain the selected overload");
+            const highlights = (await worker.query(reply.snapshotId, "highlights", { ...input, position: target })).result;
+            assert.ok(highlights.some((entry) => entry.occurrence.line === site.line && entry.occurrence.startColumn === site.character),
+                "constructor highlights must also include its explicit temporary use");
+            assert.equal(highlights.some((entry) => entry.occurrence.line === (module ? pointAt(text, "TemporaryValue(CLng(1))").line :
+                pointAt(text, "TemporaryValue(CDbl(2))").line)), false, "constructor highlights must not mix overloads");
+        }
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("stock temporary construction observations retain selected physical constructor calls", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = temporaryConstructorSource().replace("'' end of temporary-constructor-calls.bas",
+        "ConsumeTemporary(TemporaryValue())\nConsumeTemporary(Type<TemporaryValue>(CLng(3)))\n'' end of temporary-constructor-calls.bas");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+        semanticModelOnly: true, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    try {
+        const selected = (await worker.query(reply.snapshotId, "compilerSidecarImplicitCallsInSnapshot", input)).result;
+        const calls = selected.calls.filter((call) => call.kind === "explicit-constructor");
+        assert.equal(calls.length, 4, "stock FBC must retain typed, optional, and TYPE<> temporary construction selections");
+        for (const [spelling, type] of [["TemporaryValue(CLng(1))", "Long"], ["TemporaryValue(CDbl(2))", "Double"],
+            ["TemporaryValue()", "Long"], ["Type<TemporaryValue>(CLng(3))", "Long"]]) {
+            const site = pointAt(text, spelling);
+            const call = calls.find((call) => call.line === site.line && call.startColumn === site.character);
+            assert.ok(call, `${spelling}: ${JSON.stringify(calls)}`);
+            const target = pointAt(text, `Constructor TemporaryValue(ByVal initialValue As ${type})`);
+            assert.ok(call.procedures.some((procedure) => procedure.filePath === filePath && procedure.startLine === target.line + 1));
+            const references = (await worker.query(reply.snapshotId, "references", { ...input, position: target })).result;
+            assert.ok(references.some((entry) => entry.occurrence.line === site.line && entry.occurrence.startColumn === site.character),
+                `${spelling}: the selected constructor should retain its temporary reference`);
+            const highlights = (await worker.query(reply.snapshotId, "highlights", { ...input, position: target })).result;
+            assert.ok(highlights.some((entry) => entry.occurrence.line === site.line && entry.occurrence.startColumn === site.character));
+            const callReferences = (await worker.query(reply.snapshotId, "references", { ...input, position: site })).result;
+            assert.ok(callReferences.some((entry) => entry.occurrence.line === site.line && entry.occurrence.startColumn === site.character),
+                "a reference request on the written construction must also use the selected constructor");
+        }
+        const inlays = (await worker.query(reply.snapshotId, "compilerInlayHints", { ...input,
+            position: { line: 0, character: 0 }, end: { line: text.split("\n").length - 1, character: 0 }, parameterHints: true
+        })).result;
+        for (const spelling of ["TemporaryValue(CLng(1))", "TemporaryValue(CDbl(2))"]) {
+            const site = pointAt(text, spelling, "TemporaryValue(".length);
+            assert.ok(inlays.parameters.some((hint) => hint.parameterName === "initialValue" &&
+                hint.position.line === site.line && hint.position.character === site.character),
+            "typed constructor arguments should receive the selected formal's inlay hint");
+        }
+        const lenses = (await worker.query(reply.snapshotId, "compilerProcedureReferenceCodeLenses", input)).result;
+        assert.equal(lenses.complete, true);
+        for (const [type, count] of [["Long", 3], ["Double", 1]]) {
+            const target = pointAt(text, `Constructor TemporaryValue(ByVal initialValue As ${type})`);
+            const lens = lenses.entries.find((entry) => entry.line === target.line);
+            assert.equal(lens?.references.length, count, `${type}: CodeLens must count the same selected temporary calls as references`);
+        }
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+for (const sidecar of [true, false]) test(`qualified and aliased temporary constructors retain exact navigation (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/qualified-temporary-constructor-calls.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, compilerPath: sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+        semanticModelOnly: sidecar, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    try {
+        for (const [spelling, type, prefix] of [["TemporaryAlias(CLng(1))", "Long", ""],
+            ["ConstructionScope.TemporaryValue(CDbl(2))", "Double", "ConstructionScope."]]) {
+            const site = pointAt(text, spelling, prefix.length);
+            const target = pointAt(text, `Constructor TemporaryValue(ByVal initialValue As ${type})`);
+            const references = (await worker.query(reply.snapshotId, "references", { ...input, position: target })).result;
+            assert.ok(references.some((entry) => entry.occurrence.line === site.line && entry.occurrence.startColumn === site.character),
+                `${spelling}: constructor references must identify the type or alias, not its namespace`);
+            const lenses = (await worker.query(reply.snapshotId, "compilerProcedureReferenceCodeLenses", input)).result;
+            assert.equal(lenses.complete, true);
+            const lens = lenses.entries.find((entry) => entry.line === target.line);
+            assert.deepEqual(lens?.references.map((reference) => [reference.line, reference.startColumn, reference.endColumn]),
+                [[site.line, site.character, site.character + (prefix ? "TemporaryValue" : "TemporaryAlias").length]],
+                "constructor CodeLens must use the same terminal source token as references");
+            if (prefix) assert.equal(references.some((entry) => entry.occurrence.line === site.line &&
+                entry.occurrence.startColumn === site.character - prefix.length), false,
+            "the namespace prefix is not a separate constructor call");
+            const signature = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, spelling, spelling.indexOf("(") + 1) })).result;
+            if (sidecar) assert.equal(signature.selectedConstructorProcedure?.startLine, target.line + 1,
+                `${spelling}: the written qualification must not hide the compiler-selected constructor signature`);
+            else {
+                assert.equal(signature.entries.length, 1);
+                assert.match(signature.entries[0].declaration.signature, new RegExp(`initialValue As ${type}`, "i"));
+            }
+            const hints = (await worker.query(reply.snapshotId, "compilerInlayHints", { ...input, parameterHints: true,
+                position: { line: site.line, character: 0 }, end: { line: site.line, character: text.split("\n")[site.line].length }
+            })).result;
+            const argument = pointAt(text, spelling, spelling.indexOf("(") + 1);
+            assert.ok(hints.parameters.some((hint) => hint.parameterName === "initialValue" &&
+                hint.position.line === argument.line && hint.position.character === argument.character));
+        }
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("stock destructor references use a header declaration without an included body", native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "external.bi");
+    fs.writeFileSync(headerPath, "Type ExternalCleanup\nvalue As Long\nDeclare Destructor()\nEnd Type\n");
+    const text = '#include "external.bi"\nDim allocated As ExternalCleanup Ptr = New ExternalCleanup\nDelete allocated\n';
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+        semanticModelOnly: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    try {
+        const descriptor = { filePath: path.join(directory, "not-in-this-pass.bas"), startLine: 5,
+            declarations: [{ filePath: headerPath, line: 2 }] };
+        const records = (await worker.query(reply.snapshotId, "references", { ...input,
+            position: pointAt(text, "Delete allocated"), destructorProcedure: descriptor, includeDeclaration: true })).result;
+        assert.ok(records.some((entry) => entry.uri.fsPath === filePath && entry.occurrence.line === 2),
+            "the selected header procedure must retain its DELETE reference without a definition in this pass");
+        assert.ok(records.some((entry) => entry.uri.fsPath === headerPath && entry.occurrence.line === 2));
+        const referencesOnly = (await worker.query(reply.snapshotId, "references", { ...input,
+            position: pointAt(text, "Delete allocated"), destructorProcedure: descriptor, includeDeclaration: false })).result;
+        assert.equal(referencesOnly.some((entry) => entry.uri.fsPath === headerPath), false);
+        const highlights = (await worker.query(reply.snapshotId, "highlights", { ...input,
+            uri: { scheme: "file", fsPath: headerPath }, position: { line: 2, character: 9 }, destructorProcedure: descriptor })).result;
+        assert.ok(highlights.some((entry) => entry.occurrence.line === 2));
+        assert.ok(highlights.every((entry) => entry.uri.fsPath === headerPath), "header highlights must not escape into the consuming module");
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("stock constructor references use selected prototypes in guarded external headers", native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "external.bi");
+    const header = '#ifndef EXTERNAL_BUILD_BI\n#define EXTERNAL_BUILD_BI\nType ExternalBuild\nvalue As Long\n' +
+        'Declare Constructor(ByVal initialValue As Long = 0)\nDeclare Constructor(ByVal fractionalValue As Double)\n' +
+        '#if 0\nDeclare Constructor(ByVal inactiveValue As String)\n#endif\nEnd Type\n#endif\n';
+    const text = '#include "external.bi"\nDim defaultValue As ExternalBuild\n' +
+        'Dim allocated As ExternalBuild Ptr = New ExternalBuild(7)\n' +
+        'Dim selectedValue As ExternalBuild = ExternalBuild(3)\n' +
+        'Dim otherValue As ExternalBuild = ExternalBuild(CDbl(1.5))\n';
+    fs.writeFileSync(headerPath, header);
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+        semanticModelOnly: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    try {
+        const headerInput = { ...input, uri: { scheme: "file", fsPath: headerPath }, position: { line: 4, character: 9 } };
+        const records = (await worker.query(reply.snapshotId, "references", { ...headerInput, includeDeclaration: true })).result;
+        const rootLines = records.filter((entry) => entry.uri.fsPath === filePath).map((entry) => entry.occurrence.line);
+        assert.deepEqual([...new Set(rootLines)].sort(), [1, 2, 3], "default, NEW and initializer calls must use the Long prototype only");
+        assert.ok(records.some((entry) => entry.uri.fsPath === headerPath && entry.occurrence.line === 4));
+        assert.equal(records.some((entry) => entry.uri.fsPath === headerPath && entry.occurrence.line === 5), false);
+        const highlights = (await worker.query(reply.snapshotId, "highlights", headerInput)).result;
+        assert.equal(highlights.length, 1);
+        assert.equal(highlights[0].occurrence.line, 4);
+        const inactive = (await worker.query(reply.snapshotId, "references", { ...headerInput,
+            position: { line: 7, character: 9 }, includeDeclaration: true })).result;
+        assert.deepEqual(inactive, [], "unselected header declarations must not acquire construction sites");
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
 test("sidecar navigation follows physical bindings omitted by the source token index", () => {
     const { createDocumentModel } = require("../lib/semantic-model");
     const { parseFreeBasicText } = require("../lib/freebasic-parser");
@@ -416,12 +1366,106 @@ function remoteFixture(t, real = false) {
     const vscode = { workspace, Uri: { file: CompilerUri.file, from: (value) => CompilerUri.from({ ...value, value: `${value.scheme}:${value.path}?${value.query}` }), parse: (value) => CompilerUri.from({ scheme: "freebasic-preprocessed", value }) }, window: {} };
     const index = { ensureInitialized() { assert.fail("Native model preparation must not initialize the host parser index"); }, notifyChange() {} };
     const service = new CompilerAnalysisService(vscode, index, { appendLine() {} });
+    // The lifecycle fixture runs Node rather than FBC. Its compatibility is a
+    // test precondition; real version probing has its own service tests.
+    if (!real) service.compilerCompatibilityFor = () => ({ state: "supported", version: "fixture", message: "" });
     // The service still uses its production background path; only the compiler
     // worker entry is replaced with deterministic lifecycle fixture output.
     service.analysisWorker = fixture.worker;
     fixture.worker.onModelEvicted = (id) => service.expireModel(id);
     t.after(() => service.dispose());
     return { ...fixture, service, document, workspace, values };
+}
+
+/* Hold a completed worker reply before host publication. Lifecycle assertions
+   then exercise a known scheduling window without depending on compiler speed. */
+function holdPreparedModel(t, worker) {
+    const analyze = worker.analyze.bind(worker);
+    let ready, failed, release;
+    const prepared = new Promise((resolve, reject) => { ready = resolve; failed = reject; });
+    const gate = new Promise((resolve) => { release = resolve; });
+    t.after(() => release());
+    worker.analyze = async (...args) => {
+        try {
+            const reply = await analyze(...args);
+            ready(reply);
+            await gate;
+            return reply;
+        } catch (error) { failed(error); throw error; }
+    };
+    return { prepared, release };
+}
+
+for (const sidecar of [false, true]) test(`readonly value qualifiers distinguish const pointers from const pointees (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["Dim writableValue As Long = 1", "Dim immutableValue As Const Long = 2",
+        "Dim pointerToConst As Const Long Ptr = @immutableValue", "Dim fixedPointer As Long Const Ptr = @writableValue",
+        "Sub InspectConst(ByRef inputValue As Const Long, ByVal dataPointer As Const Long Ptr)",
+        "    Print inputValue, *dataPointer", "End Sub", "Print immutableValue, *pointerToConst, *fixedPointer",
+        "pointerToConst = @immutableValue", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    if (sidecar) {
+        const executable = path.join(path.dirname(filePath), "const-values");
+        const compiled = spawnSync(process.env.FBC_EXECUTABLE || options.compilerPath, [filePath, "-x", executable],
+            { cwd: path.dirname(filePath), encoding: "utf8", timeout: 30000 });
+        assert.equal(compiled.status, 0, `${compiled.stdout}${compiled.stderr}`);
+        const executed = spawnSync(executable, [], { encoding: "utf8", timeout: 10000 });
+        assert.equal(executed.status, 0, executed.stderr);
+        assert.deepEqual(executed.stdout.trim().split(/\s+/), ["2", "2", "1"]);
+    }
+    const reply = await worker.analyze({ ...options, semanticModelOnly: sidecar,
+        exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+    const sites = [];
+    for (const [line, lineText] of text.split("\n").entries()) {
+        for (const match of lineText.matchAll(/\b(writableValue|immutableValue|pointerToConst|fixedPointer|inputValue|dataPointer)\b/g)) {
+            sites.push({ filePath, line, startColumn: match.index, endColumn: match.index + match[0].length,
+                readonly: ["immutableValue", "fixedPointer", "inputValue"].includes(match[0]) });
+        }
+    }
+    if (sidecar) {
+        const uses = (await worker.query(reply.snapshotId, "compilerSidecarAccessRolesAtSites", { ...input, sites })).result;
+        for (let index = 0; index < sites.length; index++) {
+            assert.equal(uses.find((use) => use.index === index)?.readonly === true, sites[index].readonly,
+                `readonly qualifier at ${sites[index].line}:${sites[index].startColumn}`);
+        }
+    } else {
+        const records = decodeSemanticTokenRecords((await worker.query(reply.snapshotId, "semanticTokens", input)).result);
+        for (const site of sites) {
+            const record = records.find((token) => token.line === site.line && token.character === site.startColumn);
+            assert.ok(record, `missing native value token at ${site.line}:${site.startColumn}`);
+            assert.equal(Boolean(record.modifiers & (1 << TOKEN_MODIFIERS.indexOf("readonly"))), site.readonly,
+                `readonly qualifier at ${site.line}:${site.startColumn}`);
+        }
+    }
+});
+
+for (const values of [[true, true], [true, false], [true, null]]) {
+    test(`readonly qualifiers require agreement across shared physical contexts (${values.join(",")})`, () => {
+        const { createDocumentModel } = require("../lib/semantic-model");
+        const { parseFreeBasicText } = require("../lib/freebasic-parser");
+        const uri = CompilerUri.file("/project/const-context.bas");
+        const document = createDocumentModel(uri, parseFreeBasicText("Dim sample As Long\nPrint sample\n"));
+        document.byLine = new Map();
+        for (const token of document.tokens) {
+            const tokens = document.byLine.get(token.line) || [];
+            tokens.push(token);
+            document.byLine.set(token.line, tokens);
+        }
+        const model = { semanticSidecarOnly: true, partial: false, semanticAccessRoles: [],
+            semanticBindings: values.flatMap((_value, index) => [
+                { symbol: index + 1, role: "declaration", physical: true, filePath: uri.fsPath,
+                    startLine: 1, endLine: 1, startColumn: 4, endColumn: 10 },
+                { symbol: index + 1, role: "reference", physical: true, filePath: uri.fsPath,
+                    startLine: 2, endLine: 2, startColumn: 6, endColumn: 12 }
+            ]),
+            compilerFactsBySemanticIdentity: new Map(values.map((value, index) => [index + 1, { valueConst: value }])),
+            getDocument: () => document };
+        const result = queryCompilerModel(model, "compilerSidecarAccessRolesAtSites", {
+            uri, sites: [{ filePath: uri.fsPath, line: 1, startColumn: 6, endColumn: 12 }]
+        }, () => {});
+        assert.deepEqual(result, values.every((value) => value === true) ? [{ index: 0, readonly: true }] : []);
+    });
 }
 
 test("prepared models retain native graphs in the worker and bound their lifetime", async (t) => {
@@ -433,13 +1477,67 @@ test("prepared models retain native graphs in the worker and bound their lifetim
     assert.equal(first.origins, undefined);
     assert.equal(first.sources.length, 1);
     assert.equal((await worker.query(first.snapshotId, "validate", input)).result, true);
-    const second = await worker.analyze(options, preparation);
+    const retained = [first];
+    for (let index = 1; index < 8; index++) retained.push(await worker.analyze(options, preparation));
+    assert.equal(worker.models.size, 8, "small graphs should use the byte budget rather than churn after two modules");
     await worker.query(first.snapshotId, "validate", input);
-    const third = await worker.analyze(options, preparation);
-    assert.deepEqual([...worker.models].sort(), [first.snapshotId, third.snapshotId].sort());
-    await assert.rejects(worker.query(second.snapshotId, "validate", input), /expired/);
+    const next = await worker.analyze(options, preparation);
+    assert.equal(worker.models.size, 8);
+    assert.ok(worker.models.has(first.snapshotId), "querying a model must refresh its LRU position");
+    assert.ok(worker.models.has(next.snapshotId));
+    await assert.rejects(worker.query(retained[1].snapshotId, "validate", input), /expired/);
     worker.cancelAll();
     assert.equal(worker.models.size, 0);
+});
+
+for (const real of [false, true]) test(`three editor modules reuse current compiler models (${real ? "native" : "fixture"})`,
+    { skip: real && !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
+        const { service, document, worker, workspace, directory } = remoteFixture(t, real);
+        for (const [name, type] of [["second", "Double"], ["third", "Single"]]) {
+            const file = path.join(directory, `${name}.bas`);
+            const text = `Dim ${name}Value As ${type}\nPrint ${name}Value\n`;
+            fs.writeFileSync(file, text);
+            workspace.textDocuments.push({ uri: CompilerUri.file(file), languageId: "freebasic", version: 1, isDirty: false,
+                getText: () => text });
+        }
+        const analyze = worker.analyze.bind(worker);
+        let preparations = 0;
+        worker.analyze = (...args) => { preparations++; return analyze(...args); };
+        for (const current of workspace.textDocuments) assert.ok(await service.getModelForEditor(current));
+        assert.equal(preparations, 3);
+        for (let pass = 0; pass < 2; pass++) {
+            for (const current of workspace.textDocuments) {
+                const model = await service.getModelForEditor(current);
+                assert.ok(await model.query("validate", current.uri));
+            }
+        }
+        assert.equal(preparations, 3, "switching tabs or re-requesting providers must not recompile unchanged modules");
+        assert.ok(service.getModel(document.uri));
+    });
+
+test("more small cache entries do not enlarge the model byte budget", async (t) => {
+    const { options, preparation, directory, filePath } = setup(t);
+    const store = new CompilerModelStore();
+    t.after(() => store.clear());
+    const analyze = async () => ({ text: "", dependencies: [filePath], origins: [], expressions: [] });
+    const prepare = (run = analyze) => store.prepare({ ...options, overlays: new Map(), temporaryDirectory: directory }, preparation, run, () => {});
+    const first = await prepare();
+    /* Charge a tiny fixture to the 128 MiB retention boundary. This exercises
+       eviction without allocating a large compiler graph just for the test. */
+    const limit = 128 * 1024 * 1024;
+    store.models.get(first.snapshotId).weight = limit - 1;
+    store.weight = limit - 1;
+    const second = await prepare();
+    assert.equal(store.models.has(first.snapshotId), false, "the byte limit must evict before the larger entry-count cap is reached");
+    assert.equal(store.models.size, 1);
+    assert.equal(store.weight, second.modelWeight);
+    store.models.get(second.snapshotId).weight = limit + 1;
+    store.weight = limit + 1;
+    await prepare(async () => {
+        assert.equal(store.models.size, 0, "an enlarged exclusive model must be released before another analysis starts");
+        assert.equal(store.weight, 0);
+        return analyze();
+    });
 });
 
 test("prepared requests freeze metadata and cancelled queries do not evict current models", async (t) => {
@@ -466,6 +1564,34 @@ test("worker queries reject stale disk sources and dirty buffers closed without 
     assert.equal((await worker.query(unsaved.snapshotId, "validate", { ...input, openFiles: [filePath] })).result, true);
     await assert.rejects(worker.query(unsaved.snapshotId, "validate", input), /buffer closed/);
     assert.equal(fs.readFileSync(filePath, "utf8"), "Dim replacedValue As Double\n");
+});
+
+test("model preparation rejects a compiler replaced before its snapshot is retained", async (t) => {
+    const { options, preparation, directory, filePath } = setup(t);
+    const compilerPath = path.join(directory, "compiler.exe");
+    fs.writeFileSync(compilerPath, "first compiler", { mode: 0o755 });
+    const models = new CompilerModelStore();
+    t.after(() => models.clear());
+    await assert.rejects(models.prepare({ ...options, compilerPath, overlays: new Map(), temporaryDirectory: directory },
+        preparation, async () => {
+            fs.appendFileSync(compilerPath, " changed during analysis");
+            return { text: "", dependencies: [filePath] };
+        }, () => {}), /Compiler executable changed during analysis/);
+    assert.equal(models.models.size, 0);
+    assert.equal(models.weight, 0);
+});
+
+test("worker queries expire compiler models after an in-place compiler rebuild", async (t) => {
+    const { worker, options, preparation, input, directory } = setup(t);
+    const compilerPath = path.join(directory, "compiler.exe");
+    fs.writeFileSync(compilerPath, "first compiler", { mode: 0o755 });
+    const reply = await worker.analyze({ ...options, compilerPath }, preparation);
+    assert.equal((await worker.query(reply.snapshotId, "validate", input)).result, true);
+    fs.appendFileSync(compilerPath, " rebuilt");
+    await assert.rejects(worker.query(reply.snapshotId, "validate", input), /executable changed/);
+    assert.equal(worker.models.has(reply.snapshotId), false);
+    const fresh = await worker.analyze({ ...options, compilerPath }, preparation);
+    assert.equal((await worker.query(fresh.snapshotId, "validate", input)).result, true);
 });
 
 test("query positions reject out-of-range and reversed spans without losing the model", async (t) => {
@@ -650,10 +1776,126 @@ test("background service avoids host parsing and serializes prototype cursor coo
     const tokens = await model.query("semanticTokens", document.uri);
     assert.ok(tokens instanceof Uint32Array);
     assert.equal(service.getModel(document.uri), model, "Typed arrays have an entries method, not an entries result list");
+    const facts = { entries: [{ name: "compiler-only fact" }] };
+    worker.query = async () => ({ result: facts });
+    assert.deepEqual(await model.query("facts", document.uri), facts,
+        "fact lists without URI fields must not be treated as navigation locations");
+    worker.query = query;
+});
+
+function sharedHeaderFixture(t, included) {
+    const fixture = remoteFixture(t, true);
+    const headerPath = path.join(fixture.directory, "shared.bi");
+    fs.writeFileSync(headerPath, "Dim sharedValue As Long\n");
+    fs.writeFileSync(fixture.filePath, included ? '#include "shared.bi"\nPrint sharedValue\n' : "Print 0\n");
+    const header = { uri: CompilerUri.file(headerPath), languageId: "freebasic", version: 1, isDirty: false,
+        getText: () => fs.readFileSync(headerPath, "utf8") };
+    fixture.workspace.textDocuments.push(header);
+    fixture.values["analysis.projectContexts"] = [{ name: "shared", modules: [fixture.filePath] }];
+    fixture.values["analysis.activeContext"] = { name: "shared", module: fixture.filePath };
+    const warnings = [], information = [];
+    fixture.service.vscode.window.showWarningMessage = (message) => warnings.push(message);
+    fixture.service.vscode.window.showInformationMessage = (message) => information.push(message);
+    return { ...fixture, header, warnings, information };
+}
+
+for (const creator of ["root", "header"]) for (const included of [false, true]) {
+    test(`shared header checks validate each consumer (${creator} first, ${included ? "included" : "excluded"})`, native, async (t) => {
+        const { service, document, header, worker, warnings, information } = sharedHeaderFixture(t, included);
+        const gate = holdPreparedModel(t, worker);
+        let calls = 0;
+        const analyze = worker.analyze.bind(worker);
+        worker.analyze = (...args) => { calls++; return analyze(...args); };
+        const first = service.check(creator === "root" ? document : header, false);
+        await gate.prepared;
+        const second = service.check(creator === "root" ? header : document, true);
+        gate.release();
+        const results = await Promise.all([first, second]);
+        assert.equal(results[creator === "root" ? 0 : 1], true, "a valid root must not inherit another consumer's exclusion failure");
+        assert.equal(results[creator === "root" ? 1 : 0], included, "successful root analysis is not proof that a header was consumed");
+        assert.equal(calls, 1, "per-consumer validation must share one compiler preparation");
+        assert.ok(service.getModel(document.uri));
+        assert.equal(Boolean(service.getModel(header.uri)), included);
+        if (creator === "root" && !included) assert.match(warnings[0], /did not include|did not consume/);
+        else assert.equal(information.length, 1, "a manual joiner must receive its own result notification");
+    });
+}
+
+test("excluded shared headers remain throttled after binding-upgrade transfers", native, async (t) => {
+    const { service, document, header, worker } = sharedHeaderFixture(t, false);
+    const gate = holdPreparedModel(t, worker);
+    let calls = 0;
+    const analyze = worker.analyze.bind(worker);
+    worker.analyze = (...args) => { calls++; return analyze(...args); };
+    const headerRequest = service.getModelForEditor(header);
+    await gate.prepared;
+    const rootRequest = service.getModelForEditor(document, null, false, true);
+    gate.release();
+    const [headerModel, rootModel] = await Promise.all([headerRequest, rootRequest]);
+    assert.equal(headerModel, null);
+    assert.ok(rootModel?.semanticBindingsAvailable);
+    assert.equal(calls, 2);
+    assert.equal(await service.getModelForEditor(header), null);
+    assert.equal(calls, 2, "an excluded header must not repeatedly recompile or evict its valid root");
+    assert.equal(service.getModel(document.uri), rootModel);
+});
+
+for (const [name, firstManual, secondManual, cancelled] of [
+    ["silent creator", false, true, -1],
+    ["manual creator", true, false, -1],
+    ["cancelled creator", true, true, 0],
+    ["cancelled joiner", true, true, 1],
+    ["silent callers", false, false, -1],
+    ["cancelled only manual caller", true, false, 0]
+]) test(`shared analysis failures notify active manual callers (${name})`, async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    const warnings = [], listeners = new Set();
+    service.vscode.window.showWarningMessage = (message) => warnings.push(message);
+    const token = { isCancellationRequested: false,
+        onCancellationRequested(listener) { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; } };
+    let fail, calls = 0, signal;
+    worker.analyze = (options) => {
+        calls++;
+        signal = options.signal;
+        return new Promise((_resolve, reject) => { fail = () => reject(new Error("Shared compiler export failed.")); });
+    };
+    const first = service.check(document, firstManual, cancelled === 0 ? token : null);
+    const second = service.check(document, secondManual, cancelled === 1 ? token : null);
+    assert.equal(calls, 1);
+    if (cancelled >= 0) {
+        token.isCancellationRequested = true;
+        for (const listener of [...listeners]) listener();
+        assert.equal(signal.aborted, false, "the uncancelled caller still owns this preparation");
+    }
+    fail();
+    assert.deepEqual(await Promise.all([first, second]), [false, false]);
+    const manual = firstManual && cancelled !== 0 || secondManual && cancelled !== 1;
+    assert.deepEqual(warnings, manual ? ["Shared compiler export failed."] : [],
+        "only the active manual caller should receive a warning, regardless of who started the pass");
+    assert.equal(listeners.size, 0);
+});
+
+for (const macro of [false, true]) test(`shared analysis failures follow the last binding upgrade (${macro ? "macro" : "bindings"})`, async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    const warnings = [], requests = [];
+    service.vscode.window.showWarningMessage = (message) => warnings.push(message);
+    worker.analyze = (options) => new Promise((_resolve, reject) => {
+        requests.push({ options, reject });
+        options.signal.addEventListener("abort", () => reject(new Error("Superseded preparation cancelled.")), { once: true });
+    });
+    const waiting = [service.check(document, true), service.check(document, false, null, true)];
+    if (macro) waiting.push(service.check(document, false, null, true, true));
+    assert.equal(requests.length, macro ? 3 : 2);
+    requests.at(-1).reject(new Error("Upgraded compiler export failed."));
+    assert.deepEqual(await Promise.all(waiting), waiting.map(() => false));
+    assert.deepEqual(warnings, ["Upgraded compiler export failed."],
+        "transferred manual callers need the final failure, not a superseded compiler's cancellation");
 });
 
 test("matching background requests share one immutable compiler preparation", async (t) => {
     const { service, document, worker } = remoteFixture(t);
+    const activity = [];
+    service.analysisChangeEmitter = { fire: () => activity.push(service.running.size), dispose() {} };
     const analyze = worker.analyze.bind(worker);
     let release, calls = 0;
     worker.analyze = async (...args) => {
@@ -668,6 +1910,388 @@ test("matching background requests share one immutable compiler preparation", as
     release();
     assert.deepEqual(await Promise.all([first, second]), [true, true]);
     assert.equal(calls, 1);
+    assert.deepEqual(activity, [1, 0], "shared callers must not create duplicate activity or leave progress busy");
+});
+
+test("cancelling one provider leaves a shared compiler preparation available to other waiters", async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    const analyze = worker.analyze.bind(worker);
+    let release, cancelled = false;
+    const listeners = new Set();
+    const token = {
+        get isCancellationRequested() { return cancelled; },
+        onCancellationRequested(listener) { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; }
+    };
+    let signal;
+    worker.analyze = async (options, preparation) => {
+        signal = options.signal;
+        await new Promise((resolve) => { release = resolve; });
+        return analyze(options, preparation);
+    };
+    const first = service.check(document, false, token);
+    const second = service.check(document, false);
+    cancelled = true;
+    for (const listener of [...listeners]) listener();
+    assert.equal(await first, false);
+    assert.equal(signal.aborted, false, "the remaining waiter still owns the compiler work");
+    release();
+    assert.equal(await second, true);
+    assert.ok(service.getModel(document.uri));
+    assert.equal(listeners.size, 0);
+});
+
+test("internally cancelled on-demand passes remain immediately retryable", async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    const analyze = worker.analyze.bind(worker);
+    worker.analyze = (options) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => reject(new Error("Compiler analysis was cancelled.")), { once: true });
+    });
+    const pending = service.getModelForEditor(document);
+    service.running.get(document.uri.toString()).abort();
+    assert.equal(await pending, null);
+    worker.analyze = analyze;
+    assert.ok(await service.getModelForEditor(document), "internal cancellation is not a compiler failure");
+    assert.equal(service.onDemandFailures.has(document), false);
+});
+
+test("a full worker queue does not cache an on-demand compiler failure", async (t) => {
+    const { service, document, worker, options } = remoteFixture(t);
+    const waiting = Array.from({ length: 16 }, () => worker.analyze({ ...options, compilerArguments: ["-d", "wait"] }));
+    const settled = Promise.allSettled(waiting);
+    assert.equal(await service.getModelForEditor(document), null);
+    assert.equal(service.onDemandFailures.has(document), false, "queue admission rejection must not disable compiler assistance for 30 seconds");
+    worker.cancelAll();
+    await settled;
+    assert.ok(await service.getModelForEditor(document), "the same inputs must work as soon as capacity is available");
+});
+
+test("on-demand binding upgrades return the shared successor despite the original pass being aborted", async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    const activity = [];
+    service.analysisChangeEmitter = { fire: () => activity.push(service.running.size), dispose() {} };
+    const analyze = worker.analyze.bind(worker);
+    let release;
+    worker.analyze = (options, preparation) => new Promise((resolve, reject) => {
+        options.signal.addEventListener("abort", () => reject(new Error("Compiler analysis was cancelled.")), { once: true });
+        release = async () => {
+            try { resolve(await analyze(options, preparation)); } catch (error) { reject(error); }
+        };
+    });
+    const expression = service.getModelForEditor(document);
+    const binding = service.getModelForEditor(document, null, false, true);
+    await release();
+    const models = await Promise.all([expression, binding]);
+    assert.ok(models[0]);
+    assert.equal(models[0], models[1]);
+    assert.equal(models[0].semanticBindingsAvailable, true);
+    assert.equal(service.onDemandFailures.has(document), false);
+    assert.deepEqual(activity, [1, 1, 0], "transferred providers must stay busy until the replacement finishes");
+});
+
+test("saved-header fixes release an on-demand failure for the native compiler", native, async (t) => {
+    const { service, document, worker, workspace, filePath, directory } = remoteFixture(t, true);
+    const source = '#include "retry.bi"\nDim retryValue As RetryAlias\nPrint retryValue\n';
+    fs.writeFileSync(filePath, source);
+    const headerPath = path.join(directory, "retry.bi");
+    fs.writeFileSync(headerPath, "Type RetryAlias As Long\n");
+    const header = { uri: CompilerUri.file(headerPath), version: 1, isDirty: false,
+        getText: () => fs.readFileSync(headerPath, "utf8") };
+    workspace.textDocuments.push(header);
+    const analyze = worker.analyze.bind(worker);
+    let calls = 0;
+    worker.analyze = (...args) => ++calls === 1 ? Promise.reject(new Error("Initial export was unavailable.")) : analyze(...args);
+    assert.equal(await service.getModelForEditor(document), null);
+    assert.equal(await service.getModelForEditor(document), null);
+    assert.equal(calls, 1, "unchanged failing input must remain throttled");
+    fs.writeFileSync(headerPath, "Type RetryAlias As Double\n");
+    header.version++;
+    service.documentChanged(header);
+    const model = await service.getModelForEditor(document);
+    assert.ok(model, "the saved header revision must release the root's failure throttle");
+    const expression = await model.expressionAt(document.uri, pointAt(source, "Print retryValue", "Print r".length));
+    assert.equal(expression?.typeName.toLowerCase(), "double");
+    assert.equal(calls, 2);
+});
+
+for (const reason of ["backpressure", "eviction"]) test(`on-demand post-preparation ${reason} does not throttle new work`, async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    const analyze = worker.analyze.bind(worker), query = worker.query.bind(worker);
+    let rejectNext = true;
+    if (reason === "backpressure") {
+        worker.query = (...args) => {
+            if (args[1] === "validate" && rejectNext) {
+                rejectNext = false;
+                return Promise.reject(new Error("The compiler analysis queue is full."));
+            }
+            return query(...args);
+        };
+    } else {
+        worker.analyze = async (...args) => {
+            const reply = await analyze(...args);
+            if (rejectNext) {
+                rejectNext = false;
+                worker.releaseModel(reply.snapshotId);
+            }
+            return reply;
+        };
+    }
+    assert.equal(await service.getModelForEditor(document), null);
+    assert.equal(worker.models.size, 0, "discarded preparations must still release their graphs");
+    assert.ok(await service.getModelForEditor(document), "a successful compiler preparation must not become a cached compiler failure");
+    assert.equal(service.onDemandFailures.has(document), false);
+});
+
+for (const macro of [false, true]) test(`new named headers refresh cached missing includes (${macro ? "macro" : "literal"})`, native, async (t) => {
+    const { service, document, worker, workspace, filePath, directory } = remoteFixture(t, true);
+    const source = macro ? '#define HEADER_NAME "appeared.bi"\n#include HEADER_NAME\nPrint includedValue\n'
+        : '#include "appeared.bi"\nPrint includedValue\n';
+    fs.writeFileSync(filePath, source);
+    const first = await service.getModelForEditor(document);
+    assert.equal(first?.partial, true);
+    const headerPath = path.join(directory, "appeared.bi");
+    const header = { uri: CompilerUri.file(headerPath), languageId: "freebasic", version: 1, isDirty: true,
+        getText: () => "Dim includedValue As Double\n" };
+    workspace.textDocuments.push(header);
+    service.documentOpened(header);
+    assert.equal(worker.models.has(first.snapshotId), false, "the compiler-reported failed include must retire its old graph");
+    const model = await service.getModelForEditor(document);
+    assert.equal(model?.partial, false);
+    const expression = await model.expressionAt(document.uri, pointAt(source, "Print includedValue", "Print i".length));
+    assert.equal(expression?.typeName.toLowerCase(), "double");
+    assert.equal(fs.existsSync(headerPath), false, "the new named buffer must remain unsaved");
+    assert.equal(fs.readFileSync(filePath, "utf8"), source, "the root must not be edited to release the partial snapshot");
+});
+
+test("worker freshness rejects new unsaved includes before a delayed open event", native, async (t) => {
+    const { service, document, workspace, filePath, directory } = remoteFixture(t, true);
+    const source = '#include "appeared.bi"\nPrint includedValue\n';
+    fs.writeFileSync(filePath, source);
+    const first = await service.getModelForEditor(document);
+    assert.equal(first?.partial, true);
+    const header = { uri: CompilerUri.file(path.join(directory, "appeared.bi")), isDirty: true, version: 1,
+        getText: () => "Dim includedValue As Double\n" };
+    workspace.textDocuments.push(header);
+    assert.equal(await first.query("validate", document.uri), null, "worker-owned freshness must not wait for the editor open event");
+    assert.equal(service.getModel(document.uri), null);
+    assert.equal((await service.getModelForEditor(document))?.partial, false);
+});
+
+test("same-named unrelated buffers do not repeatedly invalidate missing-include models", native, async (t) => {
+    const { service, document, workspace, filePath, directory } = remoteFixture(t, true);
+    fs.writeFileSync(filePath, '#include "appeared.bi"\nPrint includedValue\n');
+    assert.equal((await service.getModelForEditor(document))?.partial, true);
+    const header = { uri: CompilerUri.file(path.join(directory, "unrelated", "appeared.bi")), version: 1, isDirty: true,
+        getText: () => "Dim unrelatedValue As Double\n" };
+    workspace.textDocuments.push(header);
+    service.documentOpened(header);
+    const current = await service.getModelForEditor(document);
+    assert.equal(current?.partial, true, "FBC must decide whether the same-named candidate is in its include search path");
+    service.documentOpened(header);
+    header.version++;
+    header.getText = () => "Dim unrelatedValue As Long\n";
+    service.documentChanged(header);
+    assert.equal(await current.query("validate", document.uri), true);
+    assert.equal(service.getModel(document.uri), current, "an ignored candidate must not cause an expiry loop");
+});
+
+test("late header-open events preserve a replacement already carrying the new buffer", native, async (t) => {
+    const { service, document, worker, workspace, filePath, directory } = remoteFixture(t, true);
+    fs.writeFileSync(filePath, '#include "appeared.bi"\nPrint includedValue\n');
+    assert.equal((await service.getModelForEditor(document))?.partial, true);
+    const header = { uri: CompilerUri.file(path.join(directory, "appeared.bi")), version: 1, isDirty: true,
+        getText: () => "Dim includedValue As Double\n" };
+    workspace.textDocuments.push(header);
+    const gate = holdPreparedModel(t, worker);
+    const pending = service.check(document, false, null, true);
+    assert.equal((await gate.prepared).partial, false);
+    const controller = service.running.get(document.uri.toString());
+    service.documentOpened(header);
+    assert.equal(controller.signal.aborted, false);
+    gate.release();
+    assert.equal(await pending, true);
+    assert.equal(service.getModel(document.uri)?.partial, false);
+});
+
+test("a new provider does not join a cancelled pass that is still being reaped", async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    const analyze = worker.analyze.bind(worker);
+    let cancel, reap, calls = 0;
+    const token = { isCancellationRequested: false,
+        onCancellationRequested(listener) { cancel = listener; return { dispose() {} }; } };
+    worker.analyze = (options, preparation) => {
+        if (++calls > 1) return analyze(options, preparation);
+        return new Promise((_resolve, reject) => { reap = () => reject(new Error("Compiler analysis was cancelled.")); });
+    };
+    const first = service.check(document, false, token);
+    token.isCancellationRequested = true;
+    cancel();
+    const second = service.check(document, false);
+    assert.equal(calls, 2);
+    reap();
+    assert.deepEqual(await Promise.all([first, second]), [false, true]);
+});
+
+test("binding upgrades transfer matching expression waiters to the replacement compiler pass", async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    const analyze = worker.analyze.bind(worker);
+    const requests = [];
+    worker.analyze = (options, preparation) => new Promise((resolve, reject) => {
+        const cancel = () => reject(new Error("Compiler analysis was cancelled."));
+        options.signal.addEventListener("abort", cancel, { once: true });
+        requests.push({ options, release: async () => {
+            options.signal.removeEventListener("abort", cancel);
+            try { resolve(await analyze(options, preparation)); } catch (error) { reject(error); }
+        } });
+    });
+    const expression = service.check(document, false);
+    const bindings = service.check(document, false, null, true);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].options.signal.aborted, true);
+    await requests[1].release();
+    assert.deepEqual(await Promise.all([expression, bindings]), [true, true]);
+    assert.equal(service.getModel(document.uri).semanticBindingsAvailable, true);
+});
+
+test("cancelling an upgrade provider retains expression waiters while the old pass is reaped", async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    const analyze = worker.analyze.bind(worker);
+    let cancel, reap, release;
+    const requests = [];
+    const token = { isCancellationRequested: false,
+        onCancellationRequested(listener) { cancel = listener; return { dispose() {} }; } };
+    worker.analyze = (options, preparation) => {
+        requests.push(options);
+        if (requests.length === 1) {
+            return new Promise((_resolve, reject) => { reap = () => reject(new Error("Compiler analysis was cancelled.")); });
+        }
+        return new Promise((resolve, reject) => { release = async () => {
+            try { resolve(await analyze(options, preparation)); } catch (error) { reject(error); }
+        }; });
+    };
+    const expression = service.check(document, false);
+    const bindings = service.check(document, false, token, true);
+    token.isCancellationRequested = true;
+    cancel();
+    assert.equal(await bindings, false);
+    assert.equal(requests[1].signal.aborted, false,
+        "the waiting expression provider must own the stronger pass before the old compiler finishes cleanup");
+    await release();
+    assert.equal(await expression, true);
+    reap();
+    assert.equal(service.getModel(document.uri).semanticBindingsAvailable, true);
+});
+
+for (const real of [false, true]) test(`binding upgrades retain current results until replacement publication (${real ? "native" : "fixture"})`,
+    { skip: real && !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
+        const { service, document, worker } = remoteFixture(t, real);
+        assert.equal(await service.check(document, false), true);
+        const first = service.getModel(document.uri);
+        const firstSnapshot = service.snapshotFor(document.uri);
+        const expanded = service.provideTextDocumentContent(firstSnapshot.uri);
+        let publications = 0;
+        const publish = service.publishDiagnostics.bind(service);
+        service.publishDiagnostics = () => { publications++; publish(); };
+        const gate = holdPreparedModel(t, worker);
+        const pending = service.check(document, false, null, true);
+        await gate.prepared;
+        assert.equal(service.getModel(document.uri), first,
+            "requesting stronger binding facts must not withdraw the current expression snapshot");
+        assert.equal(publications, 0, "unchanged diagnostics must not disappear during an upgrade");
+        assert.equal(service.provideTextDocumentContent(firstSnapshot.uri), expanded);
+        assert.equal(first.semanticBindingsAvailable, false, "the retained snapshot must not claim the requested new capability");
+        assert.ok(worker.models.has(first.snapshotId));
+        const hover = await first.query("hover", document.uri, { position: { line: 1, character: 8 } });
+        assert.equal(hover.occurrence.name, "modelValue");
+        gate.release();
+        assert.equal(await pending, true);
+        const second = service.getModel(document.uri);
+        assert.notEqual(second, first);
+        assert.equal(second.semanticBindingsAvailable, true);
+        assert.equal(worker.models.has(first.snapshotId), false, "publication must release the old graph, not increase the cache budget");
+        assert.equal(worker.models.size, 1);
+        assert.equal(service.expanded.has(firstSnapshot.uri.toString()), false);
+        assert.equal(publications, 1, "publish replacement diagnostics once, without a preceding empty result");
+    });
+
+test("cancelled and failed binding upgrades preserve only the existing capabilities", async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    assert.equal(await service.check(document, false), true);
+    const first = service.getModel(document.uri);
+    let cancel;
+    const token = { isCancellationRequested: false,
+        onCancellationRequested(listener) { cancel = listener; return { dispose() {} }; } };
+    worker.analyze = (options) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => reject(new Error("Compiler analysis was cancelled.")), { once: true });
+    });
+    const pending = service.check(document, false, token, true);
+    token.isCancellationRequested = true;
+    cancel();
+    assert.equal(await pending, false);
+    assert.equal(service.getModel(document.uri), first);
+    worker.analyze = async () => { throw new Error("Binding export failed."); };
+    assert.equal(await service.getModelForEditor(document, null, false, true), null,
+        "an unsuccessful upgrade must not substitute weaker facts for required bindings");
+    assert.equal(await service.getModelForEditor(document), first);
+    assert.equal(first.semanticBindingsAvailable, false);
+    assert.ok(await first.query("hover", document.uri, { position: { line: 1, character: 8 } }));
+});
+
+for (const change of ["edit", "context"]) test(`binding upgrades do not retain results after a ${change} change`, async (t) => {
+    const { service, document, worker, values } = remoteFixture(t);
+    assert.equal(await service.check(document, false), true);
+    const first = service.getModel(document.uri);
+    const gate = holdPreparedModel(t, worker);
+    const pending = service.check(document, false, null, true);
+    await gate.prepared;
+    assert.equal(service.getModel(document.uri), first);
+    if (change === "edit") {
+        document.getText = () => "Dim editedValue As Double\n";
+        service.documentChanged(document);
+    } else {
+        values["compiler.arguments"] = ["-d", "CHANGED_CONTEXT"];
+        service.refreshContexts();
+    }
+    assert.equal(service.getModel(document.uri), null);
+    assert.equal(worker.models.has(first.snapshotId), false);
+    gate.release();
+    assert.equal(await pending, false);
+    await new Promise(setImmediate);
+    assert.equal(service.snapshots.size, 0, "discarded work must not resurrect the previous snapshot");
+    assert.equal(worker.models.size, 0);
+});
+
+test("macro binding upgrades retain the current ordinary binding snapshot", async (t) => {
+    const { service, document, worker } = remoteFixture(t);
+    assert.equal(await service.check(document, false, null, true), true);
+    const first = service.getModel(document.uri);
+    const gate = holdPreparedModel(t, worker);
+    const pending = service.check(document, false, null, true, true);
+    await gate.prepared;
+    assert.equal(service.getModel(document.uri), first);
+    assert.equal(first.semanticMacroBindingsAvailable, false);
+    gate.release();
+    assert.equal(await pending, true);
+    assert.equal(service.getModel(document.uri).semanticMacroBindingsAvailable, true);
+    assert.equal(worker.models.has(first.snapshotId), false);
+});
+
+test("retained binding upgrade snapshots still reject changed closed disk sources", async (t) => {
+    const { service, document, worker, workspace, filePath } = remoteFixture(t);
+    assert.equal(await service.check(document, false), true);
+    const first = service.getModel(document.uri);
+    workspace.textDocuments = [];
+    service.documentClosed(document);
+    const gate = holdPreparedModel(t, worker);
+    const pending = service.check(document, false, null, true);
+    await gate.prepared;
+    assert.equal(service.getModel(document.uri), first);
+    fs.writeFileSync(filePath, "Dim changedDiskValue As Double\nPrint changedDiskValue\n");
+    assert.equal(await first.query("hover", document.uri, { position: { line: 1, character: 8 } }), null,
+        "keeping the old host snapshot must not bypass worker-owned disk freshness checks");
+    assert.equal(service.getModel(document.uri), null);
+    gate.release();
+    assert.equal(await pending, false, "the already-prepared replacement is stale as well");
+    assert.equal(worker.models.size, 0);
 });
 
 test("background reanalysis releases the replaced worker snapshot", async (t) => {
@@ -677,7 +2301,12 @@ test("background reanalysis releases the replaced worker snapshot", async (t) =>
     assert.ok(first instanceof CompilerRemoteModel);
     assert.ok(worker.models.has(first.snapshotId));
 
-    assert.equal(await service.check(document, false), true);
+    const gate = holdPreparedModel(t, worker);
+    const pending = service.check(document, false);
+    await gate.prepared;
+    assert.equal(service.getModel(document.uri), null, "an explicit same-capability recheck must not keep stale results");
+    gate.release();
+    assert.equal(await pending, true);
     const second = service.getModel(document.uri);
     assert.ok(second instanceof CompilerRemoteModel);
     assert.notEqual(second.snapshotId, first.snapshotId);
@@ -957,8 +2586,7 @@ test("model eviction removes matching host diagnostics and snapshot metadata", a
     const id = service.getModel(document.uri).snapshotId;
     const expandedUri = [...service.snapshots.values()][0].uri.toString();
     assert.ok(service.expanded.has(expandedUri));
-    await worker.analyze(options, preparation);
-    await worker.analyze(options, preparation);
+    for (let index = 0; index < 8; index++) await worker.analyze(options, preparation);
     assert.equal(worker.models.has(id), false);
     assert.equal(service.snapshots.size, 0);
     assert.equal(service.expanded.has(expandedUri), false);
@@ -1285,6 +2913,78 @@ test("native indexer navigation follows compiler-owned operator declarations", n
         assert.ok(moduleCalls.some((callee) => /ByVal index As Double/i.test(callee.declaration.signature)));
     } finally {
         worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("native and stock-sidecar navigation preserve identifier bindings inside index arguments", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = [
+        "Type IndexArgument",
+        "    value As Long",
+        "End Type",
+        "Type IndexedValue",
+        "    value As Long",
+        "    Declare Operator [](ByRef index As IndexArgument) As Double",
+        "End Type",
+        "Operator IndexedValue.[](ByRef index As IndexArgument) As Double",
+        "    Return index.value",
+        "End Operator",
+        "Function MakeIndex() As IndexArgument",
+        "    Return Type<IndexArgument>(1)",
+        "End Function",
+        "Dim item As IndexedValue",
+        "#if 1",
+        "Dim indexChoice As IndexArgument",
+        "#else",
+        "Dim indexChoice As Long",
+        "#endif",
+        "Print item[indexChoice]",
+        "Print item[MakeIndex()]",
+        ""
+    ].join("\n");
+    fs.writeFileSync(filePath, text);
+    const position = pointAt(text, "item[indexChoice]", "item[".length + 2);
+    const declarationLine = pointAt(text, "Dim indexChoice").line;
+    const compiled = spawnSync(process.env.FBC_EXECUTABLE || options.compilerPath, ["-pp", filePath], { encoding: "utf8" });
+    assert.equal(compiled.status, 0, `${compiled.stdout}${compiled.stderr}`);
+    for (const semanticModelOnly of [true, false]) {
+        const reply = await worker.analyze({ ...options, semanticModelOnly,
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            for (const operation of ["definition", "declaration"]) {
+                const entries = (await worker.query(reply.snapshotId, operation, { ...input, position })).result;
+                assert.deepEqual(entries.map((entry) => [entry.name, entry.declaration.line]), [["indexChoice", declarationLine]],
+                    `${operation} should select the argument variable with stock sidecar=${semanticModelOnly}`);
+            }
+            for (const operation of ["references", "highlights"]) {
+                const entries = (await worker.query(reply.snapshotId, operation,
+                    { ...input, position, includeDeclaration: true })).result;
+                assert.deepEqual(entries.map((entry) => entry.occurrence.line).sort((first, second) => first - second),
+                    [declarationLine, position.line]);
+            }
+            const hover = (await worker.query(reply.snapshotId, "hover", { ...input, position })).result;
+            assert.deepEqual(hover.entries.map((entry) => entry.name), ["indexChoice"],
+                "hover must describe the argument identifier, not the surrounding index operator");
+            assert.equal(hover.entries[0].declaration.line, declarationLine,
+                "hover must use the compiler-selected declaration rather than an inactive same-named variable");
+            assert.equal(hover.expression.typeName.toLowerCase(), "indexargument");
+            const types = (await worker.query(reply.snapshotId,
+                semanticModelOnly ? "compilerSidecarTypeDefinition" : "typeDefinition", { ...input, position })).result;
+            assert.deepEqual(types.map((entry) => [entry.name, entry.declaration.line]), [["IndexArgument", 0]]);
+            const hierarchy = (await worker.query(reply.snapshotId, "callHierarchyPrepare", { ...input, position })).result;
+            assert.deepEqual(hierarchy, [], "a variable argument is not a call to its surrounding index operator");
+            const nestedPosition = pointAt(text, "item[MakeIndex()]", "item[".length + 2);
+            const nestedHover = (await worker.query(reply.snapshotId, "hover", { ...input, position: nestedPosition })).result;
+            assert.deepEqual(nestedHover.entries.map((entry) => entry.name), ["MakeIndex"]);
+            if (!semanticModelOnly) {
+                const nestedCalls = (await worker.query(reply.snapshotId, "callHierarchyPrepare",
+                    { ...input, position: nestedPosition })).result;
+                assert.deepEqual(nestedCalls.map((entry) => entry.name), ["MakeIndex"],
+                    "Call Hierarchy should select the nested callee rather than the index operator");
+            }
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
     }
 });
 
@@ -2164,14 +3864,15 @@ test("stock semantic sidecar uses selected constructors for parameter inlays", n
                 end: { line, character: lineText.length },
                 parameterHints: true
             })).result;
-            if (lineText.includes("ConsumeSidecarChoice(1, SidecarChoiceAlias2(23))")) {
+            if (/^ConsumeSidecarChoice(?:\(|\s)/.test(lineText)) {
                 assert.deepEqual(hints.parameters.map((hint) => [hint.parameterName, hint.passingMode]), [
                     ["marker", "byval"],
                     ["choice", "byval"],
                     ["wholeCount", "byval"]
                 ]);
                 assert.equal(hints.parameters.find((hint) => hint.parameterName === "wholeCount").position.character,
-                    lineText.indexOf("23"));
+                    lineText.indexOf(expectedArgument),
+                    "both parenthesized and bare outer calls should retain the nested constructor's own label");
                 continue;
             }
             if (!expectedName) {
@@ -2884,9 +4585,13 @@ test("stock semantic sidecar maps overrides and type navigation across included 
     const text = [
         '#include "type-hierarchy.bi"',
         "Type DerivedSelector Extends BaseSelector",
+        "    '' @deprecated Use another selector.",
         "    Declare Function Choose(ByVal value As Long) As Long",
         "End Type",
         "Dim derivedValue As DerivedSelector",
+        "Function DerivedSelector.Choose(ByVal value As Long) As Long",
+        "    Return value",
+        "End Function",
         ""
     ].join("\n");
     fs.writeFileSync(headerPath, headerText);
@@ -3014,6 +4719,17 @@ test("stock semantic sidecar maps overrides and type navigation across included 
         assert.equal(derivedChild.declaration.line, derivedLine);
         assert.equal(baseHierarchy[0].uri.fsPath, headerPath,
             "the base type hierarchy item should preserve its physical included-header location");
+        const tokens = decodeSemanticTokenRecords((await worker.query(reply.snapshotId, "semanticTokens", input)).result);
+        const bodyLine = text.split("\n").findIndex((line) => line.startsWith("Function DerivedSelector.Choose"));
+        for (const [line, column, modifier] of [[overrideLine, overridePosition.character, "declaration"],
+            [bodyLine, text.split("\n")[bodyLine].indexOf("Choose"), "definition"]]) {
+            const token = tokens.find((entry) => entry.line === line && entry.character === column);
+            assert.ok(token, `missing stock method token at ${line}:${column}`);
+            assert.equal(token.type, TOKEN_TYPES.indexOf("method"));
+            assert.ok(token.modifiers & (1 << TOKEN_MODIFIERS.indexOf(modifier)));
+            assert.ok(token.modifiers & (1 << TOKEN_MODIFIERS.indexOf("deprecated")),
+                "a documented prototype deprecates the same compiler identity's body too");
+        }
     } finally {
         worker.releaseModel(reply.snapshotId);
     }
@@ -3910,6 +5626,98 @@ test("native bridge refactors a module-scope FBLite first read in an unsaved ove
         assert.equal(fs.readFileSync(filePath).equals(original), true,
             "native FBLite first-read analysis must not save the unsaved root");
     }
+});
+
+test("stock callable tokens follow namespace and type owners across headers", native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "owners.bi");
+    const header = ["Namespace Helpers", "Declare Function Calculate() As Long", "End Namespace",
+        "Type Widget", "number As Long", "Declare Sub Touch()", "End Type", ""].join("\n");
+    const source = ['#include "owners.bi"', "Function Helpers.Calculate() As Long", "Return 1", "End Function",
+        "Sub Widget.Touch()", "End Sub", "Dim value As Widget", "value.Touch()", "Print Helpers.Calculate()", ""].join("\n");
+    fs.writeFileSync(headerPath, header);
+    fs.writeFileSync(filePath, source);
+    const compiled = spawnSync(process.env.FBC_EXECUTABLE || options.compilerPath,
+        ["-c", filePath, "-o", path.join(directory, "owners.o")], { cwd: directory, encoding: "utf8", timeout: 30000 });
+    assert.equal(compiled.status, 0, `${compiled.stdout}${compiled.stderr}`);
+    const reply = await worker.analyze({ ...options, semanticModelOnly: true,
+        exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+    for (const [text, file] of [[source, filePath], [header, headerPath]]) {
+        const tokens = decodeSemanticTokenRecords((await worker.query(reply.snapshotId, "semanticTokens", {
+            ...input, uri: { scheme: "file", fsPath: file }
+        })).result);
+        for (const [line, lineText] of text.split("\n").entries()) {
+            for (const match of lineText.matchAll(/\b(Calculate|Touch)\b/g)) {
+                const token = tokens.find((entry) => entry.line === line && entry.character === match.index);
+                assert.ok(token, `missing ${match[0]} at ${file}:${line}:${match.index}`);
+                assert.equal(token.type, TOKEN_TYPES.indexOf(match[0] === "Calculate" ? "function" : "method"), match[0]);
+            }
+        }
+    }
+    for (const bindings of [false, true]) {
+        const bridge = await worker.analyze({ ...options, exportSemanticExpressions: true, exportSemanticBindings: bindings }, preparation);
+        assert.equal(bridge.partial, false, JSON.stringify(bridge.diagnostics));
+        const tokens = decodeSemanticTokenRecords((await worker.query(bridge.snapshotId, "semanticTokens", input)).result);
+        for (const [line, text] of source.split("\n").entries()) {
+            for (const match of text.matchAll(/\b(Calculate|Touch)\b/g)) {
+                assert.equal(tokens.find((token) => token.line === line && token.character === match.index)?.type,
+                    TOKEN_TYPES.indexOf(match[0] === "Calculate" ? "function" : "method"), `${match[0]} at ${line}, bindings=${bindings}`);
+            }
+        }
+        if (!bindings) continue;
+        for (const [text, name, kind] of [["Print Helpers.Calculate()", "Calculate", "function"], ["value.Touch()", "Touch", "method"]]) {
+            const position = pointAt(source, text, text.indexOf(name) + 1);
+            const hierarchy = (await worker.query(bridge.snapshotId, "callHierarchyPrepare", { ...input, position })).result;
+            assert.equal(hierarchy.length, 1);
+            assert.equal(hierarchy[0].callableKind, kind, "worker serialization must retain resolved callable ownership");
+            const outline = (await worker.query(bridge.snapshotId, "documentSymbols", input)).result;
+            assert.equal(outline.find((entry) => entry.name === name)?.callableKind, kind,
+                "native Outline projection must preserve the same callable owner");
+            const completionPosition = pointAt(source, text, text.indexOf(name));
+            const completions = (await worker.query(bridge.snapshotId, "completion", { ...input, position: completionPosition, limit: 20 })).result;
+            assert.equal(completions.entries.find((entry) => entry.name === name)?.callableKind, kind);
+        }
+    }
+});
+
+test("stock FBC semantic tokens retain ordinary symbols beside NOKEYWORD names", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["Option NoKeyword REM", "Dim Shared ordinaryValue As Long = 1", "Dim REM As Const Long = 2",
+        "Function ComputeValue(ByVal inputValue As Long) As Long", "    Return inputValue + ordinaryValue", "End Function",
+        "Function OtherValue(ByVal inputValue As Long) As Long", "    Return inputValue", "End Function",
+        "Declare Sub ExternalSub()", "Type TokenOwner", "    fieldValue As Long", "End Type", "Dim owner As TokenOwner",
+        "ordinaryValue = ComputeValue(REM)", "owner.fieldValue = ordinaryValue", "Print ordinaryValue", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    const compiled = spawnSync(process.env.FBC_EXECUTABLE || options.compilerPath,
+        ["-lang", "deprecated", "-c", filePath, "-o", path.join(path.dirname(filePath), "tokens.o")],
+        { encoding: "utf8", timeout: 30000 });
+    assert.equal(compiled.status, 0, `${compiled.stdout}${compiled.stderr}`);
+    const reply = await worker.analyze({ ...options, compilerArguments: ["-lang", "deprecated"], semanticModelOnly: true,
+        exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+    const records = decodeSemanticTokenRecords((await worker.query(reply.snapshotId, "semanticTokens", input)).result);
+    const expectedTypes = { ordinaryValue: "variable", REM: "variable", ComputeValue: "function", OtherValue: "function",
+        inputValue: "parameter", TokenOwner: "struct", ExternalSub: "function", fieldValue: "property", owner: "variable" };
+    for (const [line, lineText] of text.split("\n").entries()) {
+        if (line === 0) continue;
+        for (const match of lineText.matchAll(/\b(ordinaryValue|REM|ComputeValue|OtherValue|inputValue|TokenOwner|ExternalSub|fieldValue|owner)\b/g)) {
+            const record = records.find((token) => token.line === line && token.character === match.index);
+            assert.ok(record, `missing ${match[0]} semantic token at ${line}:${match.index}`);
+            assert.equal(record.type, TOKEN_TYPES.indexOf(expectedTypes[match[0]]), match[0]);
+            if (match[0] === "REM") assert.ok(record.modifiers & (1 << TOKEN_MODIFIERS.indexOf("readonly")));
+        }
+    }
+    const procedureDeclaration = records.find((token) => token.line === 9 && token.character === "Declare Sub ".length);
+    assert.ok(procedureDeclaration.modifiers & (1 << TOKEN_MODIFIERS.indexOf("declaration")));
+    const procedureDefinition = records.find((token) => token.line === 3 && token.character === "Function ".length);
+    assert.ok(procedureDefinition.modifiers & (1 << TOKEN_MODIFIERS.indexOf("definition")));
+    const parameterPoint = pointAt(text, "Return inputValue +", "Return i".length);
+    const definitions = (await worker.query(reply.snapshotId, "definition", { ...input, position: parameterPoint })).result;
+    assert.deepEqual(definitions.map((entry) => entry.declaration.line), [3]);
+    const references = (await worker.query(reply.snapshotId, "references", { ...input, position: parameterPoint, includeDeclaration: true })).result;
+    assert.deepEqual(references.map((entry) => entry.occurrence.line).sort((first, second) => first - second), [3, 4],
+        "parameter aliases must not join an identically named parameter in another procedure");
 });
 
 test("stock FBC accepts REM as an identifier after OPTION NOKEYWORD", native, async (t) => {
@@ -6821,6 +8629,85 @@ test("native enum semantic facts retain physical explicitness and compiler value
     }
 });
 
+test("native constructor declarations retain references to converted arguments", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "integration/workspace/implicit-argument-constructor.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, exportSemanticBindings: true, exportSemanticExpressions: true }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        for (const [type, argument, other] of [["Long", "17", "2.5"], ["Double", "2.5", "17"]]) {
+            for (const prefix of ["Constructor", "Constructor ArgumentValue"]) {
+                const position = pointAt(text, `Constructor ArgumentValue(ByVal initial As ${type})`, prefix.length - 1);
+                for (const operation of ["references", "highlights"]) {
+                    const records = (await worker.query(reply.snapshotId, operation, { ...input, position, includeDeclaration: true })).result;
+                    const ranges = records.map((record) => text.split("\n")[record.occurrence.line]
+                        .slice(record.occurrence.startColumn, record.occurrence.endColumn));
+                    assert.ok(ranges.some((range) => range.includes(argument)), `${type}: ${operation}: ${prefix}: ${ranges}`);
+                    assert.equal(ranges.some((range) => range.includes(other)), false, "sibling conversions remain separate");
+                }
+            }
+        }
+    } finally { worker.releaseModel(reply.snapshotId); }
+});
+
+test("native constructor hierarchy prepares the compiler-connected body from its header", native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "constructors.bi");
+    const header = "Type HeaderConstructed\nvalue As Long\nDeclare Constructor(ByVal initial As Long)\n" +
+        "Declare Constructor(ByVal initial As Double)\nEnd Type\n";
+    const text = '#include "constructors.bi"\nConstructor HeaderConstructed(ByVal initial As Long)\nvalue = initial\nEnd Constructor\n' +
+        "Constructor HeaderConstructed(ByVal initial As Double)\nvalue = initial\nEnd Constructor\n" +
+        "Dim first As HeaderConstructed = HeaderConstructed(7)\nDim second As HeaderConstructed = HeaderConstructed(1.5)\n";
+    fs.writeFileSync(headerPath, header);
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, exportSemanticBindings: true, exportSemanticExpressions: true }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        for (const [prototype, body] of [
+            ["Declare Constructor(ByVal initial As Long)", "Constructor HeaderConstructed(ByVal initial As Long)"],
+            ["Declare Constructor(ByVal initial As Double)", "Constructor HeaderConstructed(ByVal initial As Double)"]
+        ]) {
+            const result = (await worker.query(reply.snapshotId, "callHierarchyPrepare", {
+                ...input, uri: { scheme: "file", fsPath: headerPath }, position: pointAt(header, prototype, "Declare C".length)
+            })).result;
+            assert.deepEqual(result.map((entry) => [entry.uri.fsPath, entry.declaration.line]), [[filePath, pointAt(text, body).line]],
+                "the native symbol's connected body must be preferred without joining the other overload");
+        }
+    } finally { worker.releaseModel(reply.snapshotId); }
+});
+
+for (const sidecar of [true, false]) test(`compiler constant IF hints retain original predicates (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/constant-condition-hints.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options,
+        compilerPath: sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+        semanticModelOnly: sidecar, exportSemanticBindings: true, exportSemanticExpressions: true
+    }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        const end = pointAt(text, "'' end of constant-condition-hints.bas");
+        const hints = (await worker.query(reply.snapshotId, "compilerInlayHints", {
+            ...input, position: { line: 0, character: 0 }, end
+        })).result.ifConditions;
+        assert.deepEqual(hints.map((hint) => [hint.position, hint.label]), [
+            [pointAt(text, "If 0 Then", "If 0".length), "always false"],
+            [pointAt(text, "ElseIf 2 + 2 = 4 Then", "ElseIf 2 + 2 = 4".length), "always true"],
+            [pointAt(text, "If 1 Then", "If 1".length), "always true"],
+            [pointAt(text, "If 3 <> 3 Then", "If 3 <> 3".length), "always false"],
+            [pointAt(text, "4 = 4 Then", "4 = 4".length), "always true"]
+        ], "folded predicates retain source results; runtime and inactive conditions have no constant hint");
+        const single = (await worker.query(reply.snapshotId, "compilerInlayHints", { ...input,
+            position: pointAt(text, "ElseIf"), end: pointAt(text, "ElseIf 2 + 2 = 4 Then", "ElseIf 2 + 2 = 4 Then".length)
+        })).result.ifConditions;
+        assert.equal(single.length, 1, "hints stay inside the requested visible range");
+        assert.match(single[0].tooltip, /earlier branches/);
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
 test("native control-flow inlays identify unreachable physical statements", native, async (t) => {
     const { worker, filePath, options, preparation, input } = setup(t, true);
     const text = [
@@ -7032,16 +8919,26 @@ test("prepared worker models answer initializer types from compiler semantic exp
         allowErrors: true,
         exportSemanticExpressions: true
     };
-    const reply = await worker.analyze(options, { requestedFile: filePath, expandedUri });
-    assert.equal(reply.partial, false);
-    const typed = await worker.query(reply.snapshotId, "expression", {
-        uri: { scheme: "file", fsPath: filePath },
-        openFiles: [],
-        position: { line, character: startColumn },
-        end: { line, character: endColumn }
-    });
-    assert.equal(typed.result.semanticSource, "compiler-sidecar");
-    assert.equal(typed.result.typeName.toLowerCase(), "integer");
+    for (const [exportSemanticBindings, unsaved] of [[false, false], [true, false], [true, true]]) {
+        const overlays = unsaved ? new Map([[filePath, `${source}\n' Unsaved initializer type probe\n`]]) : undefined;
+        const reply = await worker.analyze({ ...options, exportSemanticBindings, overlays }, { requestedFile: filePath, expandedUri });
+        assert.equal(reply.partial, false);
+        const typed = await worker.query(reply.snapshotId, "expression", {
+            uri: { scheme: "file", fsPath: filePath },
+            openFiles: unsaved ? [filePath] : [],
+            position: { line, character: startColumn },
+            end: { line, character: endColumn }
+        });
+        assert.equal(typed.result?.semanticSource, "compiler-sidecar");
+        assert.equal(typed.result?.typeName.toLowerCase(), "integer",
+            `initializer types must survive a binding upgrade=${exportSemanticBindings}`);
+        if (exportSemanticBindings) {
+            assert.equal(typed.result.compilerSidecarSymbolId, undefined,
+                "supplementary type facts must not leak independent export identities");
+        }
+        worker.releaseModel(reply.snapshotId);
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), source, "supplementary analysis must not save an editor overlay");
 });
 
 test("prepared workers retain sidecar expression types when a trace exceeds the analysis bound", native, async (t) => {

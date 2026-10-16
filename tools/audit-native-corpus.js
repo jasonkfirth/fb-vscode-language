@@ -818,19 +818,23 @@ async function auditNativeCorpus(options) {
                 report.files++;
                 try {
                     const sourceText = decodeCompilerSourceBuffer(fs.readFileSync(filePath), filePath).replace(/^\uFEFF/, "");
+                    /* Direct and prepared queries must use the same compiler
+                       capabilities and source snapshot. A binding-capable direct
+                       pass has write roles that a default worker pass omits. */
+                    const analysisOptions = {
+                        compilerPath: options.editorCompiler,
+                        filePath,
+                        compilerArguments,
+                        overlays: new Map([[filePath, sourceText]]),
+                        allowErrors: true,
+                        exportSemanticBindings: options.semanticBindings === true,
+                        exportSemanticExpressions: options.semanticSidecar === true,
+                        requireSemanticModel: options.semanticSidecar === true || options.semanticBindings === true,
+                        timeoutMs
+                    };
                     let analysis;
                     try {
-                        analysis = await analyzeSavedModule({
-                            compilerPath: options.editorCompiler,
-                            filePath,
-                            compilerArguments,
-                            overlays: new Map([[filePath, sourceText]]),
-                            allowErrors: true,
-                            exportSemanticBindings: options.semanticBindings === true,
-                            exportSemanticExpressions: options.semanticSidecar === true,
-                            requireSemanticModel: options.semanticSidecar === true || options.semanticBindings === true,
-                            timeoutMs
-                        });
+                        analysis = await analyzeSavedModule(analysisOptions);
                     } catch (error) {
                         if (!isBoundedAnalysisFailure(error)) throw error;
 
@@ -888,7 +892,7 @@ async function auditNativeCorpus(options) {
                     report.models++;
                     if (worker) {
                         const value = `freebasic-preprocessed:/${category}/${name}`;
-                        const prepared = await worker.analyze({ compilerPath: options.editorCompiler, filePath, compilerArguments, allowErrors: true, timeoutMs }, { requestedFile: filePath, expandedUri: { scheme: "freebasic-preprocessed", value, path: `/${category}/${name}` } });
+                        const prepared = await worker.analyze(analysisOptions, { requestedFile: filePath, expandedUri: { scheme: "freebasic-preprocessed", value, path: `/${category}/${name}` } });
                         assert.equal(prepared.declarationCount, model.inner.entries.length, "Worker preparation changed declaration inventory");
                         assert.equal(prepared.partial, analysis.partial, "Worker preparation changed recovery status");
                         const input = { uri: { scheme: "file", fsPath: filePath }, openFiles: [] };

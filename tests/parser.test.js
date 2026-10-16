@@ -28,9 +28,11 @@ const path = require("path");
 
 const {
     findCallContext,
+    findSignatureCallContext,
     findDeclarationByName,
     findFoldingRanges,
     findIdentifierOccurrences,
+    maskFreeBasicComments,
     maskFreeBasicText,
     parseFreeBasicText,
     splitDimVariables,
@@ -42,10 +44,19 @@ function readFixture(name) {
     return fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8");
 }
 
+test("operator declarations retain result types without borrowing constructor parameter types", () => {
+    const parsed = parseFreeBasicText("Type Value\nnumber As Long\nDeclare Operator Cast() As Long\n" +
+        "Declare Operator Cast() As Long Ptr\nDeclare Constructor(ByVal initial As Double)\nEnd Type\n" +
+        "Operator Value.Let(ByRef other As Value)\nEnd Operator\n");
+    assert.deepEqual(parsed.declarations.filter((entry) => entry.type === "operator").map((entry) => entry.typeName),
+        ["Long", "Long Ptr", ""]);
+    assert.equal(parsed.declarations.find((entry) => entry.type === "constructor").typeName, "");
+});
+
 test("grammar source loads expected symbol groups", () => {
     const grammarData = loadGrammarSourceFile(path.join(__dirname, "..", "syntaxes", "source", "freebasic.grammar-source.json"));
 
-    assert.equal(grammarData.sourceVersion, "1.20.4");
+    assert.equal(grammarData.sourceVersion, "1.20.5");
     assert.ok(grammarData.preprocessorDirectives.includes("LOOKUP"));
     assert.ok(grammarData.keywords.includes("FUNCTION"));
     assert.ok(!grammarData.keywords.includes("AUDIO"));
@@ -147,6 +158,18 @@ test("special procedure names in bodies remain calls and assignments", () => {
         entry.line === 1 || entry.line === 2
     ));
     assert.equal(outside.containerName, "");
+});
+
+test("comment-only masking retains string literals and nested multiline state", () => {
+    const comments = "' quoted \"comment\"\r\n/' outer\n/' nested '/\nend '/\nREM ignored\n";
+    const maskedComments = maskFreeBasicComments(comments);
+    assert.equal(maskedComments.length, comments.length);
+    assert.match(maskedComments, /^\s*$/);
+    const source = 'Print "retained literal" \' ignored\n';
+    const masked = maskFreeBasicComments(source);
+    assert.equal(masked.length, source.length);
+    assert.ok(masked.includes('"retained literal"'));
+    assert.ok(!masked.includes("ignored"));
 });
 
 test("source masking preserves positions while ignoring strings and comments", () => {
@@ -376,6 +399,31 @@ test("parseFreeBasicText records include paths and precise link ranges", () => {
         { path: "local.bi", system: false, line: 0, startColumn: 15, endColumn: 23 },
         { path: "fbgfx.bi", system: true, line: 1, startColumn: 10, endColumn: 18 }
     ]);
+});
+
+test("Signature Help recognizes bare calls without changing navigation call contexts", () => {
+    for (const [text, name, parameter] of [
+        ["Work ", "Work", 0], ["Work 1, ", "Work", 1],
+        ['Work Nested(1, 2), "x,y", ', "Work", 2],
+        ['Work 1, _\n "continued,arg", _\n ', "Work", 2],
+        ["label: Scope.Work 1, ", "Scope.Work", 1],
+        ["Call Scope.Work 1, ", "Scope.Work", 1],
+        ["receiver->Work 1, ", "Work", 1],
+        ["receiver . Work 1, ", "Work", 1],
+        ["If condition Then Work 1, ", "Work", 1],
+        ['If condition Then Work 1, "then,else" Else Other 2, ', "Other", 1]
+    ]) {
+        const context = findSignatureCallContext(text, text.length);
+        assert.equal(context?.name, name, text);
+        assert.equal(context?.activeParameter, parameter, text);
+        assert.equal(context?.bare, true);
+        assert.equal(findCallContext(text, text.length), null, "navigation keeps its explicit-call parser");
+    }
+    for (const text of ["first, second", "value = 1, 2", "Scope.Work", "' Work 1, 2", "Work 1\nvalue"]) {
+        assert.equal(findSignatureCallContext(text, text.length), null, text);
+    }
+    const nested = "Work Nested(1, ";
+    assert.equal(findSignatureCallContext(nested, nested.length)?.name, "Nested");
 });
 
 test("call context counts only top-level arguments", () => {

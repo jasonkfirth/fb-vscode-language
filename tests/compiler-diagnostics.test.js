@@ -18,14 +18,17 @@
 
         - a dependency on an installed fbc executable
         - VS Code extension-host tests
-        - filesystem modification
+        - writes outside owned temporary fixtures
 */
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const {
+    COMPILER_MESSAGE_CODE,
     executeBoundedProcess,
     parseCompilerOutput,
     runFreeBasicCompiler,
@@ -70,6 +73,182 @@ function createCompilerServiceMock() {
     };
 }
 
+function createSelectedContextFixture(t, run) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-diagnostic-context-test-"));
+    const mock = createCompilerServiceMock();
+    const uri = (file) => ({ scheme: "file", fsPath: file, toString: () => `file://${file}` });
+    const document = (name, text) => {
+        const file = path.join(directory, name);
+        fs.writeFileSync(file, text);
+        const lines = text.split("\n");
+        return { uri: uri(file), languageId: "freebasic", isDirty: false, version: 1,
+            lineCount: lines.length, getText: () => text, lineAt: (line) => ({ text: lines[line] }) };
+    };
+    const root = document("main.bas", '#include "api.bi"\n');
+    const header = document("api.bi", "Dim value As Long\n");
+    const values = { "compiler.path": process.execPath, "compiler.arguments": ["-lang", "fb"],
+        includePaths: ["inc"], "analysis.activeContext": { name: "selected", module: "main.bas" },
+        "analysis.projectContexts": [{ name: "selected", modules: ["main.bas"], arguments: ["-d", "SELECTED"] }] };
+    mock.vscode.Uri.file = uri;
+    mock.vscode.workspace.getConfiguration = () => ({ get: (name, fallback) => values[name] ?? fallback });
+    mock.vscode.workspace.getWorkspaceFolder = () => ({ uri: uri(directory) });
+    mock.vscode.workspace.openTextDocument = async (file) => file.fsPath === root.uri.fsPath ? root : header;
+    mock.vscode.window.showWarningMessage = (message) => mock.messages.push(message);
+    const result = { exitCode: 0, diagnostics: [], output: "",
+        diagnosticSources: [root.uri.fsPath, header.uri.fsPath], diagnosticSourcesComplete: true };
+    const calls = [];
+    const collection = { clear() {}, delete() {}, set() {} };
+    const service = new FreeBasicCompilerService(mock.vscode, async (options) => {
+        calls.push(options);
+        return run ? run(options, result) : result;
+    }, collection, { appendLine() {} });
+    t.after(() => { service.dispose(); fs.rmSync(directory, { recursive: true, force: true }); });
+    return { service, root, header, values, calls, result, directory, collection, ...mock };
+}
+
+test("new physical headers retract only matching missing-file diagnostics without cancelling fresh checks", (t) => {
+    const fixture = createSelectedContextFixture(t);
+    const key = fixture.root.uri.toString();
+    fixture.service.setDiagnosticDependencies(fixture.root, fixture.result);
+    const missing = { code: 23, message: 'File not found, "folder/appeared.bi"\n\nCompiler guidance' };
+    const different = { code: 23, message: 'File not found, "next.bi"' };
+    const custom = { code: COMPILER_MESSAGE_CODE, message: 'File not found, "appeared.bi"' };
+    const other = { code: 9, message: "Expected expression" };
+    fixture.service.diagnosticsByRoot.set(key, new Map([[key, { uri: fixture.root.uri, diagnostics: [missing, different, custom, other] }]]));
+    const controller = new AbortController();
+    fixture.service.runningChecks.set(key, controller);
+    const header = { uri: fixture.vscode.Uri.file(path.join(fixture.directory, "appeared.bi")) };
+    fixture.service.documentOpened(header);
+    assert.equal(fixture.service.diagnosticsByRoot.get(key).get(key).diagnostics.length, 4,
+        "a virtual-only buffer must not hide an error from a saved-file check");
+    fs.writeFileSync(header.uri.fsPath, "Dim includedValue As Double\n");
+    fixture.service.documentOpened(header);
+    assert.equal(fixture.service.diagnosticsByRoot.get(key).get(key).diagnostics.length, 4,
+        "a same-named file outside the requested location must not hide a valid saved diagnostic");
+    const requestedHeader = { uri: fixture.vscode.Uri.file(path.join(fixture.directory, "folder/appeared.bi")) };
+    fs.mkdirSync(path.dirname(requestedHeader.uri.fsPath));
+    fs.writeFileSync(requestedHeader.uri.fsPath, "Dim includedValue As Double\n");
+    fixture.service.documentOpened(requestedHeader);
+    assert.deepEqual(fixture.service.diagnosticsByRoot.get(key).get(key).diagnostics, [different, custom, other]);
+    assert.equal(controller.signal.aborted, false);
+});
+
+test("selected saved-file diagnostics use the chosen root and build flags without a bridge", async (t) => {
+    const fixture = createSelectedContextFixture(t);
+    for (const document of [fixture.root, fixture.header]) {
+        assert.equal((await fixture.service.checkSelectedContext(document)).exitCode, 0);
+        const options = fixture.calls.at(-1);
+        assert.equal(options.filePath, fixture.root.uri.fsPath);
+        assert.deepEqual(options.compilerArguments, ["-lang", "fb", "-d", "SELECTED", "-i", path.join(fixture.directory, "inc")],
+            "selected flags and include paths must be passed exactly once");
+    }
+});
+
+test("context refresh retires old saved diagnostics while preserving a new-context check", async (t) => {
+    let complete;
+    const fixture = createSelectedContextFixture(t, (_options, result) => fixture.calls.length === 1
+        ? result : new Promise((resolve) => { complete = () => resolve(result); }));
+    const key = fixture.root.uri.toString();
+    assert.equal((await fixture.service.checkSelectedContext(fixture.header)).exitCode, 0);
+    fixture.service.refreshContexts();
+    assert.equal(fixture.service.diagnosticsByRoot.has(key), true);
+    fixture.values["analysis.projectContexts"][0].arguments.push("-d", "UPDATED");
+    const pending = fixture.service.checkSelectedContext(fixture.header);
+    await new Promise(setImmediate);
+    fixture.service.refreshContexts();
+    assert.equal(fixture.service.diagnosticsByRoot.has(key), false);
+    assert.equal(fixture.service.diagnosticDependenciesByRoot.has(key), false);
+    assert.equal(fixture.calls.at(-1).signal.aborted, false,
+        "a delayed settings event must not cancel a check started with the new context");
+    complete();
+    assert.equal((await pending).exitCode, 0);
+    fixture.service.refreshContexts();
+    assert.equal(fixture.service.diagnosticsByRoot.has(key), true);
+    assert.equal(fixture.service.diagnosticContextsByRoot.size, 1);
+    fixture.values["analysis.activeContext"] = null;
+    fixture.service.refreshContexts();
+    assert.equal(fixture.service.diagnosticsByRoot.size, 0);
+    assert.equal(fixture.service.diagnosticContextsByRoot.size, 0);
+});
+
+test("default saved checks reject results from changed compiler settings", async (t) => {
+    let complete;
+    const fixture = createSelectedContextFixture(t, (_options, result) =>
+        new Promise((resolve) => { complete = () => resolve(result); }));
+    fixture.values["analysis.activeContext"] = null;
+    const pending = fixture.service.checkSelectedContext(fixture.root);
+    await new Promise(setImmediate);
+    fixture.values["compiler.arguments"].push("-d", "CHANGED_WHILE_CHECKING");
+    complete();
+    assert.equal((await pending).stale, true);
+    assert.equal(fixture.service.diagnosticsByRoot.size, 0);
+    assert.equal(fixture.service.diagnosticContextsByRoot.size, 0);
+});
+
+test("selected saved-file diagnostics reject dirty files, missing roots, and unconsumed headers", async (t) => {
+    const fixture = createSelectedContextFixture(t);
+    fixture.header.isDirty = true;
+    assert.equal((await fixture.service.checkSelectedContext(fixture.header)).skipped, true);
+    fixture.header.isDirty = false;
+    fixture.root.isDirty = true;
+    assert.equal((await fixture.service.checkSelectedContext(fixture.header)).skipped, true);
+    fixture.root.isDirty = false;
+    const selected = fixture.values["analysis.activeContext"];
+    fixture.values["analysis.activeContext"] = null;
+    const missing = await fixture.service.checkSelectedContext(fixture.header);
+    assert.match(missing.error.message, /Select a translation unit/);
+    assert.equal(fixture.calls.length, 0, "invalid inputs must be rejected before compiler launch");
+    fixture.values["analysis.activeContext"] = selected;
+    fixture.result.diagnosticSources = [fixture.root.uri.fsPath];
+    assert.match((await fixture.service.checkSelectedContext(fixture.header)).error.message, /did not confirm this header/);
+    fixture.result.diagnosticSources = [fixture.root.uri.fsPath, fixture.header.uri.fsPath];
+    fixture.result.diagnosticSourcesComplete = false;
+    assert.match((await fixture.service.checkSelectedContext(fixture.header)).error.message, /complete physical source inventory/,
+        "logical diagnostic paths must not stand in for a compiler-confirmed physical include");
+});
+
+test("selected saved-file diagnostics discard changed contexts and input versions", async (t) => {
+    for (const change of [
+        (fixture) => { fixture.values["analysis.projectContexts"][0].arguments = ["-d", "OTHER"]; },
+        (fixture) => { fixture.header.version++; },
+        (fixture) => { fixture.root.version++; },
+        (fixture) => { fs.appendFileSync(fixture.root.uri.fsPath, "' changed on disk\n"); },
+        (fixture) => { fixture.vscode.workspace.textDocuments = [{ ...fixture.header, isDirty: true }]; }
+    ]) {
+        let finish;
+        const fixture = createSelectedContextFixture(t, (_options, result) => new Promise((resolve) => { finish = () => resolve(result); }));
+        const pending = fixture.service.checkSelectedContext(fixture.header);
+        await new Promise((resolve) => setImmediate(resolve));
+        change(fixture);
+        finish();
+        assert.equal((await pending).stale, true);
+        assert.equal(fixture.service.diagnosticsByRoot.size, 0);
+    }
+});
+
+test("selected saved-file diagnostics recheck context after opening a diagnostic header", async (t) => {
+    const fixture = createSelectedContextFixture(t);
+    fixture.vscode.Range = class {
+        constructor(line, character, endLine, endCharacter) {
+            this.start = { line, character }; this.end = { line: endLine, character: endCharacter };
+        }
+    };
+    fixture.vscode.Diagnostic = class {
+        constructor(range, message, severity) { Object.assign(this, { range, message, severity }); }
+    };
+    fixture.vscode.DiagnosticSeverity = { Error: 0, Warning: 1 };
+    fixture.result.exitCode = 1;
+    fixture.result.diagnostics = [{ filePath: fixture.header.uri.fsPath, line: 0, severity: "error", code: 17, message: "Syntax error" }];
+    fixture.vscode.workspace.openTextDocument = async (uri) => {
+        if (uri.fsPath === fixture.root.uri.fsPath) return fixture.root;
+        fixture.values["analysis.projectContexts"][0].arguments = ["-d", "CHANGED"];
+        return fixture.header;
+    };
+    fixture.collection.set = () => assert.fail("the old context must not publish after asynchronous header lookup");
+    assert.equal((await fixture.service.checkSelectedContext(fixture.header)).stale, true);
+    assert.equal(fixture.service.diagnosticsByRoot.size, 0);
+});
+
 test("parseCompilerOutput handles current fbc errors and warnings", () => {
     const diagnostics = parseCompilerOutput([
         "FreeBASIC Compiler - Version 1.20.4",
@@ -97,6 +276,17 @@ test("parseCompilerOutput handles current fbc errors and warnings", () => {
             warningLevel: 3
         }
     ]);
+});
+
+test("parseCompilerOutput preserves unnumbered preprocessor errors and warnings", () => {
+    const diagnostics = parseCompilerOutput("source.bas(5) error: Missing service in 'configuration'\nsource.bas(6) warning: User warning\n");
+    assert.deepEqual(diagnostics, [{
+        code: COMPILER_MESSAGE_CODE, filePath: "source.bas", line: 4,
+        message: "Missing service in 'configuration'", severity: "error", sourceText: "", warningLevel: null
+    }, {
+        code: COMPILER_MESSAGE_CODE, filePath: "source.bas", line: 5,
+        message: "User warning", severity: "warning", sourceText: "", warningLevel: null
+    }]);
 });
 
 test("validateCompilerOptions accepts command names but requires absolute source paths", () => {
@@ -600,6 +790,23 @@ test("compiler service ignores an older failed run after a newer run completes",
     assert.equal(secondResult.diagnosticCount, 0);
     assert.equal(firstResult.stale, true);
     assert.deepEqual(mock.messages, []);
+});
+
+test("compiler service shutdown is idempotent after its diagnostic collection closes", async () => {
+    const mock = createCompilerServiceMock();
+    let collectionClosed = false, clears = 0;
+    const service = new FreeBasicCompilerService(mock.vscode,
+        () => assert.fail("a disposed service must not launch another compiler"), {
+            clear() {
+                assert.equal(collectionClosed, false, "the diagnostic collection is already disposed");
+                clears++;
+            }
+        }, { appendLine() {} });
+    service.dispose();
+    collectionClosed = true;
+    assert.doesNotThrow(() => service.dispose());
+    assert.equal(clears, 1);
+    assert.equal((await service.checkDocument(null)).skipped, true);
 });
 
 test("bounded processes cancel without waiting for the compiler timeout", async () => {

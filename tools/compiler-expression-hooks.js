@@ -135,8 +135,8 @@ function instrumentExpressionGraph(files, replaceOnce) {
     // temporary result. Preserve the resolved call's argument chain so the
     // parser can emit the written TYPE(...) range with its real constructor.
     wrap("ast-node-call.bas", "astNewCALLCTOR", "\tdim editor_source as FBEDITORAST = editorAstSource(procexpr)", "\tif( editor_result <> NULL ) then\n\t\teditor_result->editor_source = editor_source\n\t\t'' The CALLCTOR wrapper owns a resolved CALL in its left child. Keep its\n\t\t'' exact procedure identity even when a quirk parser replaced the CALL's\n\t\t'' temporary source annotation before the enclosing expression is emitted.\n\t\tif( procexpr <> NULL ) then editor_result->editor_source.target = procexpr->sym\n\tend if");
-    const nativeSemanticMemoryOperations = result["parser-quirk-mem.bas"]
-        .includes("fbSemanticModelExportOperation(semantic_operator,");
+    const nativeSemanticMemoryOperations = /fbSemanticModel(?:ExportOperation|SourceMemoryApplication)\(semantic_operator,/
+        .test(result["parser-quirk-mem.bas"]);
     /* The parser owns the written NEW/DELETE range, while ast-node-mem owns
        overload selection and immediately lowers the selected CALL into a
        larger allocation/deallocation tree. Add an optional output only for
@@ -394,7 +394,12 @@ function instrumentExpressionGraph(files, replaceOnce) {
         source = replaceOnce(source,
             "\t\t\tvarexpr = astBuildConst( fld )\n\t\t\tfbSemanticModelConstantExpression(varexpr, fld, semantic_member_site, semantic_member_nonphysical)\n\t\t\tif( export_semantics ) then\n\t\t\t\tfbSemanticModelExportCurrentExpressionPrefix(varexpr)\n\t\t\tend if\n\t\t\treturn varexpr",
             "\t\t\tvarexpr = astBuildConst( fld )\n\t\t\tfbSemanticModelConstantExpression(varexpr, fld, semantic_member_site, semantic_member_nonphysical)\n\t\t\tif( export_semantics ) then\n\t\t\t\tfbSemanticModelExportCurrentExpressionPrefix(varexpr)\n\t\t\tend if\n\t\t\teditorEmitExpression(editor_start, varexpr)\n\t\t\treturn varexpr");
-        source = replaceOnce(source, "\t\t\tvarexpr = cVariableEx( fld, check_array )", "\t\t\tvarexpr = cVariableEx( fld, check_array )\n\t\t\teditorEmitExpression(editor_start, varexpr)");
+        /* Current FBC passes the receiver subtype when selecting a static
+           member. Keep that access check intact when adding the range hook. */
+        const staticMemberCall = source.includes("varexpr = cVariableEx( fld, check_array, subtype )")
+            ? "\t\t\tvarexpr = cVariableEx( fld, check_array, subtype )"
+            : "\t\t\tvarexpr = cVariableEx( fld, check_array )";
+        source = replaceOnce(source, staticMemberCall, `${staticMemberCall}\n\t\t\teditorEmitExpression(editor_start, varexpr)`);
         return replaceOnce(source,
             "\t\t\tvarexpr = cMethodCall( fld, varexpr, options )\n\t\t\tif( export_semantics ) then\n\t\t\t\tfbSemanticModelExportCurrentExpressionPrefix(varexpr)\n\t\t\tend if\n\t\t\treturn varexpr",
             "\t\t\teditorSetAstStart(varexpr, editor_start)\n\t\t\tvarexpr = cMethodCall( fld, varexpr, options )\n\t\t\tif( export_semantics ) then\n\t\t\t\tfbSemanticModelExportCurrentExpressionPrefix(varexpr)\n\t\t\tend if\n\t\t\teditorEmitExpression(editor_start, varexpr)\n\t\t\treturn varexpr");

@@ -25,10 +25,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
+const { execFileSync } = require("node:child_process");
 const reference = require("../data/language-reference.json");
 const grammar = require("../syntaxes/source/freebasic.grammar-source.json");
 const { getReferenceEntries, getReferenceMarkdown, getReferenceNames, getReferenceSignatures } = require("../lib/language-reference");
-const { generateReference } = require("../tools/build-language-reference");
+const { generateReference, referenceSourceRevision } = require("../tools/build-language-reference");
 const { resolveFreeBasicRoot } = require("../tools/audit-freebasic-coverage");
 
 test("manual signatures expose useful names, defaults, and parameter descriptions", () => {
@@ -92,9 +94,40 @@ test("opt-in compiler intrinsics expose their manual forms and required header",
     assert.match(getReferenceSignatures("Serialize")[0].documentation, /does not perform file or network I\/O/i);
 });
 
-test("offline reference is reproducible from the configured 1.20.4 source", () => {
+test("reference provenance ignores compiler-only commits but follows its actual inputs", (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-reference-revision-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
+    const git = (...args) => execFileSync("git", ["-C", directory,
+        "-c", "user.name=Reference Fixture", "-c", "user.email=reference@example.invalid",
+        "-c", "commit.gpgSign=false", "-c", `core.hooksPath=${path.join(directory, "empty-hooks")}`,
+        ...args], { encoding: "utf8", env: environment, timeout: 5000, maxBuffer: 65536 }).trim();
+    git("init", "-q");
+    fs.mkdirSync(path.join(directory, "doc/manual/cache"), { recursive: true });
+    fs.mkdirSync(path.join(directory, "src/compiler"), { recursive: true });
+    const page = path.join(directory, "doc/manual/cache/KeyPgExample.wakka");
+    fs.writeFileSync(page, "Reference input\n");
+    git("add", ".");
+    git("commit", "-qm", "Reference inputs");
+    const first = git("rev-parse", "HEAD");
+    assert.equal(referenceSourceRevision(directory), first);
+    fs.writeFileSync(path.join(directory, "src/compiler/private.bas"), "'' Unrelated compiler input\n");
+    git("add", ".");
+    git("commit", "-qm", "Compiler only");
+    assert.notEqual(git("rev-parse", "HEAD"), first);
+    assert.equal(referenceSourceRevision(directory), first);
+    fs.writeFileSync(page, "Changed reference input\n");
+    git("add", ".");
+    git("commit", "-qm", "Update reference input");
+    assert.equal(referenceSourceRevision(directory), git("rev-parse", "HEAD"));
+});
+
+test("offline reference is reproducible from the configured 1.20.5 source", () => {
     const root = resolveFreeBasicRoot(process.env.FREEBASIC_ROOT || "");
-    assert.deepEqual(reference, generateReference(root, grammar));
+    const generated = generateReference(root, grammar);
+    /* A stale commit stamp should not dump every reference entry into TAP. */
+    assert.equal(reference.sourceRevision, generated.sourceRevision, "Regenerate the reference after its manual/header inputs change.");
+    assert.deepEqual(reference, generated);
     assert.equal(reference.sourceVersion, grammar.sourceVersion);
     assert.ok(Object.keys(reference.entries).length > 550);
     assert.equal(fs.readFileSync(path.join(__dirname, "../docs/fdl-1.2.txt"), "utf8").replace(/\r\n/g, "\n"), fs.readFileSync(path.join(root, "doc/fdl-1.2.txt"), "utf8").replace(/\r\n/g, "\n"));

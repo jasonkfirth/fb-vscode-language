@@ -13,6 +13,7 @@
         - validate archive paths and required native provider modules
         - install one owned VSIX into an isolated editor profile
         - run the existing editor-host suite against that installed extension
+        - check extension-host shutdown for diagnostic lifecycle errors
 
     This file intentionally does NOT contain:
 
@@ -30,13 +31,21 @@ const { downloadAndUnzipVSCode, resolveCliPathFromVSCodeExecutablePath } = requi
 const ROOT = path.resolve(__dirname, "..");
 const REQUIRED_PROVIDER_FILES = [
     "extension.js",
+    "lib/bracket-diagnostics.js",
+    "lib/freebasic-formatter.js",
+    "lib/compiler-diagnostic-sidecar.js",
+    "lib/compiler-constant-values.js",
+    "lib/compiler-flow-analysis.js",
+    "lib/compiler-string-context.js",
     "lib/compiler-process-supervisor.js",
     "lib/compiler-process-runner.js",
     "lib/compiler-document-symbols.js",
     "lib/compiler-workspace-symbols.js",
     "lib/compiler-workspace-service.js",
     "lib/bounded-text-map.js",
-    "lib/compiler-worker-runtime.js"
+    "lib/compiler-worker-runtime.js",
+    "lib/compiler-semantic-transport.js",
+    "lib/compiler-language-status.js"
 ];
 
 function run(command, args, options = {}) {
@@ -108,9 +117,15 @@ async function main() {
         if (!mainPath.startsWith(`${extensionPath}${path.sep}`) || !fs.existsSync(mainPath)) {
             throw new Error("The installed extension entry point is missing or outside its extension directory.");
         }
-        for (const relativePath of REQUIRED_PROVIDER_FILES) {
-            if (!fs.existsSync(path.join(extensionPath, relativePath))) {
+        const runtimeFiles = fs.readdirSync(path.join(ROOT, "lib"))
+            .filter((name) => name.endsWith(".js")).map((name) => `lib/${name}`);
+        for (const relativePath of new Set([...REQUIRED_PROVIDER_FILES, ...runtimeFiles])) {
+            const installedPath = path.join(extensionPath, relativePath);
+            if (!fs.existsSync(installedPath)) {
                 throw new Error(`The installed VSIX is missing native provider file: ${relativePath}`);
+            }
+            if (!fs.readFileSync(installedPath).equals(fs.readFileSync(path.join(ROOT, relativePath)))) {
+                throw new Error(`The installed VSIX has stale runtime code: ${relativePath}. Rebuild before testing.`);
             }
         }
 
@@ -127,6 +142,20 @@ async function main() {
             },
             stdio: "inherit"
         });
+        /* Provider assertions finish before VS Code disposes the extension.
+           A successful test exit must not hide errors during that cleanup. */
+        const logDirectory = path.join(userDataDirectory, "logs");
+        const hostLogs = fs.readdirSync(logDirectory, { recursive: true })
+            .filter((name) => path.basename(name) === "exthost.log");
+        if (!hostLogs.length) throw new Error("VS Code produced no extension-host log to verify shutdown.");
+        const extensionId = `${packageData.publisher}.${packageData.name}`.toLowerCase();
+        for (const relativePath of hostLogs) {
+            const logPath = path.join(logDirectory, relativePath);
+            if (fs.statSync(logPath).size > 8 * 1024 * 1024) throw new Error("Extension-host log exceeded the 8 MiB validation bound.");
+            const errors = fs.readFileSync(logPath, "utf8").split(/\r?\n/).filter((line) =>
+                /An error occurred when deactivating/i.test(line) && line.toLowerCase().includes(extensionId));
+            if (errors.length) throw new Error(`Packaged extension shutdown failed: ${errors.join("\n")}`);
+        }
         completed = true;
     } finally {
         if (!completed && process.env.FREEBASIC_PRESERVE_TEST_PROFILE === "1") {

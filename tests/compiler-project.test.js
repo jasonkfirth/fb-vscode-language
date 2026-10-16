@@ -2206,6 +2206,49 @@ test("native project rename joins shared type, field, and external variable decl
     for (const [name, text] of Object.entries(sources)) assert.equal(fs.readFileSync(path.join(context.root, name), "utf8"), text);
 });
 
+test("project rename preserves binary REDIM constructor selections", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
+    const context = fixture(t);
+    const source = [
+        "Type ResizableElement",
+        "    marker As Long",
+        "    Declare Constructor()",
+        "End Type",
+        "Constructor ResizableElement()",
+        "    marker = 1",
+        "End Constructor",
+        "Dim items() As ResizableElement",
+        "Redim items(0 To 1)",
+        "Redim Preserve items(0 To 2)",
+        ""
+    ].join("\n");
+    fs.writeFileSync(context.document.uri.fsPath, source);
+    context.values["analysis.projectContexts"] = [{ name: "redim", modules: ["caller.bas"] }];
+    context.project.analyze = (options) => context.service.analyze(options);
+    const analyze = context.service.analyze;
+    let observed = 0;
+    let changed = 0;
+    let alterSelections = true;
+    context.service.analyze = async (options) => {
+        const result = await analyze(options);
+        const selected = result.semanticImplicitCalls.filter((call) => call.kind === "redim-constructor");
+        observed = Math.max(observed, selected.length);
+        const renamed = [...(options.overlays?.values() || [])].some((text) => text.includes("RenamedElement"));
+        if (alterSelections && renamed && selected.length) {
+            changed += selected.length;
+            result.semanticImplicitCalls = result.semanticImplicitCalls.map((call) => selected.includes(call)
+                ? { ...call, targetSignature: `${call.targetSignature}|changed` } : call);
+        }
+        return result;
+    };
+    await assert.rejects(context.project.rename(context.document, { line: 7, character: 17 }, "RenamedElement"),
+        /compiler-selected implicit calls/);
+    assert.ok(observed >= 2 && changed >= 2, "REDIM references must retain their compiler-selected constructor callbacks");
+    alterSelections = false;
+    const edit = await context.project.rename(context.document, { line: 7, character: 17 }, "RenamedElement");
+    assert.equal(edit.edits.length, 3);
+    assert.equal(fs.readFileSync(context.document.uri.fsPath, "utf8"), source);
+});
+
 test("native project rename preserves implicit constructor and destructor relationships", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
     const context = fixture(t);
     const sources = {

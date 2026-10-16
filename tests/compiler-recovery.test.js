@@ -18,6 +18,104 @@ function uri(filePath) {
     return { fsPath: filePath, toString: () => `file://${filePath}` };
 }
 
+test("recovered member completion rejects missing, conflicting, and provisional receiver facts", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async () => {
+    const filePath = path.resolve(__dirname, "integration/workspace/compiler-scopes.bas");
+    const original = fs.readFileSync(filePath, "utf8");
+    const text = original.replace("Print instance.publicValue", "Print instance.pub");
+    const analysis = await analyzeSavedModule({
+        compilerPath: process.env.FBC_EDITOR_EXECUTABLE,
+        filePath,
+        overlays: new Map([[filePath, text]]),
+        allowErrors: true
+    });
+    const receiver = analysis.completionReceivers.find((entry) => entry.typeName.toLowerCase() === "catalog.child");
+    const parent = analysis.symbolGraph.symbols.find((entry) => entry.name.toLowerCase() === "parent");
+    assert.ok(receiver?.subtype);
+    assert.ok(parent);
+    const line = text.split("\n").findIndex((entry) => entry === "Print instance.pub");
+    const members = (changes) => new CompilerSemanticModel(
+        { toString: () => "freebasic-preprocessed:/member-completion-recovery.bas" },
+        { ...analysis, ...changes },
+        [{ uri: uri(filePath), text }]
+    ).completeMembers(uri(filePath), line, "Print instance.pub".length);
+    assert.ok(members({}).some((entry) => entry.name === "publicValue"));
+    assert.deepEqual(members({ completionReceivers: [] }), [], "missing receipts must not trigger source type inference");
+    assert.deepEqual(members({ completionReceivers: [...analysis.completionReceivers, { ...receiver, subtype: parent.id }] }), [],
+        "conflicting native receiver types must not be selected by record order");
+    assert.deepEqual(members({ recoverySymbols: [...analysis.recoverySymbols, receiver.subtype] }), [],
+        "a recovered type declaration must not become an authoritative completion owner");
+    assert.equal(fs.readFileSync(filePath, "utf8"), original);
+});
+
+test("blank-line completion rejects missing, generated, and conflicting native anchors", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async () => {
+    const filePath = path.resolve(__dirname, "integration/workspace/compiler-scopes.bas");
+    const original = fs.readFileSync(filePath, "utf8");
+    const text = original.replace("    Print localValue", "    \n    Print localValue");
+    const line = text.split("\n").findIndex((entry) => entry === "    Print localValue") - 1;
+    const analysis = await analyzeSavedModule({
+        compilerPath: process.env.FBC_EDITOR_EXECUTABLE, filePath,
+        overlays: new Map([[filePath, text]]), allowErrors: true
+    });
+    const makeModel = () => new CompilerSemanticModel(
+        { toString: () => "freebasic-preprocessed:/blank-line-completion.bas" }, analysis, [{ uri: uri(filePath), text }]
+    );
+    for (const mode of ["missing", "generated", "different token", "unmatched contexts", "too many contexts"]) {
+        const model = makeModel();
+        const positions = model.blankLineCompletionPositions(uri(filePath), line, 4);
+        assert.equal(positions.length, 2);
+        const token = positions[0].token;
+        const origin = model.expandedToSource.get(token.offset);
+        assert.ok(origin);
+        const key = `${uri(filePath)}:${origin.occurrence.offset}`;
+        if (mode === "missing") model.expandedToSource.delete(token.offset);
+        if (mode === "generated") model.expandedToSource.set(token.offset, { ...origin, sourceMap: 1 });
+        if (mode === "different token") model.expandedToSource.set(token.offset,
+            { ...origin, occurrence: { ...origin.occurrence, offset: origin.occurrence.offset + 1 } });
+        if (mode === "unmatched contexts") model.sourceToExpanded.set(key, [token, token]);
+        /* One more than the 64-include completion bound. */
+        if (mode === "too many contexts") model.sourceToExpanded.set(key, Array(65).fill(token));
+        assert.deepEqual(model.blankLineCompletionPositions(uri(filePath), line, 4), [], mode);
+        assert.ok(!model.visibleEntries(uri(filePath), line, 4, 2000).some((entry) => entry.name === "localValue"), mode);
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), original);
+});
+
+test("literal completion anchors require exact direct compiler origins", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async () => {
+    const filePath = path.resolve(__dirname, "integration/workspace/compiler-scopes.bas");
+    const original = fs.readFileSync(filePath, "utf8");
+    const text = original.replace("    Print localValue", '    Print "literal"\n    \n    Print localValue');
+    const line = text.split("\n").findIndex((entry) => entry === '    Print "literal"') + 1;
+    const analysis = await analyzeSavedModule({
+        compilerPath: process.env.FBC_EDITOR_EXECUTABLE, filePath,
+        overlays: new Map([[filePath, text]]), allowErrors: true
+    });
+    const bytes = Buffer.from(text);
+    const literal = analysis.tokenOrigins.find((record) => record.filePath === filePath &&
+        bytes.subarray(record.sourceStart, record.sourceEnd).toString() === '"literal"');
+    assert.ok(literal);
+    for (const mode of ["missing", "generated", "mismatched span", "too many contexts"]) {
+        const tokenOrigins = analysis.tokenOrigins.flatMap((record) => {
+            if (record !== literal) return [record];
+            if (mode === "missing") return [];
+            if (mode === "generated") return [{ ...record, kind: "generated", sourceMap: 0 }];
+            if (mode === "mismatched span") return [{ ...record, sourceStart: record.sourceStart + 1 }];
+            return [record];
+        });
+        const model = new CompilerSemanticModel(
+            { toString: () => "freebasic-preprocessed:/literal-completion.bas" },
+            { ...analysis, tokenOrigins }, [{ uri: uri(filePath), text }]
+        );
+        if (mode === "too many contexts") {
+            const anchor = model.getDocument(uri(filePath)).compilerLiteralCompletionAnchors[0];
+            /* One more than the 64-include completion bound. */
+            anchor.completionProjections = Array(65).fill(anchor.completionProjections[0]);
+        }
+        assert.deepEqual(model.blankLineCompletionPositions(uri(filePath), line, 4), [], mode);
+        assert.ok(!model.visibleEntries(uri(filePath), line, 4, 2000).some((entry) => entry.name === "localValue"), mode);
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), original);
+});
+
 test("native recovery keeps a synthesized formal parameter type provisional", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async () => {
     const filePath = path.resolve(__dirname, "integration/workspace/compiler-expression-surface.bas");
     const original = fs.readFileSync(filePath, "utf8");

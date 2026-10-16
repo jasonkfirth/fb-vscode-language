@@ -1,5 +1,147 @@
 # Changelog
 
+## 1.20.5
+
+- Acquire compiler option facts on the first ambiguous-string request without requiring Analyze first, and preserve native Type Hierarchy identifiers after escaped literals
+- Keep failed compiler-binding and macro upgrades on a genuine source-only fallback instead of reselecting the rejected weak bridge snapshot through the workspace cache
+- Preserve completion and Signature Help after conditionally escaped literals using complete native option spans and worker-owned call contexts; acquire missing option facts on demand without treating explicit escaped/raw strings as ambiguous
+- Discard escaped-string context probes after edits or cancellation and follow one cached compiler-model replacement instead of interpreting a stale source snapshot as code
+- Keep label-only completion after commas and explicit continuations in ON GOTO/GOSUB target lists, without borrowing labels from another procedure or treating error handlers and ordinary calls as target lists
+- Preserve native module completion at EOF after independently positioned errors when every compiler scope is closed, without admitting unclosed scopes or unpositioned preprocessor failures
+- Keep operator navigation and references on the current native snapshot when an overload probe upgrades the model but its selected header is absent from the source index
+- Keep late argument, operator, and member binding upgrades on the shared native-only acquisition path; definition, declaration, and implementation no longer query a released predecessor after an unavailable or edited upgrade
+- Share model capability and freshness checks across navigation and other editor providers, following one superseded binding upgrade instead of querying a weaker predecessor or returning an edited document's result
+- Offer native module names and the final active macro environment on trailing blank lines when the compiler confirms successful module completion; keep incomplete modules and unanchored header scopes withheld
+- Follow one superseded compiler-binding upgrade instead of accepting a weaker cached native model for constructor Signature Help and other binding-backed requests
+- Retry explicit Analyze/Check once after global snapshot invalidation when the document and selected build are unchanged, preserving edit, cancellation, and trust guards
+- Pin offline-reference citations to the last change in their actual inputs so unrelated compiler commits do not create false reproducibility failures
+- Retain empty-line native completion after ordinary, escaped, and Unicode string literals using exact compiler origins, without adding literal contents to navigation or rename maps
+- Offer native locals and imports on empty lines by intersecting compiler scopes at verified surrounding tokens, without inferring scope from source indentation
+- Keep native locals, parameters, imports, and active macros available while typing incomplete names; offer forward labels only within their compiler procedure scope
+- Retain compiler-selected member completion in broken unsaved bridge statements, including dot/pointer prefixes, array elements, and function results, without restoring invalid expressions or navigation bindings
+- Keep ordinary value-member prefixes after PRINT/RETURN separate from type-constructor completion
+- Detect FreeBASIC versions below the schema-27 baseline, skip unsupported semantic requests, and retain syntax highlighting, source-based editor features, and textual compiler diagnostics
+- Show compiler-proven constant IF/ELSEIF inlay hints from original predicate receipts, including ordinary binary sidecars and unsaved bridge buffers, without evaluating source expressions in the extension
+- Read FBC 1.20.5's default FBCSEMB1 binary semantic models directly, preserving compiler-selected types, bindings, source provenance, and recovery checks
+- Bound binary headers, frames, string dictionaries, and structured-value expansion; reject unsupported required capabilities and incomplete or mismatched models
+- Retain diagnostic text sidecar compatibility for older compilers and schema fixtures
+- Update the optional editor bridge for the current compiler's native memory-operation receipts
+- Retain current REDIM constructor selections in semantic analysis and project-rename validation
+- Refresh the offline language reference and package assets from the FBC 1.20.5 source
+- Include previously omitted runtime modules in both VSIX builders and check every runtime library in packaging tests
+- Fix keyword-aware navigation and inlay scans passing plain source coordinates to VS Code's Position-only offset API
+- Join compiler-bound qualified method definitions to their exact terminal source token for stock-sidecar declaration and implementation navigation
+- Use stock-sidecar typed index receipts for exact Operator [] navigation without requiring a native bridge expression graph
+- Preserve selected constructors when navigating a type-name call before its opening parenthesis
+- Keep macro-origin navigation on the replacement compiler model after a binding upgrade
+- Use the compiler-selected index overload for highlights and references, including requests from header declarations
+- Keep index-argument identifiers on their own compiler bindings for navigation, references, and highlights
+- Preserve argument hover, type definitions, and Call Hierarchy inside index expressions, including nested calls
+- Read captured semantic-source lines safely when checking variable and array hover metadata
+- Use FBC's selected value/type declaration for ambiguous source hovers, requesting bindings only when needed
+- Share background compiler work across editor providers without letting one cancellation stop other interested requests
+- Resume source workspace initialization for an active waiting provider when another provider cancels discovery, and withhold partially initialized semantic results
+- Make procedure and constructor parameter-name hints navigable through compiler-selected physical declarations, preferring header prototypes and leaving ambiguous or generated-only targets as text
+- Include compiler-selected lifetime calls in native outgoing Call Hierarchy for procedures and modules, using the same physical sites as incoming cleanup calls
+- Retain explicit temporary constructor calls from native call graphs in hierarchy, references, and highlights, without mixing overloads or duplicating compiler-confirmed initializer receipts
+- Return native module lifetime edges from one worker query instead of merging a separate source-model projection
+- Consume counted temporary-construction observations and mapped LOC receipts from ordinary FBC's binary sidecar for selected constructor references, highlights, hierarchy, signatures, and parameter hints
+- Bound the temporary-construction family and reject recovery, incomplete, conflicting, macro-generated, and unmapped observations instead of deriving locations from statement IDs
+- Keep native constructor references, highlights, and hierarchy preparation on native identities instead of routing them through stock-sidecar source descriptors
+- Match stock-FBC constructor selections at the terminal type or alias within a qualified signature-help callee
+- Project native qualified constructor calls to their terminal source token for references and hierarchy, keeping namespace references independent
+- Include written temporary constructor selections in stock-FBC CodeLens and native direct-constructor calls in reference counts, retaining exact overloads and terminal source ranges without extra compiler analysis
+- Reuse the bounded captured-source scope cache for stock constructor/destructor lens presentation and preserve body-preferred same-file constructor lenses
+- Transfer waiting providers immediately when upgrading expression analysis to semantic bindings
+- Preserve current compiler snapshots when saved preview tabs close; retract discarded unsaved overlays only from affected work
+- Recognize FBC 1.20.5's rejected implicit-name diagnostic in bounded missing-header and typo Quick Fixes
+- Preserve non-location semantic fact lists when reviving worker results
+- Make diagnostic-service disposal idempotent and verify clean extension-host shutdown in packaged-editor tests
+- Retain physical expression types after a bounded full-model export falls back to bindings-only output, using a separate revision-checked type pass without mixing export identities
+- Retry an expression-type command once if a concurrent binding upgrade replaces its worker snapshot
+- Expire semantic snapshots and workspace-symbol caches when the configured compiler is rebuilt or replaced, including relative and PATH-selected executables
+- Reject analysis, worker queries, and workspace-symbol publication if the compiler executable changes during the request
+- Keep manual saved-module and header checks in the selected build context when the editor bridge is configured; report missing header contexts before launching FBC
+- Apply selected build contexts to ordinary-FBC manual and on-save checks, including saved-header checks through their confirmed translation unit
+- Reject stale selected-context diagnostics after build changes, edits, disk replacements, or reopened buffers
+- Preserve unnumbered preprocessor error/warning messages and their reported locations without treating arbitrary message text as a compiler Quick Fix rule
+- Retract obsolete saved-file and buffer diagnostics when compiler contexts change, while preserving work already using current settings
+- Follow a replacement compiler snapshot during include-link lookup instead of exposing inactive source includes
+- Read completion and workspace-index limits at their declared window scope without resource-configuration warnings
+- Finish quoted include operands and convert C-style include delimiters to FBC's supported string-literal syntax when accepting path completions
+- Preserve nested include paths and trailing comments while excluding filenames that cannot be inserted safely into an include literal
+- Honor selected build-context -i paths in include completion, source links, missing-path suggestions, and workspace dependency indexing
+- Resolve selected-header include options from the root module's working directory and refresh source include caches when build contexts change
+- Keep current compiler snapshots and diagnostics available while upgrading binding or macro capabilities, then replace and release them after validation
+- Preserve existing weaker facts after cancelled or failed upgrades without claiming unavailable capabilities or bypassing source freshness checks
+- Discover bundled headers for PATH-selected compilers and symlinks, including standard installed and standalone layouts, without launching compiler probes
+- Honor effective -prefix SDK roots in source include tools, including relative paths, build-context overrides, and explicit -i precedence without mixing default SDK headers
+- Retry compiler assistance immediately after saved-header revisions, invalidated passes, timeout changes, and discarded prepared models instead of caching them as unchanged compiler failures
+- Keep genuine failure throttling keyed to compact hashes of captured editor revisions and compiler context, without retaining buffer lists or source text
+- Distinguish temporary worker admission pressure from compiler failures so assistance remains retryable when capacity returns, while preserving permanent input-size errors
+- Refresh compiler-reported missing-include snapshots when new named headers open, including macro-expanded include names and unsaved header buffers
+- Guard missing-include availability in worker queries, avoid repeated expiry for ignored same-named buffers, and reschedule affected on-change roots
+- Retract matching saved-file missing-include errors for newly available working-directory paths without hiding unrelated errors or cancelling fresh checks
+- Retain up to eight small worker models under the unchanged byte budget, reducing recompilation while navigating multiple modules and preserving LRU eviction
+- Validate each caller's compiler-confirmed source membership when sharing root analysis, rejecting excluded headers without failing valid root requests
+- Notify manual callers that join a successful background analysis and retain failure throttling for excluded headers across binding upgrades
+- Deliver shared-analysis failures to active manual callers, following binding upgrades to their final result without warning about superseded cancellations
+- Let stock-FBC Type Hierarchy resolve VAR, TYPEOF, and alias-derived values through compiler bindings instead of treating unresolved source types as primitives
+- Apply the same compiler-first handling to Go to Type Definition for inferred and TYPEOF-derived values, retaining primitive/literal fast paths
+- Add a passive compiler language-status entry with current backend/build context, running/partial/ready states, and actions for trust, saved-buffer limits, header contexts, and retries
+- Keep shared-analysis progress active across binding upgrades and dispose status subscriptions and pending refreshes cleanly
+- Complete members on stock-FBC inferred and TYPEOF-derived receivers through compiler-selected physical types and base chains when source names are ambiguous
+- Exclude inactive and private members using compiler declaration-site and visibility facts, including conditional bases in headers; batch checks and reject stale source/model joins
+- Honor the configured completion result limit when refining source members with compiler types
+- Preserve normalized value const qualifiers for readonly semantic highlighting, including parameter runtime aliases, without confusing const pointees with fixed pointers
+- Reuse cached stock-sidecar binding queries for readonly facts and withhold annotations when physical include contexts disagree or qualifiers are unknown
+- Accept qualified numeric assignment destinations using inspected FBC 1.20.5 dtype flags while preserving raw compiler metadata and rejecting pointers, unknown flags, and uninspected producers
+- Preserve ordinary semantic highlighting when stock-FBC NOKEYWORD handling selects compiler tokens, including parameters, procedures, types, fields, and readonly/write modifiers
+- Join compiler-provided parameter/runtime-variable aliases for physical navigation, references, and token classification without merging unrelated same-named parameters
+- Classify serialized procedure and method tokens through their source scopes, distinguish DECLARE from definitions, and retain compiler-confirmed deprecation comments across prototype/body sites
+- Distinguish qualified namespace functions from UDT methods using visible source owners and stable compiler owner-kind facts, including declarations in headers
+- Retain bounded friendly owner metadata from semantic T records instead of interpreting compiler-private symbol-class numbers for callable highlighting
+- Isolate source-only procedure families by declaration/include visibility instead of matching signatures across the whole workspace
+- Keep real shared-header consumers in source rename previews while excluding independent same-named headers and procedures, including separate UDT method implementations
+- Scope source namespace identities to connected declaration families so definitions and references retain real reopenings without leaking into independent same-named headers
+- Keep source Go to Declaration and Go to Implementation within connected callable families, including constructor prototypes and bodies
+- Preserve constructor references, highlights, and Call Hierarchy when independent modules define the same type and constructor signatures
+- Keep overloaded-operator declarations and implementations within connected source families, including index implementations reached from header prototypes
+- Retain operator result types and distinguish scalar/pointer CAST overloads during navigation
+- Preserve pointer depth, const qualifiers, and array dimensions in shared callable signature keys while matching equivalent PTR/POINTER spellings
+- Keep CAST Call Hierarchy identities distinct by result type and prepare constructor implementations from header prototypes
+- Preserve resolved callable owners through native inventory and worker replies so completion and Call Hierarchy distinguish namespace procedures from UDT methods
+- Retain callable ownership in Outline and compact workspace symbols, including source-header method/function classification and independent deprecation flags
+- Refresh cached Outline results after compiler-context and active snapshot changes without editing the document; coalesce registration updates and dispose pending refreshes on shutdown
+- Show outgoing calls from operator header prototypes by resolving their one connected implementation, preserving overload and ambiguity checks
+- Match constructor/destructor families across namespace and qualified-body spellings, preserving destructor cleanup callers and outgoing implementation calls
+- Preserve enclosing namespaces when matching member operators and index-overload receipts
+- Correct the companion FBC exporter's selected operator receipt for BYREF index results without changing generated code; requires rebuilding the compiler/bridge
+- Keep navigation replies free of macro replacement bodies by isolating serializer options from Array.map callback arguments; retain explicit hover/completion previews
+- Support Signature Help for parenthesis-free procedure calls, including qualified and pointer methods, continued arguments, single-line IF branches, and compiler-selected overloads; add the space trigger without changing navigation call parsing
+- Extend compiler-selected parameter hints to bare procedure calls, continuations, and dot/pointer methods; retain receiver facts for native argument matching while excluding static methods' nonexistent receiver
+- Keep argument hints at the beginning of string expressions and after continuation markers, and suppress malformed delimiter lists without throwing
+- Retain namespace-owned shared UDT constructor sites in module Call Hierarchy, including native module outgoing calls without duplicating ordinary calls
+- Keep native constructor bodies as callable parents and follow selected constructor receipts when expanding recursive incoming trees; load closed module documents and discard combined outgoing results if the document changes
+- Anchor source-created constructor/destructor hierarchy items on the callable keyword so native outgoing lookup does not resolve the written owner type instead
+- Load and index closed Call Hierarchy sources before resolving incoming/outgoing edges, preserving stock-FBC selected bare optional calls and overloads without showing or saving the source
+- Cancel closed-document loads before compiler work and discard hierarchy results when the source changes during a query sequence
+- Tie parsed source caches to TextDocument lifetimes as well as URI/version, preventing stale symbols and include links when a changed file reopens at the same version
+- Resolve refreshed include links before taking Call Hierarchy source snapshots, retaining closed-module header targets without a workspace rescan
+- Defer Outline provider replacement until active symbol requests settle, preventing activation/settings/snapshot refreshes from cancelling their compiler-backed lookups
+- Release deferred Outline refreshes after failed requests and prevent re-registration or late compiler work after disposal
+- Connect inlay hints to the existing model-change event so empty providers remain refreshable and compiler/context updates can replace stale type and parameter labels without a source edit
+- Refresh cached include-link targets after compiler snapshots, build contexts, and include-path changes, sharing Outline's coalesced registration lifecycle and in-flight request protection
+- Dispose include-link refresh resources before compiler shutdown and retain exact compiler-selected active include targets across context switches
+- Refresh snapshot-dependent providers for visible split editors as well as the active editor, keeping background-pane include targets current
+- Follow native destructor callers and prototypes through compiler-selected DELETE, natural scope, early-return, and temporary cleanup receipts; retain their outgoing implementation calls
+- Join lifetime prototypes to body source sites through compiler-owned native identity, reject unproven destructor identity joins, and reuse confirmed cleanup sites for native references/highlights when binding facts are available
+- Request compiler binding facts on the first destructor reference/highlight lookup, sharing bounded lifetime-declaration recognition with incoming Call Hierarchy and preserving ordinary-method fast paths
+- Resolve stock-FBC destructor references/highlights through the existing lifetime receipt facade, retaining all four cleanup kinds and declaration filtering without prior hierarchy analysis
+- Identify external destructors from unique compiler-confirmed physical prototype records when no body is present in the selected translation unit, preserving constructor compatibility and file-local highlights
+- Resolve stock-FBC constructor references/highlights directly from active compiler-owned prototype records, covering guarded external headers without source-only body/family joins
+- Retain overload separation and exclude inactive lifetime declarations when deriving reference targets from constructor/destructor keywords
+
 ## 1.20.4
 
 - Added conservative indentation-only document formatting for recognized FreeBASIC block structures
