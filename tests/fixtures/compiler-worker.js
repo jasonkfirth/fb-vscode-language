@@ -25,7 +25,9 @@ runAnalysisWorker(parentPort, async (options, decode, execute) => {
     if (mode === "busy") {
         // Deliberately omit checkpoints to test forced worker shutdown.
         const until = Date.now() + 10000;
-        while (Date.now() < until) {}
+        while (Date.now() < until) {
+            // Keep the worker busy until the supervisor terminates it.
+        }
     }
     if (mode === "crash-child" || mode === "live-child") {
         const childPidPath = path.join(options.temporaryDirectory, "child.pid");

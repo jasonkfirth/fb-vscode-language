@@ -30,7 +30,7 @@ const { execFileSync } = require("node:child_process");
 const reference = require("../data/language-reference.json");
 const grammar = require("../syntaxes/source/freebasic.grammar-source.json");
 const { getReferenceEntries, getReferenceMarkdown, getReferenceNames, getReferenceSignatures } = require("../lib/language-reference");
-const { generateReference, referenceSourceRevision } = require("../tools/build-language-reference");
+const { generateReference, referenceSourceRevision, referenceSourceModifiedPaths } = require("../tools/build-language-reference");
 const { resolveFreeBasicRoot } = require("../tools/audit-freebasic-coverage");
 
 test("manual signatures expose useful names, defaults, and parameter descriptions", () => {
@@ -94,6 +94,23 @@ test("opt-in compiler intrinsics expose their manual forms and required header",
     assert.match(getReferenceSignatures("Serialize")[0].documentation, /does not perform file or network I\/O/i);
 });
 
+test("new gfxlib3 screen-transfer APIs retain header signatures and imports", () => {
+    for (const [name, parameters] of [
+        ["Gfx3ScreenCapture", ["destination", "x", "y", "width", "height"]],
+        ["Gfx3SurfaceCopyFromScreen", ["destination", "source_x", "source_y", "width", "height", "destination_x", "destination_y"]]
+    ]) {
+        const entries = getReferenceEntries(`FB.${name}`);
+        assert.equal(entries.length, 1, name);
+        assert.equal(entries[0].header, "fbgfx3.bi");
+        assert.equal(entries[0].namespace.toLowerCase(), "fb");
+        const signatures = getReferenceSignatures(name);
+        assert.equal(signatures.length, 1);
+        assert.deepEqual(signatures[0].parameters.map((parameter) => parameter.name), parameters);
+        assert.ok(signatures[0].parameters.every((parameter) => !parameter.optional));
+        assert.match(getReferenceMarkdown(name), /selects and links gfxlib3/i);
+    }
+});
+
 test("reference provenance ignores compiler-only commits but follows its actual inputs", (t) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-reference-revision-"));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -111,15 +128,31 @@ test("reference provenance ignores compiler-only commits but follows its actual 
     git("commit", "-qm", "Reference inputs");
     const first = git("rev-parse", "HEAD");
     assert.equal(referenceSourceRevision(directory), first);
+    assert.deepEqual(referenceSourceModifiedPaths(directory), []);
     fs.writeFileSync(path.join(directory, "src/compiler/private.bas"), "'' Unrelated compiler input\n");
+    assert.deepEqual(referenceSourceModifiedPaths(directory), [], "untracked compiler files are not reference inputs");
     git("add", ".");
     git("commit", "-qm", "Compiler only");
     assert.notEqual(git("rev-parse", "HEAD"), first);
     assert.equal(referenceSourceRevision(directory), first);
     fs.writeFileSync(page, "Changed reference input\n");
+    const untrackedPage = path.join(directory, "doc/manual/cache/KeyPgNew.wakka");
+    fs.writeFileSync(untrackedPage, "New reference input\n");
+    assert.deepEqual(referenceSourceModifiedPaths(directory), ["doc/manual/cache/KeyPgExample.wakka", "doc/manual/cache/KeyPgNew.wakka"]);
     git("add", ".");
     git("commit", "-qm", "Update reference input");
     assert.equal(referenceSourceRevision(directory), git("rev-parse", "HEAD"));
+    assert.deepEqual(referenceSourceModifiedPaths(directory), []);
+});
+
+test("reference links identify modified input files without hiding committed sources", () => {
+    const modified = new Set(reference.sourceModifiedPaths || []);
+    for (const entry of Object.values(reference.entries).flat()) {
+        const markdown = getReferenceMarkdown(entry.name, entry.header ? { header: entry.header } : {});
+        if (modified.has(entry.sourcePath)) assert.ok(markdown.includes(`\`${entry.sourcePath}\` (working-copy snapshot)`));
+    }
+    assert.match(getReferenceMarkdown("ScreenRes"), new RegExp(reference.sourceRevision));
+    assert.equal(modified.has("doc/manual/cache/KeyPgScreenres.wakka"), false);
 });
 
 test("offline reference is reproducible from the configured 1.20.5 source", () => {

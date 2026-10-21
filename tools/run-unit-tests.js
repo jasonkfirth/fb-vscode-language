@@ -26,16 +26,19 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { resolveFreeBasicRoot } = require("./audit-freebasic-coverage");
+const { resolveCompilerPath } = require("../lib/compiler-path");
 
 const REPOSITORY_ROOT = path.resolve(__dirname, "..");
 const BRIDGE_PATH = path.join(REPOSITORY_ROOT, "dist", "fbc-editor-current");
 const UNIT_TEST_FILES = [
     "tests/bracket-diagnostics.test.js",
     "tests/compiler-diagnostic-sidecar.test.js",
+    "tests/compiler-constant-values.test.js",
     "tests/compiler-flow-analysis.test.js",
     "tests/parser.test.js",
     "tests/compiler-diagnostics.test.js",
     "tests/compiler-process-supervisor.test.js",
+    "tests/compiler-path.test.js",
     "tests/editor-features.test.js",
     "tests/formatter.test.js",
     "tests/workspace-index.test.js",
@@ -80,9 +83,13 @@ function commandWorks(command) {
 
 function defaultCompiler(environment, root) {
     if (environment.FBC_EXECUTABLE) return environment.FBC_EXECUTABLE;
-    const localCompiler = root ? path.join(root, "bin", "fbc") : "";
-    if (localCompiler && isExecutable(localCompiler)) return localCompiler;
-    return commandWorks("fbc") ? "fbc" : "";
+    const names = process.platform === "win32" ? ["fbc64.exe", "fbc32.exe", "fbc.exe"] : ["fbc"];
+    for (const name of root ? names : []) {
+        const localCompiler = path.join(root, "bin", name);
+        if (isExecutable(localCompiler)) return localCompiler;
+    }
+    const compiler = resolveCompilerPath("fbc");
+    return commandWorks(compiler) ? compiler : "";
 }
 
 function prepareTestEnvironment(environment = process.env) {

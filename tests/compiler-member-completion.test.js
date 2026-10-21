@@ -31,7 +31,7 @@ function fixture(fieldCount = 1) {
     const siteKey = (site) => `${site.line}:${site.startColumn}:${site.endColumn}`;
     const active = new Map(source.entries.filter((entry) => entry.declaration.type === "field" &&
         /^(?:active\d+|inherited|hidden)$/.test(entry.name)).map((entry) => [siteKey(entry.declaration), entry]));
-    const state = { snapshotText: text, limit: 2000, partial: false, onFacts: null, modelChanged: false };
+    const state = { snapshotText: text, limit: 2000, partial: false, onFacts: null, modelChanged: false, context: "first-build" };
     const requests = [], batches = [];
     const query = async (operation, _uri, input) => {
         if (operation === "compilerSidecarReceiverTypeHierarchy") return typeRecords;
@@ -50,10 +50,16 @@ function fixture(fieldCount = 1) {
     const completionModel = { remote: true, query: async () => ({ member: true, entries: [], hasDirectivePrefix: false }) };
     const index = {
         compilerAnalysis: {
+            generation: 1,
+            contextFor: () => ({ signature: state.context }),
             analysisCompilerFor: () => ({ semanticModelOnly: true }),
             getModelForEditor: async (_document, _token, needTypes, needBindings) => {
                 requests.push([needTypes, needBindings]);
-                if (!needTypes) return completionModel;
+                if (!needTypes) {
+                    current = completionModel;
+                    return current;
+                }
+                if (current === completionModel) current = unbound;
                 if (needBindings) current = bound;
                 current.partial = state.partial;
                 return current;
@@ -75,14 +81,14 @@ function fixture(fieldCount = 1) {
         "intrinsicFunctions", "runtimeFunctions", "graphicsFunctions", "bundledFunctions", "constants", "compilerDefines", "symbolicConstants"]
         .map((key) => [key, []]));
     const provider = createCompletionProvider(vscode, index, grammar);
-    return { state, document, requests, batches,
+    return { state, document, requests, batches, index, vscode,
         complete: () => provider.provideCompletionItems(document, { line: lines.length - 1, character: "Print factory.".length }) };
 }
 
 test("compiler-bound completion selects conditional types and physical member sites", async () => {
     const { complete, requests } = fixture();
     assert.deepEqual((await complete()).map((item) => item.label).sort(), ["active0", "inherited"]);
-    assert.deepEqual(requests, [[false, false], [true, undefined], [true, true]],
+    assert.deepEqual(requests, [[false, false], [true, false], [true, true]],
         "physical bindings should be requested only after source type resolution fails");
 });
 
@@ -95,13 +101,18 @@ test("compiler-bound completion batches member facts and respects the editor res
     assert.equal((await complete()).length, 2);
 });
 
-for (const reason of ["stale source", "edited document", "replaced model", "partial model"]) {
+for (const reason of ["stale source", "edited document", "replaced model", "partial model", "closed document",
+    "compiler invalidation", "changed context", "changed trust"]) {
     test(`compiler-bound completion rejects ${reason}`, async () => {
-        const { complete, state, document } = fixture();
+        const { complete, state, document, index, vscode } = fixture();
         if (reason === "stale source") state.snapshotText = state.snapshotText.replace("active0", "active9");
         if (reason === "edited document") state.onFacts = () => document.version++;
         if (reason === "replaced model") state.onFacts = () => { state.modelChanged = true; };
         if (reason === "partial model") state.partial = true;
+        if (reason === "closed document") state.onFacts = () => { document.isClosed = true; };
+        if (reason === "compiler invalidation") state.onFacts = () => { index.compilerAnalysis.generation++; };
+        if (reason === "changed context") state.onFacts = () => { state.context = "second-build"; };
+        if (reason === "changed trust") state.onFacts = () => { vscode.workspace.isTrusted = false; };
         assert.deepEqual(await complete(), []);
     });
 }

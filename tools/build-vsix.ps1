@@ -187,6 +187,7 @@ $filesToPackage = @(
     "lib/compiler-worker-runtime.js",
     "lib/compiler-worker-entry.js",
     "lib/compiler-model-store.js",
+    "lib/compiler-path.js",
     "lib/compiler-model-queries.js",
     "lib/compiler-document-symbols.js",
     "lib/compiler-remote-model.js",

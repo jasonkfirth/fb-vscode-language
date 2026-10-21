@@ -1,8 +1,9 @@
 {
   "title": "FreeBASIC 1.20.5 editor reference",
   "sourceVersion": "1.20.5",
-  "sourceRevision": "8ebc975303fb30f1a4c4330547cde11c011e895e",
-  "sourceHash": "6d16dfb86c16811b68fa17254c1e106ae07c11390e41bfac8a988887f18b64ae",
+  "sourceRevision": "d9aa6b277ddcf35365044856a50308dcaf852cc2",
+  "sourceHash": "53e36e4f9eb672c59a20339341f1f2bdee9ff4657ebd8418b5ad10b186ff0a4a",
+  "sourceModifiedPaths": [],
   "attribution": "Manual excerpts: The FreeBASIC documentation contributors, GNU Free Documentation License 1.2. See docs/reference-attribution.md and docs/fdl-1.2.txt.",
   "sourceRepository": "https://github.com/jasonkfirth/fbc",
   "entries": {
@@ -3833,7 +3834,7 @@
         "summary": "Declares a variable, array or object having external linkage",
         "usage": "Extern [ Import ] symbolname[ (subscripts) ] [ Alias \"aliasname\" ] as DataType [, ...]",
         "signatures": [],
-        "description": "Declares symbolname as an external name, meaning it is global to external modules including those to be compiled as static and dynamic libraries (DLLs). Extern only declares variables, arrays and objects, and does not define them (different from Common or Dim). It also has the effect of making symbolname a shared name, meaning it is visible within procedures (see Shared). A symbolname declared as external name can be (re)defined (using Dim or Redim) only in a single external module.\n\nIf Alias is used, aliasname will be used as the external name rather than symbolname, and its case will be preserved.\n\nExtern was added in order to support the C libraries.\n\nIf Import is used, the name will be added to the dynamic library import list so its address can be fixed at run-time.",
+        "description": "Declares symbolname as an external name, meaning it is global to external modules including those to be compiled as static and dynamic libraries (DLLs). Extern only declares variables, arrays and objects, and does not define them (different from Common or Dim). It also has the effect of making symbolname a shared name, meaning it is visible within procedures (see Shared). A symbolname declared as external name can be (re)defined (using Dim or Redim) only in a single external module.\n\nAn external variable may use a forward-referenced Type. The variable may be addressed or passed by reference while the Type is incomplete. Reading, assigning, indexing, or accessing members requires a complete Type definition. An array cannot use an incomplete element Type because the compiler needs its size.\n\nIf Alias is used, aliasname will be used as the external name rather than symbolname, and its case will be preserved.\n\nExtern was added in order to support the C libraries.\n\nIf Import is used, the name will be added to the dynamic library import list so its address can be fixed at run-time.",
         "sourcePath": "doc/manual/cache/KeyPgExtern.wakka"
       }
     ],
@@ -4680,7 +4681,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 206
+        "sourceLine": 222
       }
     ],
     "GFX3POINT": [
@@ -4693,7 +4694,7 @@
         "usage": "",
         "signatures": [],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 98
+        "sourceLine": 99
       }
     ],
     "GFX3RENDERCALLBACK": [
@@ -4706,7 +4707,7 @@
         "usage": "",
         "signatures": [],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 91
+        "sourceLine": 92
       }
     ],
     "GFX3RUNONRENDERTHREAD": [
@@ -4740,7 +4741,62 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 209
+        "sourceLine": 225
+      }
+    ],
+    "GFX3SCREENCAPTURE": [
+      {
+        "name": "GFX3SCREENCAPTURE",
+        "title": "fb.Gfx3ScreenCapture",
+        "summary": "Declared in fbgfx3.bi.",
+        "header": "fbgfx3.bi",
+        "namespace": "fb",
+        "usage": "",
+        "signatures": [
+          {
+            "label": "declare function Gfx3ScreenCapture GFX3CALL alias \"fb_Gfx3ScreenCapture\" ( byval destination as any ptr, byval x as long, byval y as long, byval width as long, byval height as long ) as long",
+            "parameters": [
+              {
+                "label": "byval destination as any ptr",
+                "name": "destination",
+                "typeName": "any ptr",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval x as long",
+                "name": "x",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval y as long",
+                "name": "y",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval width as long",
+                "name": "width",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval height as long",
+                "name": "height",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              }
+            ],
+            "typeName": "long"
+          }
+        ],
+        "sourcePath": "inc/fbgfx3.bi",
+        "sourceLine": 141
       }
     ],
     "GFX3SETEXTERNALPRESENTATION": [
@@ -4767,7 +4823,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 218
+        "sourceLine": 234
       }
     ],
     "GFX3SURFACEBLIT": [
@@ -4857,7 +4913,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 150
+        "sourceLine": 158
       }
     ],
     "GFX3SURFACEBLITROTATED": [
@@ -4989,7 +5045,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 173
+        "sourceLine": 189
       }
     ],
     "GFX3SURFACEBLITSCALED": [
@@ -5100,7 +5156,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 160
+        "sourceLine": 176
       }
     ],
     "GFX3SURFACECLEAR": [
@@ -5134,7 +5190,76 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 146
+        "sourceLine": 154
+      }
+    ],
+    "GFX3SURFACECOPYFROMSCREEN": [
+      {
+        "name": "GFX3SURFACECOPYFROMSCREEN",
+        "title": "fb.Gfx3SurfaceCopyFromScreen",
+        "summary": "Declared in fbgfx3.bi.",
+        "header": "fbgfx3.bi",
+        "namespace": "fb",
+        "usage": "",
+        "signatures": [
+          {
+            "label": "declare function Gfx3SurfaceCopyFromScreen GFX3CALL alias \"fb_Gfx3SurfaceCopyFromScreen\" ( byval destination as any ptr, byval source_x as long, byval source_y as long, byval width as long, byval height as long, byval destination_x as long, byval destination_y as long ) as long",
+            "parameters": [
+              {
+                "label": "byval destination as any ptr",
+                "name": "destination",
+                "typeName": "any ptr",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval source_x as long",
+                "name": "source_x",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval source_y as long",
+                "name": "source_y",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval width as long",
+                "name": "width",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval height as long",
+                "name": "height",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval destination_x as long",
+                "name": "destination_x",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              },
+              {
+                "label": "byval destination_y as long",
+                "name": "destination_y",
+                "typeName": "long",
+                "optional": false,
+                "variadic": false
+              }
+            ],
+            "typeName": "long"
+          }
+        ],
+        "sourcePath": "inc/fbgfx3.bi",
+        "sourceLine": 167
       }
     ],
     "GFX3SURFACECREATE": [
@@ -5189,7 +5314,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 106
+        "sourceLine": 107
       }
     ],
     "GFX3SURFACEDESTROY": [
@@ -5216,7 +5341,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 123
+        "sourceLine": 124
       }
     ],
     "GFX3SURFACEDOWNLOAD": [
@@ -5285,7 +5410,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 133
+        "sourceLine": 134
       }
     ],
     "GFX3SURFACEINFO": [
@@ -5340,7 +5465,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 125
+        "sourceLine": 126
       }
     ],
     "GFX3SURFACELOAD": [
@@ -5381,7 +5506,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 112
+        "sourceLine": 113
       },
       {
         "name": "GFX3SURFACELOAD",
@@ -5420,7 +5545,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 115
+        "sourceLine": 116
       },
       {
         "name": "GFX3SURFACELOAD",
@@ -5459,7 +5584,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 119
+        "sourceLine": 120
       }
     ],
     "GFX3SURFACEMAP": [
@@ -5507,7 +5632,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 137
+        "sourceLine": 145
       }
     ],
     "GFX3SURFACEMAPRECT": [
@@ -5583,7 +5708,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 140
+        "sourceLine": 148
       }
     ],
     "GFX3SURFACEMODE7": [
@@ -5736,7 +5861,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 187
+        "sourceLine": 203
       }
     ],
     "GFX3SURFACEPRESENT": [
@@ -5770,7 +5895,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 198
+        "sourceLine": 214
       }
     ],
     "GFX3SURFACEUNMAP": [
@@ -5797,7 +5922,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 144
+        "sourceLine": 152
       }
     ],
     "GFX3SURFACEUPLOAD": [
@@ -5866,7 +5991,7 @@
           }
         ],
         "sourcePath": "inc/fbgfx3.bi",
-        "sourceLine": 129
+        "sourceLine": 130
       }
     ],
     "GOSUB": [
@@ -6130,7 +6255,7 @@
         "usage": "",
         "signatures": [],
         "sourcePath": "inc/fbgfx.bi",
-        "sourceLine": 281
+        "sourceLine": 287
       }
     ],
     "IMAGECONVERTROW": [
@@ -6806,7 +6931,7 @@
         "summary": "Standard data type: 32-bit or 64-bit signed, same size as SizeOf(Any Ptr)",
         "usage": "dim variable as Integer\ndim variable as Integer<bits>",
         "signatures": [],
-        "description": "Integer is the main data type FreeBASIC uses for integer math and bitwise operations. It is the default type for number literals.\n\nIn the first form Integer is a 32-bit or 64-bit signed whole-number data type, depending on the target platform.\n\nIf an explicit bit size is given (the second form), a data type is provided that can hold values from -1LL Shl (bits-1) up to (1LL Shl (bits-1)) - 1. The selected data type is Byte for Integer<8>, Short for Integer<16>, Long for Integer<32> and LongInt for Integer<64>.",
+        "description": "Integer is the main data type FreeBASIC uses for integer math and bitwise operations. It is the default type for number literals.\n\nIn the first form Integer is a 32-bit or 64-bit signed whole-number data type, depending on the target platform.\n\nIf an explicit bit size is given (the second form), the data type uses the requested signed integer width. Integer<128> holds values from -2^127 through 2^127-1. The selected data type is Byte for Integer<8>, Short for Integer<16>, Long for Integer<32> and LongInt for Integer<64>. Integer<128> is a distinct 16-byte scalar type.\n\nLLVM emits native i128 arithmetic and bitwise operations; ABS and SGN use the two-word runtime helper. GCC and Clang use native `__int128` on targets that support it, with ABS and SGN using that same helper. On 32-bit targets, they use a two-word type and lower arithmetic through the runtime. Its alignment is 16 bytes except on Windows CE (8 bytes) and classic m68k targets (2 bytes). C interop must use that structure layout; a native `__int128` declaration is compatible only when the compiler supports it and uses a matching ABI.\n\nThe native GAS and GAS64 backends lower arithmetic through the runtime library. GAS32 passes 128-bit arguments as 16-byte stack copies and returns values through a hidden result pointer, matching the i386 ABI for the aligned two-word C structure. GAS64 uses the SysV two-register ABI where available and stack arguments when those registers are exhausted. The GAS64 non-SysV path passes the 16-byte value through a caller-owned copy and returns through a hidden result pointer.",
         "sourcePath": "doc/manual/cache/KeyPgInteger.wakka"
       }
     ],
@@ -7212,10 +7337,10 @@
       {
         "name": "LOCK",
         "title": "LOCK",
-        "summary": "Restricts read/write access to a file or portion of a file",
+        "summary": "Requests a lock on a file range",
         "usage": "Lock #filenum, record\nLock #filenum, start To end",
         "signatures": [],
-        "description": "Lock temporarily restricts access by other threads or programs to a file, or portion of a file, usually to allow safe writing to it.\n\nAfter modifying the data, an Unlock with the same parameters as the Lock should be issued.\n\nNote: This command does not always work, neither as documented nor as expected. It appears to be broken at the moment.",
+        "description": "Lock requests a lock on a file range, usually to allow safe writing to it. The first position and final position are inclusive. A single position locks one byte in a Binary file or one record in a Random file. A start to end range locks every byte or record in that range. If the requested range is already locked incompatibly, the request returns a file I/O error immediately.\n\nAfter modifying the data, issue Unlock with the same range. Locking behavior depends on the target operating system. On Unix-like systems, file locks are advisory and process-associated, so cooperating programs must use compatible locks. Separate handles in the same process do not conflict with each other, and closing any handle for a file releases all POSIX record locks that process holds on it. A conflict or native lock failure sets a file I/O error. Invalid file numbers or ranges set an illegal function call error.\n\nTargets without a native byte-range locking implementation report a file I/O error instead of claiming that a lock was acquired.",
         "sourcePath": "doc/manual/cache/KeyPgLock.wakka"
       }
     ],
@@ -9316,7 +9441,7 @@
         "usage": "",
         "signatures": [],
         "sourcePath": "inc/fbgfx.bi",
-        "sourceLine": 322
+        "sourceLine": 328
       }
     ],
     "RANDOM": [
@@ -11928,7 +12053,7 @@
         "summary": "Standard data type: 32-bit or 64-bit unsigned, same size as SizeOf(Any Ptr). Equivalent to Unsigned Integer.",
         "usage": "dim variable as Uinteger\ndim variable as Uinteger<bits>",
         "signatures": [],
-        "description": "32-bit or 64-bit unsigned whole-number data type, depending on the platform.\n\nIf an explicit bit size is given, a data type is provided that can hold values from 0 up to (1ULL Shl (bits)) - 1. The selected data type is UByte for UInteger<8>, UShort for UInteger<16>, ULong for UInteger<32> and ULongInt for UInteger<64>.",
+        "description": "32-bit or 64-bit unsigned whole-number data type, depending on the platform.\n\nIf an explicit bit size is given, the data type uses the requested unsigned integer width. UInteger<128> holds values from 0 through 2^128-1. The selected data type is UByte for UInteger<8>, UShort for UInteger<16>, ULong for UInteger<32> and ULongInt for UInteger<64>. UInteger<128> is a distinct 16-byte scalar type.\n\nLLVM emits native i128 arithmetic and bitwise operations; ABS and SGN use the two-word runtime helper. GCC and Clang use native `__int128` on targets that support it, with ABS and SGN using that same helper. On 32-bit targets, they use a 16-byte aligned two-word type and lower arithmetic through the runtime. C interop must use that structure layout; a native `__int128` declaration is compatible only when the compiler supports it and uses a matching ABI.\n\nThe native GAS and GAS64 backends lower arithmetic through the runtime library. GAS32 passes 128-bit arguments as 16-byte stack copies and returns values through a hidden result pointer, matching the i386 ABI for the aligned two-word C structure. GAS64 uses the SysV two-register ABI where available and stack arguments when those registers are exhausted. The GAS64 non-SysV path passes the 16-byte value through a caller-owned copy and returns through a hidden result pointer.",
         "sourcePath": "doc/manual/cache/KeyPgUinteger.wakka"
       }
     ],
@@ -11969,10 +12094,10 @@
       {
         "name": "UNLOCK",
         "title": "UNLOCK",
-        "summary": "Removes a previous access restriction (lock) on a file",
+        "summary": "Releases a file range lock",
         "usage": "Unlock #filenum, record\nUnlock #filenum, start To end",
         "signatures": [],
-        "description": "Unlock removes the temporary access restriction set by Lock.\n\nIt is strongly recommended to use the same arguments used in the previous Lock.\n\nNote: This command does not always work, neither as documented nor as expected. It appears to be broken at the moment.",
+        "description": "Unlock releases the byte or record range locked by Lock. The first and final positions are inclusive.\n\nUse the same arguments as the matching Lock. On Unix-like systems, file locks are advisory. Native unlock failures set a file I/O error, and targets without native byte-range locking report the operation as unsupported.",
         "sourcePath": "doc/manual/cache/KeyPgUnlock.wakka"
       }
     ],
@@ -13392,7 +13517,7 @@
         "usage": "",
         "signatures": [],
         "sourcePath": "inc/fbgfx.bi",
-        "sourceLine": 268
+        "sourceLine": 274
       }
     ],
     "__BUILTIN_BSWAP16": [

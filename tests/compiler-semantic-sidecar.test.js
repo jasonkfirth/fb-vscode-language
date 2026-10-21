@@ -21,7 +21,6 @@ const {
     compilerIgnoredDeclarationSuffixRange,
     compilerMissingClosingQuoteRange,
     compilerMeaninglessNextVariableRange,
-    compilerPossibleEscapeStringRange,
     compilerRedundantNewAnyInitializerRange
 } = require("../lib/compiler-diagnostic-sidecar");
 const { findBracketProblems } = require("../lib/bracket-diagnostics");
@@ -719,6 +718,16 @@ test("schema 20 decodes current compiler facts and closed source provenance", ()
     assert.deepEqual(compact.sourceOrigins, [{ domain: "expression", identity: 1, source: 1 }]);
 });
 
+test("semantic symbol details retain thread-local storage and reject unknown storage classes", () => {
+    const text = [header20, "M\t/main.bas", "D\t/main.bas",
+        "S\t1\ttlsValue\t1\t11\t0\t0\t0\t0\t4\t0\t0",
+        "T\t1\ttlsValue\tvariable\tnumeric\tlong\t11\t0\t0\t0\t0\t0\t0\t4\t0\t\tpublic\tthread-local\tsource",
+        "END\t20\t1\t0\t1\t0\t0\t0\t0\t0\t1\t1\t1"].join("\n");
+    const model = decodeCompilerSemanticModel(text);
+    assert.deepEqual(model.symbolStorageClasses, [{ symbol: 1, storage: "thread-local" }]);
+    assert.throws(() => decodeCompilerSemanticModel(text.replace("\tthread-local\t", "\tunrecognized-storage\t")), /symbol detail/);
+});
+
 test("schema 20 semantic strings preserve legacy bytes with surrogate escapes", () => {
     const text = [
         header20,
@@ -831,7 +840,6 @@ test("schema 25 accepts an empty physical statement-end point", () => {
 test("schema 25 accepts statement and construct locations emitted before their closing records", () => {
     const rows = schema25ConstructSidecar().split("\n");
     const constructIndex = rows.findIndex((row) => row.startsWith("BLK\t"));
-    const statementEndIndex = rows.findIndex((row) => row.startsWith("STE\t"));
     rows.splice(constructIndex + 1, 0,
         "LOC\tconstruct\t1\tif-arm:then\t1\t1\t0\t1\t0\t0\t0\tmapped",
         "LOC\tstatement\t1\tassignment-operator:1\t1\t1\t0\t1\t0\t0\t0\tmapped");
@@ -865,6 +873,177 @@ test("schema 25 retains source statement operations and rejects unsupported effe
     }
     assert.throws(() => decodeCompilerSemanticModel(text.replace("SOP\t1\tfile-open", "SOP\t2\tfile-open")), /statement operation/);
     assert.throws(() => decodeCompilerSemanticModel(text.replace("SOP\t1\tfile-open", "SOP\t1\tpure-call")), /statement operation/);
+});
+
+test("native primitive type receipts retain compact-mode facts and validate source/count closure", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-primitive-type-receipts-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const sourcePath = path.join(directory, "main.bas");
+    fs.writeFileSync(sourcePath, ["Type LocalAlias As Long", "Dim number As Integer<128>", "#define NumericType Long",
+        "Dim expanded As NumericType", "Dim aliasValue As LocalAlias", ""].join("\n"));
+    let baseline;
+    for (const compact of [false, true]) {
+        const modelPath = path.join(directory, `${compact ? "compact" : "full"}.fbcsem`);
+        const outputPath = path.join(directory, `${compact ? "compact" : "full"}.bas`);
+        execFileSync(process.env.FBC_EDITOR_EXECUTABLE, ["-pp", ...(compact ? ["-semantic-model-compact"] : []),
+            "-semantic-model", modelPath, "-o", outputPath, sourcePath], { env: { ...process.env, FB_VSCODE_TRACE: "0" } });
+        const preprocessed = fs.readFileSync(outputPath, "utf8");
+        if (baseline === undefined) baseline = preprocessed;
+        else assert.equal(preprocessed, baseline, "compact primitive export must not change preprocessed source");
+        const text = semanticModelTestText(modelPath);
+        for (const read of [decodeCompilerSemanticModel, (value) => decodeCompilerSemanticExpressions(value, () => false, { includeBindings: true })]) {
+            const model = read(text);
+            assert.equal(model.acceptedPrimitiveTypes.length, 3);
+            assert.equal(model.acceptedPrimitiveTypes.filter((entry) => entry.location?.status === "mapped").length, 2);
+            assert.deepEqual(model.acceptedPrimitiveTypes[0].layout,
+                { typeName: "long", storageKind: "value", storageBytes: "4", pointerDepth: 0 });
+            const legacyRows = text.split("\n"), reduced = legacyRows.filter((line) => {
+                const fields = line.split("\t");
+                return !(fields[0] === "CAP" && fields[2] === "accepted-primitive-type-layouts" ||
+                    fields[0] === "K" && fields[3].startsWith("primitive-type-layout:"));
+            });
+            const footer = reduced.findIndex((line) => line.startsWith("END\t"));
+            const ending = reduced[footer].split("\t");
+            ending[12] = String(Number(ending[12]) - (legacyRows.length - reduced.length));
+            reduced[footer] = ending.join("\t");
+            const legacy = read(reduced.join("\n"));
+            assert.equal(legacy.acceptedPrimitiveTypes.length, 3);
+            assert.ok(legacy.acceptedPrimitiveTypes.every((entry) => entry.layout === undefined),
+                "older producers retain primitive input support without fabricated layouts");
+            const layoutRow = text.split("\n").find((line) => /\tprimitive-type-layout:/.test(line));
+            for (const payload of ["long%09pointer%094%090", "long%09value%09-1%090", "long%09value%094%091",
+                "long%09unsized%094%090"]) {
+                const damaged = layoutRow.split("\t");
+                damaged[4] = payload;
+                assert.throws(() => read(text.replace(layoutRow, damaged.join("\t"))), /primitive type layout/i);
+            }
+            assert.throws(() => read(text.replace(layoutRow.split("\t")[3], "unrelated-layout")), /missing its layout/i);
+            const countRow = text.split("\n").find((line) => /\taccepted-primitive-type-count:1\t/.test(line));
+            const first = model.acceptedPrimitiveTypes.find((entry) => entry.location?.status === "mapped");
+            const damagedLocation = text.split("\n").map((line) => {
+                const fields = line.split("\t");
+                if (fields[0] === "LOC" && fields[3] === first.location.role) fields[3] += "-missing";
+                return fields.join("\t");
+            }).join("\n");
+            assert.throws(() => read(damagedLocation), /primitive type/i);
+            assert.throws(() => read(text.replace(countRow, countRow.replace(/\t3$/, "\t2"))), /primitive type.*incomplete/i);
+            assert.throws(() => read(text.replace("accepted-primitive-type-count:1", "unrelated-receipt")), /primitive type.*incomplete/i);
+            assert.throws(() => read(text.replace("accepted-primitive-type-inputs\tavailable", "accepted-primitive-type-inputs\tunavailable")), /primitive type/i);
+        }
+    }
+});
+
+test("native macro-call receipts validate counts, origins and selected virtual interfaces", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-macro-call-receipts-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const sourcePath = path.join(directory, "main.bas"), sidecarPath = path.join(directory, "model.fbcsem");
+    fs.writeFileSync(sourcePath, ["Declare Function Factory() As Long", "Declare Function Other() As Long",
+        "#define Invoke(name) name()", "Print Invoke(Factory)", "Print Invoke(Factory)",
+        "Type Service Extends Object", "    Declare Virtual Function Measure() As Long", "End Type",
+        "Dim instance As Service Ptr", "#define Dispatch(receiver) receiver->Measure()", "Print Dispatch(instance)", ""].join("\n"));
+    execFileSync(process.env.FBC_EDITOR_EXECUTABLE, ["-pp", "-semantic-model", sidecarPath,
+        "-o", path.join(directory, "output.bas"), sourcePath]);
+    const text = semanticModelTestText(sidecarPath), full = decodeCompilerSemanticModel(text);
+    assert.equal(full.sourceCallMacroReferences.length, 3);
+    const virtualCall = full.properties.find((entry) => entry.name === "call-kind" && entry.value === "virtual");
+    assert.ok(full.sourceCallMacroReferences.some((entry) => entry.node === virtualCall?.identity),
+        "a virtual CALL must retain its selected source interface, not the anonymous function-pointer symbol");
+    const reference = full.sourceCallMacroReferences[0];
+    const other = full.symbols.find((symbol) => symbol.name.toLowerCase() === "other").id;
+    const marker = full.properties.find((entry) => entry.name === "source-call-macro-reference" && entry.identity === reference.node);
+    const badOrigin = text.split("\n").map((line) => {
+        const fields = line.split("\t");
+        if (fields[0] === "MR" && fields[1] === "symbol" && fields[4] === `reference-${marker.value}`) fields[2] = String(other);
+        return fields.join("\t");
+    }).join("\n");
+    for (const read of [decodeCompilerSemanticModel, (value) => decodeCompilerSemanticExpressions(value, () => false, { includeBindings: true })]) {
+        assert.deepEqual(read(text).sourceCallMacroReferences, full.sourceCallMacroReferences);
+        assert.throws(() => read(badOrigin), /macro call.*interface/i);
+        assert.throws(() => read(text.replace("source-call-macro-count:1\t3", "source-call-macro-count:1\t2")), /macro call.*incomplete/i);
+        assert.throws(() => read(text.replace("source-call-macro-count:1", "unrelated-receipt")), /macro call.*incomplete/i);
+        assert.throws(() => read(text.replace("source-call-macro-references\tavailable", "source-call-macro-references\tunavailable")), /macro call/i);
+    }
+});
+
+test("native source memory receipts validate selected operators, counts and macro reporting locations", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-source-memory-receipts-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const sourcePath = path.join(directory, "main.bas"), modelPath = path.join(directory, "model.fbcsem");
+    fs.writeFileSync(sourcePath, ["Type MemoryValue", "    value As Long",
+        "    Declare Operator New(ByVal bytes As UInteger) As Any Ptr",
+        "    Declare Operator New[](ByVal bytes As UInteger) As Any Ptr",
+        "    Declare Operator Delete(ByVal storage As Any Ptr)",
+        "    Declare Operator Delete[](ByVal storage As Any Ptr)", "End Type",
+        "#define MakeOne() New MemoryValue", "#define MakeMany() New MemoryValue[2]",
+        "#define DropOne(item) Delete item", "#define DropMany(item) Delete[] item",
+        "Dim one As MemoryValue Ptr = MakeOne()", "Dim many As MemoryValue Ptr = MakeMany()",
+        "DropOne(one)", "DropMany(many)", ""].join("\n"));
+    const args = ["-pp", "-semantic-model", modelPath, "-o", path.join(directory, "output.bas"), sourcePath];
+    execFileSync(process.env.FBC_EDITOR_EXECUTABLE, args, { env: { ...process.env, FB_VSCODE_TRACE: "0" } });
+    const text = semanticModelTestText(modelPath), full = decodeCompilerSemanticModel(text);
+    assert.equal(full.sourceMemoryApplications.length, 4);
+    assert.deepEqual(full.sourceMemoryApplications.map((entry) => entry.operatorCode),
+        ["allocate", "allocate-array", "deallocate", "deallocate-array"]);
+    assert.ok(full.sourceMemoryApplications.every((entry) => entry.macro > 0 && entry.location.status === "mapped"));
+    const rows = text.split("\n");
+    const count = rows.find((row) => row.split("\t")[3] === "source-memory-application-count");
+    const target = rows.find((row) => row.startsWith("H\t") && row.split("\t")[5] === "source-memory-target");
+    const wrongTarget = target.split("\t");
+    wrongTarget[4] = String(full.sourceMemoryApplications[2].target);
+    const operation = rows.find((row) => row.startsWith("O\tallocate\t"));
+    const wrongOperation = operation.split("\t");
+    wrongOperation[3] = String(full.sourceMemoryApplications[2].target);
+    const location = rows.find((row) => row.startsWith("LOC\t") && row.split("\t")[3] === "source-memory-application:1");
+    const marker = rows.find((row) => row.startsWith("K\t") && row.split("\t")[3] === "source-memory-application:1");
+    const wrongOrigin = marker.split("\t"), payload = wrongOrigin[4].split("%09");
+    payload[3] = "0";
+    wrongOrigin[4] = payload.join("%09");
+    for (const read of [decodeCompilerSemanticModel, (value) => decodeCompilerSemanticExpressions(value, () => false, { includeBindings: true })]) {
+        assert.deepEqual(read(text).sourceMemoryApplications, full.sourceMemoryApplications);
+        for (const damaged of [text.replace(count, count.replace(/\t4$/, "\t3")),
+            text.replace("source-memory-application-count", "unrelated-receipt"),
+            text.replace(target, wrongTarget.join("\t")),
+            text.replace(operation, wrongOperation.join("\t")),
+            text.replace(location, location.replace("source-memory-application:1", "unrelated-location")),
+            text.replace(marker, wrongOrigin.join("\t")),
+            text.replace("source-memory-applications\tavailable", "source-memory-applications\tunavailable")]) {
+            assert.throws(() => read(damaged), /source memory/i);
+        }
+    }
+    execFileSync(process.env.FBC_EDITOR_EXECUTABLE, ["-semantic-model-compact", ...args], { env: { ...process.env, FB_VSCODE_TRACE: "0" } });
+    const compact = semanticModelTestText(modelPath);
+    for (const read of [decodeCompilerSemanticModel, (value) => decodeCompilerSemanticExpressions(value, () => false, { includeBindings: true })]) {
+        assert.deepEqual(read(compact).sourceMemoryApplications, [], "unavailable native coverage must retain the old operator path");
+    }
+});
+
+test("schema 27 validates unevaluated query intervals before classifying retained expressions", () => {
+    const rows = [header27, "M\t/main.bas", "D\t/main.bas", "S\t1\tglobal\t8\t0\t0\t0\t0\t0\t0\t0\t0",
+        `FILE\t1\t/main.bas\t4\t${"0".repeat(64)}\tunmarked-bytes\tregular`,
+        "SRC\t1\t0\t1\t1\tmodule\t0\t/main.bas\t0\t\t0\t0\t0\t0",
+        "CAP\t1\tunevaluated-query-inputs\tavailable",
+        "E\t1\t1\t/main.bas\t1\t0\t1\t1\t0\t0\t\tnone\t8\t0\t0\tinteger",
+        "E\t2\t1\t/main.bas\t1\t0\t1\t3\t0\t0\t\tnone\t8\t0\t0\tinteger",
+        "K\texpression\t1\tunevaluated-query-input\t1",
+        "K\tsymbol\t1\tunevaluated-query-range-1\t1%091%09typeof", "SRE\t1\tverified",
+        "END\t27\t1\t0\t1\t0\t0\t2\t0\t0\t1\t1\t6"];
+    const text = rows.join("\n");
+    const readers = [decodeCompilerSemanticModel, (value) => decodeCompilerSemanticExpressions(value, () => true, { includeBindings: true })];
+    for (const read of readers) {
+        assert.deepEqual(read(text).expressions.map((entry) => entry.unevaluated), [true, undefined]);
+        for (const [from, to, error] of [
+            ["inputs\tavailable", "inputs\tunavailable", /coverage/],
+            ["unevaluated-query-input\t1", "unevaluated-query-input\t0", /query input/],
+            ["1%091%09typeof", "1%092%09typeof", /missing input/],
+            ["1%091%09typeof", "2%092%09sizeof", /missing input/],
+            ["1%091%09typeof", "1%091%09len", /receipt/],
+            ["unevaluated-query-range-1", "unrelated-property", /Orphan/],
+            ["global\t8", "global\t1", /owner/]
+        ]) assert.throws(() => read(text.replace(from, to)), error);
+    }
+    const filtered = decodeCompilerSemanticExpressions(text, (entry) => entry.id === 2, { includeBindings: true });
+    assert.deepEqual(filtered.expressions.map((entry) => [entry.id, entry.unevaluated]), [[2, undefined]],
+        "receipt validation uses all decoded IDs, not just editor-retained expressions");
 });
 
 test("schema 27 validates source operator operands and diagnostics in both readers", () => {
@@ -6428,7 +6607,7 @@ test("compiler semantic analysis reads long physical lines from unsaved overlays
         "semantic line checks must read the compiler overlay without saving it");
 });
 
-test("oversized compiler traces fall back to expression typing with unsaved source overlays", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
+test("oversized compiler traces fall back to expression typing with unsaved source overlays", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (_t) => {
     const root = resolveFreeBasicRoot(process.env.FREEBASIC_ROOT || "");
     const filePath = path.join(root, "tests/compound/select_const2.bas");
     const originalBytes = fs.readFileSync(filePath);
@@ -6833,14 +7012,14 @@ test("sidecar types source expressions omitted by aggregate-initializer traces",
         },
         {
             relativePath: "tests/structs/padding.bas",
-            sourceText: (text) => text.split(/\r?\n/).find((line) => /\"1122\",\s*_/.test(line)),
+            sourceText: (text) => text.split(/\r?\n/).find((line) => /"1122",\s*_/.test(line)),
             selectFact: (fact, line) => fact.startColumn === line.indexOf("\"1122\"") && fact.typeName.toLowerCase() === "zstring",
             expectedText: "\"1122\"",
             expectedType: "zstring"
         },
         {
             relativePath: "tests/structs/temp-var-dtors.bas",
-            sourceText: (text) => text.split(/\r?\n/).find((line) => /\"1\",\s*\"2\",\s*\"3\"/.test(line)),
+            sourceText: (text) => text.split(/\r?\n/).find((line) => /"1",\s*"2",\s*"3"/.test(line)),
             selectFact: (fact, line) => fact.startColumn === line.indexOf("\"1\"") && fact.typeName.toLowerCase() === "zstring",
             expectedText: "\"1\"",
             expectedType: "zstring"

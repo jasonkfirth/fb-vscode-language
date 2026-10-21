@@ -52,6 +52,4220 @@ missing native support is unfinished work, not a completion condition.
 
 ## Current state
 
+### Native allocation/deallocation references checkpoint
+
+Find References now consumes the existing binary model's counted
+`source-memory-applications` family for custom NEW/NEW[]/DELETE/DELETE[] uses.
+Compiler-selected targets and mapped LOC records retain physical macro
+invocation anchors, including nested expansion, Unicode and logical source
+remapping. Both readers validate count closure, target/signature agreement,
+declaration contexts, macro origins and locations. Older/compact exports keep
+the existing operation path. No compiler source or schema change was needed.
+
+Defaults, field initializers and unevaluated operands remain source references.
+The extra reporting anchors do not enter rename or runtime Call Hierarchy.
+Only explicit project operator-reference reads request full macro provenance;
+ordinary snapshots and declaration-only navigation keep their compact modes.
+Cold operator-reference requests now acquire bindings immediately instead of
+starting with a weak bridge snapshot and upgrading it afterward.
+
+One macro invocation can report several independently selected memory operators.
+The read-only collector requires native macro-memory evidence for every family
+sharing that location. Ordinary ambiguous bindings still fail closed; reporting
+metadata never changes rename's editable-token rules.
+
+Initial validation passed all 130 compiler-analysis and 356 editor-feature checks,
+52 compiler-independent sidecar checks (115 native-dependent checks skipped),
+native full/compact decoder controls, and the new memory-operator and existing
+binary/index-operator project regressions using both normal FBC and the bridge.
+The shared-anchor follow-up passes the expanded native memory regression in both
+compiler modes, plus collector controls for ordinary ambiguity and rename.
+One installed-editor check passes on each of VS Code 1.85 and 1.141. It verifies
+prototype-origin references for scalar and array allocators sharing one macro
+location, closed modules, saved-input stock support and an unsaved bridge edit
+removing both custom allocator references.
+
+The package remains 1.20.5. No normal compiler replacement, production timeout
+change, full matrix, expression corpus or AZdecrypt stress rerun was needed for
+this focused checkpoint. The isolated editor case permits a longer compiler
+deadline under shared-host load; other jobs stayed running. Broader
+compiler-grade acceptance remains open.
+
+### Native primitive type hover layouts checkpoint
+
+Primitive keyword hovers now show the compiler's canonical accepted type and
+target storage width. The optional `accepted-primitive-type-layouts` capability
+adds one same-owner/detail companion to each counted primitive input; the
+existing input payload is unchanged. Public storage kinds and decimal byte
+widths avoid interpreting private dtype layouts or rounding large widths.
+Both extension readers and the independent compiler reader validate pairing.
+
+The reported width belongs to the complete accepted type component, not an
+array total or a BYREF ABI slot. Pointer values and dynamic string descriptors
+are labelled explicitly. Fixed string lengths retain their full width; ZSTRING
+pointer spelling does not accidentally acquire the pointer's byte width as a
+fixed character length. ANY can remain explicitly unsized. Parameters, function
+return types, qualifiers and 128-bit integers use the same native receipts.
+
+Cold keyword hovers request the existing binding snapshot directly, then reuse
+it. Positive native type facts take precedence over source-index alias guesses
+and surrounding expression results, including SIZEOF. Actual aliases, macros
+and disabled-keyword values keep their own identities. Conflicting or incomplete
+physical contexts withhold layouts; older producers retain input support and
+reference hovers without fabricated widths.
+
+Validation passes: the 913-check compiler-independent run (549 native-dependent
+checks skipped), all 130 compiler-analysis checks, the latest 356 editor-feature
+unit checks, a physical-context guard, native layout/negative/decoder checks and
+three upstream primitive-family checks with mode/emission parity. Decoder
+controls cover bad layout kinds, widths, depths, missing companions and older
+models without the new capability. Installed checks pass on VS Code 1.85 and
+1.141, preserving the normal-compiler highlighting cases while exercising cold
+layout hovers in refreshed trace-free and bridge modes under both builds.
+The unsaved edit checks both token length and the new Double/8-byte hover.
+
+The private compiler was rebuilt as `dist/compiler-bridge-5WJVXs/fbc-editor`;
+`dist/fbc-editor-current` points there. Its source-build checkpoint is
+`de7210fdf09d75f268d5d86fd08215ca658c3d5c60595605f3128f72d685b992`.
+Binary schema 27 and trace protocol 15 are unchanged. The normal compiler was
+not replaced. Independent driver/declaration edits after this build remain
+outside this private checkpoint. The rebuilt 1.20.5 VSIX has 65 source-matching
+payload files, including all 50 libraries, with clean archive CRC validation.
+
+Full editor/project matrices, expression-corpus and AZdecrypt stress checks were
+not repeated for this focused change. Other host jobs stayed running; the broader
+compiler-grade acceptance requirements remain open. The existing reference
+revision selector already filters compiler-only commits and was left unchanged.
+
+Logs: `/tmp/fb-primitive-type-hover-{native-final,negative,receipts-final,guards}.log`,
+`/tmp/fb-primitive-type-hover-{analysis,units,editor-units-final,upstream}.log` and
+`/tmp/fb-primitive-type-hover-editor-{1.85.0,1.141.0}.log`.
+
+### Compiler-accepted primitive type highlighting checkpoint
+
+Semantic highlighting now consumes counted native primitive-type observations
+from `cSymbolType`, not a spelling list or a guess from a value's final dtype.
+Verified physical keyword extents receive `type.defaultLibrary`; the standard
+modifier is appended without changing existing modifier indices, with the
+existing `storage.type.freebasic` scope as its fallback. Existing native symbol
+or alias classification at a shared physical site is not overwritten.
+
+The native matrix covers every observed primitive keyword family, including
+Boolean, signed/unsigned integers, 128-bit width syntax, floating types,
+dynamic/fixed/wide/UString forms and Any pointers. It also covers Unicode before
+a type, an included header without a final newline, disabled-keyword aliases and
+variables, inactive code, comments, literals and macro spellings. Unlocated or
+unverified macro observations cannot create physical primitive tokens.
+
+The compiler's existing occurrence family is now retained in compact full
+models, with macro provenance still independently gated. This is exporter
+availability/bookkeeping, not a parser or code-generation change. Its independent
+reader and mode expectations were updated too. Both extension readers validate
+namespace/statement/source ownership and count/ordinal closure. Keyword IDs and
+dtype bit layouts are not interpreted to infer primitive use. No additional
+editor analysis pass was added; projection indexes remain linear in input size.
+
+Validation passes: 910 compiler-independent checks with 548 native-dependent
+checks skipped, all 130 compiler-analysis checks, three focused native checks,
+six upstream semantic checks, eight smoke checks and seven reference checks.
+The upstream checks include full/compact emission parity, rejected controls,
+unverified locations, parser restart and failed-full recovery behavior.
+Installed highlighting checks pass on VS Code 1.85 and 1.141, exercising stock
+FBC and the bridge under both active builds plus an unsaved type edit. The edit
+asserts the new token length, so the old Integer token cannot pass as Double.
+
+`dist/fbc-editor-current` points to `dist/compiler-bridge-4BAoyS/fbc-editor`,
+still protocol 15. Its compiler-source build checkpoint is
+`eba1359b0c4c923fdcba8b3fec5b4d42e48f45be34da1a940e5d0caf1ed01e06`.
+The normal compiler was rebuilt externally during this work, not replaced by
+the bridge builder. Subsequent independent backend changes are not claimed as
+part of this private build. The refreshed reference snapshot uses revision
+`f5a55e34ee96ab572b00c82939ad0fb67853e53d`; runtime libraries were unchanged after
+the installed checks. The rebuilt 1.20.5 VSIX has 65 source-matching payload
+files, including all 50 libraries, and clean archive CRC validation.
+
+Full editor/project matrices, the expression corpus and AZdecrypt stress checks
+were not repeated for this targeted change. Other host jobs stayed running;
+the broader compiler-grade acceptance requirements remain open.
+
+Logs: `/tmp/fb-primitive-type-tokens-{before,native-final,analysis,units,smoke}.log`,
+`/tmp/fb-primitive-type-tokens-upstream{,-primitive}.log`,
+`/tmp/fb-primitive-type-tokens-reference-tests-final.log` and
+`/tmp/fb-primitive-type-tokens-editor-{1.85.0,1.141.0}.log`.
+
+### Native macro procedure-call hierarchy checkpoint
+
+Project hierarchy now consumes the compiler's existing counted macro CALL-to-MR
+receipts instead of considering only written callee B records. Both readers
+validate count closure, module/global-namespace ownership, selected direct or
+virtual interfaces and native expansion origins. The project path follows
+native parent expansions to physical invocation ranges. These are reporting
+anchors, not editable procedure references or rename locations.
+
+The regression covers forwarded/nested macros, fixed replacement bodies,
+token-pasted callees, Long/Double overload selection, two callees at one expansion,
+closed module callers, Unicode columns, inactive branches and TYPEOF operands.
+Unsaved macro edits move the call to the newly selected overload without saving
+the buffer. Full macro data is requested for explicit hierarchy reads; ordinary
+editor requests retain their compact export. Read-only multi-callee reporting
+does not weaken ordinary reference or rename ambiguity checks.
+
+Installed checks caught a bridge supplement reporting a replacement-body name
+on its `#define` line as another runtime call. Native physical projection now
+retains definition/argument roles: definition text stays a reference, while
+replacement-body and unmapped committed callees request full invocation-level
+hierarchy. Incoming merging does not duplicate a complete native invocation
+with a narrower bridge argument site. Unevaluated operands do not cause this
+runtime-call upgrade.
+
+Validation passes: 910 compiler-independent checks with 545 native-dependent
+checks skipped, all 130 compiler-analysis checks, 17 focused project/hierarchy
+checks, focused native worker/paste/Unicode regressions, and malformed-receipt
+and merge/collector guards. Three installed Call Hierarchy checks pass on each
+of VS Code 1.85 and 1.141, including saved and unsaved macro cases and existing
+refresh behavior. The refreshed source-backed reference passes reproducibility.
+The rebuilt 1.20.5 VSIX has 65 source-matching payload files, including all 50
+runtime libraries, with clean archive CRC validation.
+
+No compiler source was edited or compiler rebuilt for this change. The existing
+protocol-15 bridge remains current. An external normal-compiler rebuild was
+observed during validation; the final editor checks use that 1.20.5-1 binary,
+SHA-256 `605fe3075c4c4324e6e8348c9cafe197f6cad98f5858ef06f19cf7611dabbdc5`.
+The 264-file compiler-source digest remains
+`12cf008df02837008264ffecc40e5db425bfb171468ee65574f426f6511de499`.
+Full editor/project matrices, the expression corpus and AZdecrypt stress tests
+were not repeated for this targeted change. Other host jobs stayed running;
+the broader compiler-grade acceptance requirements remain open.
+
+Logs: `/tmp/fb-macro-call-hierarchy-before.log`,
+`/tmp/fb-macro-call-hierarchy-{project,project-final,paste,worker,receipts,guards}.log`,
+`/tmp/fb-macro-call-hierarchy-{analysis-final,units-final,reference-tests}.log` and
+`/tmp/fb-macro-call-hierarchy-editor-{1.85.0,1.141.0}.log`.
+
+### Unevaluated query Call Hierarchy checkpoint
+
+Call Hierarchy no longer treats `TYPEOF`/`SIZEOF` operands as runtime calls in
+the protocol-15 bridge. Expanded parser intervals cover named and implicit
+calls, nested queries and a macro argument used in both evaluated and
+unevaluated positions. References and expression types remain intact, and
+dynamic-string `LEN` operands remain evaluated. Protocol 14 is still accepted,
+but this local hierarchy correction requires the rebuilt bridge.
+
+Full binary-sidecar hierarchy also excludes query-only construction, cast and
+index operations using FBC's existing `unevaluated-query-inputs` receipts. Both
+readers validate complete expression-ID intervals and native ownership before
+classifying retained facts, including filtered reads. The innermost physical
+native expression classifies an implicit site; conflicting roles retain its
+runtime edge. Find References and project rename do not apply this filter.
+
+The expression corpus caught a new trace guard emitting zero coordinates during
+`#if`/`#assert` evaluation. Those parser contexts have no expanded output token;
+the corrected guard skips them. A before/after regression protects both forms.
+The final corpus replay passes all 74 cases, with 28 complete and 46 partial
+analyses. It retains 114,352 typed ranges; all 170 missing type ranges are
+explicitly invalid. There are no missing syntax ranges or type mismatches.
+All 167 trace-missing sidecar observations are supplemented by native facts.
+
+Validation passes: 910 compiler-independent checks (542 native-dependent checks
+skipped), all 130 compiler-analysis checks, two new native worker regressions,
+24 focused project/hierarchy checks and a three-check project rerun with the
+final bridge. Two installed Call Hierarchy checks pass on each of VS Code 1.85
+and 1.141, including an unsaved macro/query buffer and existing tree refreshes.
+The rebuilt 1.20.5 VSIX has 65 source-matching payload files, including all 50
+runtime libraries, with clean archive CRC validation.
+
+`dist/fbc-editor-current` points to `dist/compiler-bridge-1HGu2m/fbc-editor`.
+The normal compiler was not replaced and no upstream source was edited for this
+change. The 264-file compiler-source digest remains
+`12cf008df02837008264ffecc40e5db425bfb171468ee65574f426f6511de499`.
+
+A separate probe at this checkpoint found full saved-project hierarchy omitting
+macro-generated runtime calls, including a simple forwarded callee. The local
+bridge retained the evaluated mixed-macro site, but that did not establish full
+project macro coverage. The native procedure-call follow-up above addresses
+this gap with counted compiler receipts. Full editor/project matrices and AZdecrypt
+stress checks were not repeated for this targeted change. Other host jobs stayed
+running, and the broader compiler-grade acceptance requirements remain open.
+
+Logs: `/tmp/fb-unevaluated-calls-{native,analysis,project,project-final,guards,units}.log`,
+`/tmp/fb-unevaluated-calls-directive-before.log`,
+`/tmp/fb-unevaluated-calls-corpus-final.json` and
+`/tmp/fb-unevaluated-calls-editor-{1.85.0,1.141.0}.log`.
+
+### Complete project-refactoring suite checkpoint
+
+The current compiler/bridge project suite passes all 161 checks across 127
+top-level tests, with no failures, skips or cancellations. The native cases were
+enabled using stock FBC and `dist/compiler-bridge-5aAD9H/fbc-editor`. The run took
+about 19.5 minutes while other host work remained running; no test deadlines or
+assertions were relaxed.
+
+A new regression verifies one TLS identity across a shared extern declaration,
+its definition and two uses in three source files. Reference lookup returns all
+four physical sites, and rename validates both Long and Double build contexts
+without saving any proposed edits. This already works with the native identity
+join; no storage-name matching exception or resolver change was needed.
+
+The full run also covers conditional builds, macro expansion/token paste,
+namespace and label references, overloads/properties, constructor/destructor
+relationships, virtual families, inline assembly, address-taking, collision and
+ABI refusals, unsaved inputs and publication races. Its execution checks retain
+compiled address/virtual-dispatch behavior after a validated rename. This is a
+fresh project-suite result, not a full editor/expression-grammar acceptance pass
+or proof that every structural refactoring is implemented. The broader
+compiler-grade requirements remain open.
+
+Logs: `/tmp/fb-tls-project-refactor-baseline.log` and
+`/tmp/fb-tls-project-refactor-suite.log`.
+
+### Rejected-declaration exporter diagnostics
+
+The ordinary DIM declaration path counted a semantic input after `hAddVar`
+rejected the declaration and returned no symbol. Normal full-sidecar compilation
+then added an internal `unavailable declaration input` failure to the genuine
+source diagnostic. The producer now counts accepted symbols only, matching the
+existing VAR path; the exporter's strict input validation is unchanged. This is
+telemetry bookkeeping, not a change to the compiler's language decisions.
+
+A before/after native regression covers an ordinary duplicate, a rejected global
+THREAD spelling and a mixed list with accepted declarations around a rejection.
+With the rebuilt bridge, semantic-enabled and semantic-disabled compilation
+report identical stdout/stderr and retain the normal source-error exit code.
+The IDE preprocessor path already recovered these cases; that independent
+unsaved expression recovery remains available with sidecar fallback disabled.
+Failed full models still have no completeness marker, as their existing contract
+requires. Expression-only recovery is not promoted to full binding authority.
+
+All 129 compiler-analysis checks and three focused worker checks pass. Three
+upstream sidecar checks pass too, including valid declaration choices/emission
+parity, failed-full/compact-recovery behavior and parser restart handling.
+The private build differs from its predecessor only in the declaration parser.
+`dist/fbc-editor-current` now points to `dist/compiler-bridge-5aAD9H/fbc-editor`.
+The normal `/home/jkfirth/fbc/bin/fbc` was not replaced; it receives this source
+fix when rebuilt separately. The broader compiler-grade audit remains open.
+The compiler-independent suite passes 907 checks, with 538 native-dependent
+checks skipped. Installed TLS/navigation regression checks pass on VS Code 1.85
+and 1.141 using the rebuilt bridge.
+
+Logs: `/tmp/fb-rejected-declaration-before.log`,
+`/tmp/fb-rejected-declaration-native.log`,
+`/tmp/fb-rejected-declaration-analysis.log`,
+`/tmp/fb-rejected-declaration-upstream.log`,
+`/tmp/fb-rejected-declaration-units.log` and
+`/tmp/fb-rejected-declaration-editor-{1.85.0,1.141.0}.log`.
+
+### Current-source bridge refresh and THREAD LOCAL model compatibility
+
+The October 21 bridge refresh found nine changed compiler inputs relative to
+the previous bridge, including declaration parsing, contextual THREAD handling
+and 128-bit lowering/ABI code. The existing hook audits and 186-module build
+passed. The 264-file compiler source digest stayed
+`bf06cdfd66fe22ef8e72894b78584ab6101540085b110248c0d919c6e424a124`
+before and after the build. At that checkpoint, `dist/fbc-editor-current` pointed
+to `dist/compiler-bridge-UgUBdI/fbc-editor`; that build remains available alongside
+the later rejected-declaration fix described above.
+
+A valid TLS/contextual-name fixture then exposed a decoder failure: the compiler
+exports `thread-local` in T-record storage details, but the consumer's closed
+storage set rejected it and made the whole semantic model unavailable. The
+decoder now accepts this known storage class while still rejecting unknown
+values. Analysis projection, declaration-site storage facts, hover and completion
+details retain the distinct class. Existing storage-based refactor eligibility
+is not widened to treat TLS as ordinary local/shared storage.
+
+The native regression verifies THREAD fields and namespace variables as separate
+identities, keeps the THREAD LOCAL modifier out of variable navigation, and checks
+the TLS storage fact on both backends. The older bridge rejects the newly valid
+namespace spelling. These tests do not claim that a bare global THREAD variable
+or THREAD-named formal is legal: the current compiler rejects those forms.
+
+The new bridge passes all 129 compiler-analysis checks. Six focused model checks
+cover TLS/contextual names, current 128-bit types, compound signatures and
+unclosed-scope public completion. Installed TLS hover/navigation checks pass on
+VS Code 1.85 and 1.141 with stock FBC and the refreshed bridge. No compiler source
+was edited for this refresh. The broader compiler-grade audit remains open.
+The compiler-independent run passes 907 checks, with 537 native-dependent checks
+skipped. The rejected global/formal THREAD probe also exposed an unavailable
+declaration-input error in the producer. The follow-up above fixes its extra
+internal error while preserving the deliberate failed-full-model contract.
+
+Logs: `/tmp/fb-current-source-bridge-build.log`,
+`/tmp/fb-current-source-bridge-analysis.log`,
+`/tmp/fb-current-source-bridge-queries.log`,
+`/tmp/fb-current-source-bridge-units.log` and
+`/tmp/fb-current-source-bridge-editor-{1.85.0,1.141.0}.log`.
+
+### Public native completion before block closure
+
+The worker completion path now opts into the public-member recovery already
+used by Signature Help. A native regression reproduced absent suggestions at
+`.Mea` inside an unfinished `With services(0)` block. The existing direct native
+receiver, projection intersection, concrete type and inspected-producer checks
+now retain public instance-member candidates there. Prefix filtering remains an
+editor responsibility. Private/protected members, missing receivers, dots after
+WITH has ended and provisional types cannot supply candidates through this path.
+
+An isolated guard check uses an uncertain scope whose nominal owner matches the
+members' owner: that scope would normally grant restricted access, but the public
+fallback checks access without a caller and still withholds both restricted
+attribute kinds. Unknown/missing producer versions and provisional type facts
+also stay closed. Ordinary scope-dependent lookup keeps its default refusal.
+Native regressions retain protected access in independently valid method scopes.
+Completion candidates do not restore definitions for unfinished member tokens.
+
+All 906 compiler-independent checks pass, with 536 native-dependent checks
+skipped. Three focused native checks pass, including existing closed-scope
+protected-member access and bare WITH Signature Help. Installed checks pass on
+VS Code 1.85 and 1.141, requesting completion before Signature Help. Their
+assertions require declared method/field kinds; ordinary word suggestions are
+not evidence of a native receiver or of a visibility leak.
+
+No compiler source, schema, analysis pass, binding or inferred type was added.
+The broader compiler-grade acceptance work remains open.
+
+Logs: `/tmp/fb-unclosed-member-completion-guards.log`,
+`/tmp/fb-unclosed-member-completion-native.log`,
+`/tmp/fb-unclosed-member-completion-units.log` and
+`/tmp/fb-unclosed-member-completion-editor-{1.85.0,1.141.0}.log`.
+
+### Bare compound-receiver and WITH method signatures
+
+Native compilation confirmed that calls such as `MakeService().Measure 1, 2`
+and `.Apply 1, 2` inside `With` are valid, but the signature scanner returned no
+context. A bounded balanced receiver-head scan now schedules native assistance
+for those forms. It shares ordinary bare-call argument counting, including
+continued arguments. Assignments, comments and oversized receiver heads do not
+become expression-callee requests. Navigation's explicit-call scanner is unchanged.
+
+The existing native method path accepts these bare expression contexts; native
+bindings or accessible member facts still supply the receiver and method. Stock
+FBC and the bridge retain Long/Double overload choices for factory, array-element,
+grouped-pointer, arrow and actual leading-dot WITH sites. Single-line IF branches
+can lead with a WITH dot without mistaking a qualified THEN member for a branch.
+Incomplete bridge calls retain candidates without selecting an overload. Private
+members and dots outside the active native WITH context remain unavailable.
+
+Installed testing also reproduced missing assistance before `End With` had
+been written. Its direct native receiver receipt survived, but the unclosed
+scope could not certify caller access. Signature-only member lookup can now
+recover public members from that receipt for the inspected 1.20.5 producer.
+The fallback checks access without a caller context, withholding private/protected members;
+unknown producers and static/name-only recovery cannot use this path. Completion,
+navigation and binding recovery retain their existing scope checks.
+
+All six focused native checks pass, including ordinary/compound method and
+bare-call regressions. The installed check passes on VS Code 1.85 and 1.141,
+including bare WITH overloads and an unfinished WITH block. The compiler-independent
+suite passes 905 checks, with 535 native-dependent checks skipped. No compiler
+source, schema or extra analysis pass was added by this change. Stock FBC was
+rebuilt externally during validation; the final native and installed checks use
+the October 21 build alongside the existing editor bridge.
+The broader compiler-grade acceptance work remains open.
+
+Logs: `/tmp/fb-bare-receiver-signature-parser.log`,
+`/tmp/fb-bare-receiver-signature-native.log`,
+`/tmp/fb-bare-receiver-signature-units.log` and
+`/tmp/fb-bare-receiver-signature-editor-{1.85.0,1.141.0}.log`.
+
+### Native method signatures on compound receivers
+
+A native regression confirmed missing method help on
+`MakeService().Measure(...)`. Compound callees now route through the existing
+ordinary signature path when a stock binding or accessible bridge member family
+proves that the terminal name is a method. Array and callback fields retain
+their separate paths; source spelling alone cannot supply a receiver type.
+
+Native call-graph selection now accounts for method nodes that include the
+receiver before the parser's own member-expression span. The selected call must
+cover the complete mapped method token and fit inside the native expression's
+end; a nested receiver factory cannot become the method target. Invalid and
+provisional call nodes stay excluded. This also retains overload selection for
+arrow receivers whose simple terminal name previously hid the receiver span.
+
+Focused checks cover stock and bridge Long/Double selections, factory results,
+array elements, grouped pointers, pointer factories, Sub calls, public/private
+overloads and property getters without setters. Unsaved bridge calls retain
+accessible method candidates without inventing an overload selection; private
+methods and unknown receivers remain unavailable. Ordinary/bare methods and
+compound array/callback regressions are included in the same eight-check run.
+All eight native checks pass. The installed check passes on VS Code 1.85 and
+1.141 with both backends, starting each backend with an arrow-method request and
+also exercising unsaved incomplete/private calls. The compiler-independent suite
+passes 904 checks, with 533 native-dependent checks skipped. Full native/editor
+matrices and the broader compiler-grade audit remain open.
+No compiler source, binary, schema or analysis pass was added.
+
+Logs: `/tmp/fb-compound-method-signature-native.log`,
+`/tmp/fb-compound-method-signature-units.log` and
+`/tmp/fb-compound-method-signature-editor-{1.85.0,1.141.0}.log`.
+
+### Compound receiver array-field Signature Help
+
+A real native query reproduced absent index help on `GetHolder().values(0)`.
+Expression callees previously went directly to callback signature lookup. They
+now check the terminal member's native array identity first, reusing the existing
+rank/bounds formatter. Factory results, array-element receivers and grouped
+pointer receivers show array dimension labels without inferring the receiver's
+type from its spelling. Indexing an array of callbacks remains distinct from
+invoking the selected callback element's own parameter list.
+
+The bridge can retain this help during an unfinished index list using its
+existing native member-completion receipts. Unknown receivers cannot borrow a
+same-named field. This is signature-only assistance; it creates no expression
+type, binding or indirect-call target, and adds no compiler pass or schema.
+Stock, full bridge and lightweight bridge checks cover the completed forms;
+the focused native run also covers unsaved recovery and callback regressions.
+All four focused native checks pass. The installed callback/index check passes
+on VS Code 1.85 and 1.141 with both backends, including incomplete unsaved bridge
+indexing. The compiler-independent suite passes 904 checks, with 531
+native-dependent checks explicitly skipped; this is not a full native matrix.
+
+A compiler-independent suite exposed three navigation fixtures that lacked the
+optional token-line index used by typed-construction recognition. That optional
+specialization now stays out of ordinary native lookup when its index is absent.
+Offline process-supervision checks allow 30 seconds for the initial PID event
+instead of assuming startup in one second. Compiler/editor deadlines and the
+timeout/cancellation/reaping assertions are unchanged. Failed checks also dispose
+their owned supervisor. No unrelated host processes were stopped.
+
+Callback parameter names remain anonymous. `symbAddProcPtr` interns structurally
+equal signatures, so one shared prototype cannot identify the names written for
+each callback declaration. That needs source-specific native provenance, not a
+guessed runtime target or the names from an unrelated shared prototype.
+
+Logs: `/tmp/fb-compound-array-signature-native.log`,
+`/tmp/fb-native-query-guard-focused.log`,
+`/tmp/fb-process-lifecycle-startup.log` and
+`/tmp/fb-compound-array-signature-units.log`, plus
+`/tmp/fb-compound-array-signature-editor-{1.85.0,1.141.0}.log`.
+
+### Sized integer cast Signature Help
+
+`CInt<bits>(...)` and `CUInt<bits>(...)` now keep their own active call context,
+including nested casts and parenthesized width expressions. Previously the
+Signature Help scanner skipped the angle form and could offer the enclosing
+routine's parameters. The existing bounded angle scanner now recognizes these
+two intrinsics as well as typed construction; ordinary navigation call scanning
+and typed-constructor selection remain separate.
+
+Presentation reuses the generated reference's width-form signatures and parameter
+documentation, not a handwritten type or overload rule. Native and source lookup
+use the cast's name rather than its closing angle token so a resolved user value,
+routine or selected macro cannot borrow builtin help. Stock FBC can acquire its
+existing native binding model for this check. This does not infer the width
+expression's value, validate supported widths or add conversion-operator targets.
+
+The 425 affected provider/parser/model tests pass. Focused native fixtures pass
+with stock FBC and the current bridge, including an aggregate's user-defined
+conversion, a nested width expression and an unfinished bridge buffer without
+saving it. Existing typed-construction signature regressions pass on both
+backends. Installed checks pass on VS Code 1.85 and 1.141, each covering source
+fallback, stock FBC, the bridge and the unfinished unsaved bridge call. The
+broader expression-typing and compiler-grade acceptance work remains open.
+
+Logs: `/tmp/fb-sized-cast-signatures-units.log`,
+`/tmp/fb-sized-cast-signatures-native.log`,
+`/tmp/fb-sized-cast-signatures-regression.log` and
+`/tmp/fb-sized-cast-signatures-editor-{1.85.0,1.141.0}.log`.
+
+### Native direct parameter-value write observations
+
+The compiler already exports positive `direct-source-write` properties on live
+parameter variables. Parameter facts now join those observations through the
+existing formal/runtime alias map, ignoring conflicting aliases and provisional
+properties. Positive observations are preserved when native identities merge.
+Earlier zero records can precede body parsing, so zero or absent records never
+establish read-only use. Partial snapshots do not publish this annotation.
+
+Parameter hover explains that the routine body contains a direct source
+assignment to the parameter value. ByVal and ByRef retain their existing passing
+descriptions; no claim is made that a caller value definitely changes. Field and
+pointee writes and indirect calls are different effects and are not relabelled
+as direct parameter-value assignments. The copied parameter-fact reply includes
+the annotation only when every matched native parameter has a positive fact;
+other consistent passing/storage facts remain available if observations differ.
+
+All 422 affected provider/parser/model checks pass. The native fixture runs on
+stock FBC and the current bridge and covers direct ByRef/ByVal reassignment,
+read-only input use, pointer and field writes, an indirect ByRef call, ByVal
+String input and a declaration-only external parameter. Native passing-mode
+regressions pass too. Installed hover checks pass on VS Code 1.85 and 1.141 using
+both backends, without editing the saved source.
+
+No compiler source, executable or analysis pass was added. Access-role coverage
+is explicitly partial, so this work does not turn missing references into
+unused-variable warnings or introduce side-effect/alias analysis. The broader
+compiler-grade audit remains open.
+
+Logs: `/tmp/fb-parameter-value-writes-units.log`,
+`/tmp/fb-parameter-value-writes-native.log`,
+`/tmp/fb-parameter-value-writes-regression.log` and
+`/tmp/fb-parameter-value-writes-editor-{1.85,1.141}.log`.
+
+### Parameter-name hint preference and bounded native work
+
+`freebasic.inlayHints.parameterNames.enabled` now defaults to true and can be
+disabled per resource. It controls labels for ordinary procedures, constructors
+and macros, not inferred types or control-flow annotations. The provider gates
+parameter-only acquisition, binding upgrades and macro-graph requests before
+starting native work. Other features may still request those facts when needed.
+
+Preference changes refresh the existing inlay event without invalidating source
+or compiler snapshots. Requests capture the preference alongside their buffer
+and compiler generation and discard replies if it changes while awaiting work.
+Returned parameter records are also filtered when disabled, including a stale
+or misbehaving grouped reply. Type/flow records remain available.
+
+All 430 affected provider/parser/model/smoke checks pass. Focused cases verify
+zero compiler acquisition for parameter-only source, retained type/flow hints,
+no parameter-driven macro upgrade and preference changes during acquisition or
+query. The installed test toggles on/off/on using both stock FBC and the bridge,
+keeping inferred type hints and the saved source unchanged.
+
+The installed preference case passes on VS Code 1.85 and 1.141. Logs:
+`/tmp/fb-parameter-hints-units.log`, `/tmp/fb-parameter-hints-focused.log`,
+`/tmp/fb-native-type-keyword-baseline-confirmed.log` and
+`/tmp/fb-parameter-hints-editor-{1.85,1.141}.log`.
+
+The recovery investigation confirmed that the current sidecar contract requires
+whole-line quarantine on errors; same-line expression recovery needs stronger
+native validity receipts rather than relaxed checks. Native TYPE data/macro
+overrides already refuse constructor hints in the checked cases. New regression
+cases retain that behavior without another runtime guard. General expression
+recovery and the broader compiler-grade audit remain open.
+
+### TYPEOF factory and grouped-value construction recovery
+
+The current bridge still has no usable inner expression receipt for unfinished
+`Type<TypeOf(Factory())>(1,`. Signature-only recovery can now use the return type
+of one accessible, non-provisional native function instead. Its canonical
+routine identity must be positive and unambiguous, and every formal parameter
+must be optional (or the list empty). This performs no overload resolution and
+does not assume omitted required arguments. Qualified factories and optional
+defaults use the same existing native visibility/access lookup.
+
+Parenthesized named values/fields can likewise reuse their native declaration
+types. Grouped type names, pointer/scalar results, inaccessible fields, unknown
+identities, malformed formal lists and provisional declarations are refused.
+A native binding or macro named TYPEOF prevents treating that text as the
+keyword. The keyword-override fixture uses the deprecated dialect, where
+OPTION NOKEYWORD is actually accepted.
+
+Constructor families retain the existing caller/access checks. Recovery does
+not restore the inner expression type, select a constructor or create a
+navigation binding. General TYPEOF expressions and stock-sidecar recovery
+remain open. No compiler source or executable changed for this checkpoint.
+
+All 420 affected provider/parser/model checks pass, as do four focused
+native/guard tests. Those cover ordinary recovery, the extended typed matrix,
+required/ambiguous/pointer factories, grouped values/types, native keyword
+overrides, positive identities, navigation refusal and malformed metadata.
+The editor case includes unsaved grouped/factory/optional-factory input and
+required-argument/pointer refusals without saving the broken buffer. Literal
+arguments are checked with comments-only masking so a masked string cannot
+masquerade as an empty list; an actual comment-only list remains supported.
+
+The installed unsaved-buffer case passes on VS Code 1.85 and 1.141, including
+literal-argument and native TYPEOF-override refusals. Logs:
+`/tmp/fb-fresh-typeof-recovery-units-final.log`,
+`/tmp/fb-fresh-typeof-recovery-final.log` and
+`/tmp/fb-fresh-typeof-recovery-editor-{1.85,1.141}-final.log`.
+
+### Fresh current-source bridge and native inferred-type hovers
+
+The optional bridge has been rebuilt from the current compiler tree rather than
+continuing to use the October 17 binary. The current private executable is
+`dist/compiler-bridge-UDiOOb/fbc-editor`; `dist/fbc-editor-current` points to it.
+The earlier frozen compiler pair remains available for compatibility checks.
+
+This exposed a compiler formatting bug: symbTypeToStr printed the internal
+INTEGER128/UINTEGER128 table names, including inside callback signatures. The
+eight-line correction in `/home/jkfirth/fbc/src/compiler/symbols/symb.bas` emits
+`integer<128>`/`uinteger<128>` instead. Nominal types still use their original
+names and IDs, and normalized NT primitive codes remain unchanged. The private
+bridge includes this fix. The normal `/home/jkfirth/fbc/bin/fbc` executable has
+not been rebuilt or replaced; it will acquire the formatter correction on its
+next normal build.
+
+Native VAR hover also suppressed valid inferred types because native inventory
+already fills typeName, while the displayed source signature has no AS clause.
+Hovers now reuse native written-input receipts to distinguish inferred and
+explicit declarations, including aggregate/callback types. The shared receipt
+check accepts native groups that omit the false provisional flag, while still
+rejecting provisional or incomplete inputs. No source-based type inference was
+added.
+
+All 129 compiler-analysis checks pass against the fresh bridge, and all 420
+affected provider/parser/model checks pass. Dedicated worker cases cover saved
+stock types, unsaved bridge types, const pointers, a nominal Integer128 collision
+and a nested callback whose emitted canonical spelling FBC accepts as source.
+Project rename validates both signed and unsigned 128-bit builds without saving
+its preview; the existing ordinary cross-module rename case also passes. The
+rebuilt bridge compiled and ran upstream integer128-arithmetic.bas successfully.
+That source reports two constant-conversion warnings while compiling;
+its runtime assertions pass.
+
+This is a current-compiler checkpoint, not a full upstream/native/editor matrix
+or completion of the compiler-grade audit. Other host jobs remain running.
+
+Stock and bridge editor cases both pass on VS Code 1.85 and 1.141. They verify
+16-byte native layouts, source-valid hints/edits, unsaved bridge input, nominal
+type navigation, inferred aggregate/callback hover and an inferred variable use.
+Logs: `/tmp/fb-latest-bridge-analysis-final.log`,
+`/tmp/fb-latest-bridge-providers-final.log`,
+`/tmp/fb-latest-bridge-wide-presentation-final.log`,
+`/tmp/fb-latest-bridge-project-final.log`,
+`/tmp/fb-latest-bridge-editor-1.85.log` and
+`/tmp/fb-latest-bridge-editor-1.141-final.log`.
+
+### Native declaration refactor query coherence
+
+Procedure headers, inline/continued parameters and enum-value actions now use
+the same bounded native-query refresh path as inferred declarations. A
+compatible model replacement no longer erases an otherwise current action.
+Document, context, generation, trust and cancellation guards remain in force.
+Parameter-mode Quick Fixes retain their diagnostic attachment after a refresh.
+
+Enum actions request the exact symbol constant together with their native
+physical declaration receipt. This removes the separate constant query and
+prevents combining an old enum receipt with a replacement model's value.
+Missing or conflicting values remain withheld rather than queried again.
+
+All 420 affected provider/parser/model checks pass. Focused cases cover snapshot
+replacement for procedure, parameter and enum actions, exact physical-header
+checks, stale-request guards and the single-read enum contract. The installed
+case applies an implicit enum value, inline and continued ByRef modes, and an
+implicit function return type, then syntax-checks the edited source with the
+current stock FBC. No compiler source or executable was changed.
+
+The installed case passes on VS Code 1.85 and 1.141. Logs:
+`/tmp/fb-declaration-refresh-unit.log` and
+`/tmp/fb-declaration-refresh-editor-{1.85,1.141}.log`.
+
+An earlier recovery probe confirmed that unfinished
+`Type<TypeOf(MakeWidget())>(1,` has no usable native input-expression type in the
+inspected bridge. Declaration-backed Signature Help now covers the guarded
+factory form above; the missing expression receipt and other complex TYPEOF
+recovery remain open.
+
+### Qualifier-preserving inferred pointer refactors
+
+Native pointer storage facts previously lost their per-dereference CONST bits
+before reaching the editor. An explicit-Var action could therefore replace
+`Const Long Ptr` with `Long Ptr`, or drop constness from an intermediate pointer.
+Storage facts and their shared editor projection now retain those normalized
+bits. Primitive type presentation writes the pointee first and then each native
+CONST PTR level. Scalar declaration constness keeps its existing presentation.
+Malformed qualifiers are refused, and merged storage observations distinguish
+otherwise identical layouts with different qualifiers.
+
+Inferred declaration actions also use the existing bounded native query refresh
+path when a compatible snapshot upgrade retires their hover read. The provider's
+document, context, generation and trust guards still reject genuinely stale
+edits; a unit case verifies the one-upgrade path without additional retry code.
+
+The focused worker case verifies current FBC's `01` and `010` qualifier paths
+and also passes with the earlier frozen stock compiler. Provider cases cover
+five qualifier combinations and malformed inputs. The installed-editor case
+applies both corrected edits, checks that the result compiles, and then verifies
+that FBC still rejects writes at both guarded levels. All 549 affected
+provider/parser/model/compiler-analysis checks pass without skips; five focused
+native regression checks also pass. Compiler source and executables remain
+unchanged, and other host jobs remain running. This does not close the broader
+compiler-grade acceptance audit.
+
+Both installed-editor cases (128-bit compatibility and qualifier-preserving
+refactors) pass together on VS Code 1.85 and 1.141 with the current stock FBC.
+Logs: `/tmp/fb-pointer-const-validation-final.log`,
+`/tmp/fb-pointer-const-native-regressions.log`,
+`/tmp/fb-pointer-const-old-native.log` and
+`/tmp/fb-pointer-const-editor-{1.85,1.141}-final.log`.
+
+### Current-source 128-bit integer compatibility
+
+The current compiler inserts native INTEGER128/UINTEGER128 datatype slots and
+exports `integer128`/`uinteger128` normalized primitives. The schema-27 reader
+now accepts these names. The current built FBC confirms both explicit and
+arithmetic-inferred declarations with 16-byte storage facts, alongside an
+unrelated user type named Integer128.
+
+The compiler's datatype-table spellings are not valid primitive source syntax.
+Expression presentation now converts them to Integer<128>/UInteger<128> only
+when the expression's normalized native fact identifies that primitive. Native
+pointer/const qualifiers are preserved; nominal types remain unchanged. Shared
+storage-type presentation also recognizes both primitives for implicit types
+and refactoring edits. The signed/unsigned integer constant transport remains
+64-bit; this compatibility change does not claim wider constant-value support.
+
+Inserting the slots also shifts the private FUNCTION number from 22 to 24.
+Guarded callback recovery now validates the native canonical callable type
+instead of requiring one fixed primitive number. Existing native shape,
+pointer-depth and inspected-producer checks remain in force.
+
+The focused acceptance checks use the actual current compiler for explicit,
+inferred, pointer and const-pointer types and a nominal Integer128 collision.
+Installed-editor checks exercise native layout hovers, inferred type hints,
+both explicit-Var edits, UDT type navigation and a compiler syntax check of
+the resulting saved source. Older bridge callback recovery and continued
+stock-sidecar inlays have dedicated regression checks. No compiler source or
+compiler executable was changed for this work.
+
+All 459 affected unit/provider/parser checks pass; that command skipped 90
+environment-gated native checks rather than claiming a full native-suite run.
+Five focused native/pure regression checks pass separately, including the
+current compiler and the earlier frozen stock/bridge pair. The installed
+128-bit editor case passes on both VS Code 1.85 and 1.141. This is a compatibility
+checkpoint, not a full 128-bit arithmetic/code-generation or compiler-grade
+completion claim.
+
+### Current-source graphics API and reference coverage
+
+A fresh source audit found two missing public gfxlib3 names:
+Gfx3ScreenCapture and Gfx3SurfaceCopyFromScreen. Both now participate in generated
+highlighting, offline signatures, parameter snippets and required header/namespace
+imports. The regenerated reference has 618 names and includes the current manual
+and header input contents. No API signatures were copied into handwritten code.
+
+The compiler checkout has modified and untracked reference inputs. Generation
+now records those relative paths alongside the committed baseline and content
+hash. Modified-file excerpts are labelled working-copy snapshots; unchanged
+files retain committed source links. Compiler-only changes remain outside this
+provenance set. The attribution document now identifies version 1.20.5.
+
+All 371 affected provider/reference/grammar/smoke checks pass, including exact
+five/seven-parameter signatures, actual TextMate scopes, automatic imports,
+reproducible generation and modified/untracked provenance. The full current-
+checkout language-surface audit passes for 258 keywords, 25 directives, 122 RTL
+names, 27 parser words, 114 compiler defines, 107 bundled functions, 11 bundled
+types and 253 selected constants. Installed checks pass on VS Code 1.85 and
+1.141 for snippets/imports and resolved completion documentation. Completion
+documentation is lazy, so the final editor check explicitly requests resolution.
+
+Logs: `/tmp/fb-current-language-coverage.log`,
+`/tmp/fb-gfx3-transfer-coverage-before.log`,
+`/tmp/fb-gfx3-transfer-audit-final.log`,
+`/tmp/fb-gfx3-transfer-unit-final.log` and
+`/tmp/fb-gfx3-transfer-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`29819a3172468b7ae5fd69659141426b742d5c4aa7b539cafe2fc49944fd75c1`.
+
+This source-surface audit is not complete expression/type-model coverage. The
+current manual also describes Integer<128>; compatibility of newer native
+scalar facts remains part of the broader compiler-grade audit. No compiler
+source, production timeout, setting or package-version changes were needed.
+Full matrices/corpus/stress suites were not rerun; other host jobs stayed running.
+
+### Typed-construction identity across references and hierarchy
+
+Real stock/bridge regressions found lifetime-reference lookup selecting an
+enclosing argument-conversion constructor instead of the explicit TYPE target.
+That lookup now agrees with Signature Help and navigation. References,
+highlights and hierarchy preparation use the explicit constructor family, while
+aggregate-only and partial TYPE operations remain without a guessed target.
+Both valid calls remain in the native graph, with their distinct source ranges.
+
+Typed hierarchy can prepare native bodies or prototypes directly on either
+backend. References/highlights/hierarchy acquire bindings on first use without
+initializing source indexing for this operation. Native symbol results still
+control ordinary value/macro reference routing and project lifetime selection.
+The corrected lifetime identity also enables closed implementation lookup from
+the TYPE keyword through the existing configured-project path.
+
+All 395 parser/provider checks and seven focused native worker checks pass.
+Cases separate explicit construction from enclosing conversion, preserve the
+conversion's own references, reject aggregate-only lifetime selections, and
+cover cold acquisition and guarded/external declarations. The installed checks
+pass on VS Code 1.85 and 1.141 for ordinary/qualified calls on both backends,
+plus closed-project navigation in normal/alternate builds. They verify selected
+references/highlights, both outgoing constructor edges, incoming symmetry,
+native declaration roles, existing hover/signature/inlay/CodeLens behavior and
+unchanged saved bytes.
+
+The first graph assertion incorrectly required identical start positions; the
+compiler's conversion range includes the argument opener and encloses the
+explicit TYPE token. The final check verifies containment and preserves both
+native ranges instead of normalizing them.
+
+Logs: `/tmp/fb-typed-constructor-identities-before.log`,
+`/tmp/fb-typed-constructor-identities-native-final.log`,
+`/tmp/fb-typed-constructor-identities-unit-final.log`,
+`/tmp/fb-typed-constructor-identities-editor-{1.85,1.141}.log` and
+`/tmp/fb-typed-constructor-identities-project-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`d13d4cc6b255b101c7b8fd848a0e1ca96bc0f211482db15631bc347c01d32a57`.
+
+No compiler source/schema, production timeout, setting or version changes were
+needed. Full matrices/corpus/stress suites were not rerun; other host jobs
+stayed running. The remaining compiler-grade audit stays open.
+
+### Native navigation from the TYPE construction keyword
+
+Real stock/bridge regressions reproduced no Definition target at the TYPE
+keyword despite a committed constructor selection. Definition, Declaration and
+Implementation now use that selection and the existing physical declaration
+roles. Prototypes supply definition fallback for external constructors but do
+not become fabricated local implementations. Type arguments retain their own
+lookup paths, and incomplete typed calls return no guessed constructor target.
+
+A second native regression exposed an aggregate-only TYPE initializer jumping
+to a different UDT's argument-conversion constructor in an enclosing call. The
+TYPE operation now requires its own explicit selection and cannot borrow that
+implicit conversion target. Provider tests also exposed stale ordinary fallback
+after project eviction/context changes; a retired typed request now ends without
+querying the evicted snapshot again.
+
+The editor acquires bindings on first use and routes proven constructors directly
+through the existing configured lifetime navigation, without initializing source
+indexing for type/overload inference. Real value or macro bindings retain their
+ordinary path. Header-only project lookup and its captured native fallback stay
+available for missing bodies.
+
+All 394 parser/provider checks and six focused native worker checks pass.
+Coverage includes all three roles, aliases/qualification/TYPEOF, unsaved roots,
+twenty recovery cases, conversion-target separation, guarded branch selection
+and external prototypes without a local P body. Provider cases cover cold binding
+acquisition, edits, project eviction and context/cancellation changes. Installed
+VSIX checks pass on VS Code 1.85 and 1.141 in all four stock/bridge and
+ordinary/qualified combinations, with unchanged saved bytes and existing
+signature/hover/inlay/reference/CodeLens/hierarchy checks retained.
+
+Logs: `/tmp/fb-typed-constructor-navigation-before.log`,
+`/tmp/fb-typed-constructor-navigation-conversion-before.log`,
+`/tmp/fb-typed-constructor-navigation-project-before.log`,
+`/tmp/fb-typed-constructor-navigation-native-final.log`,
+`/tmp/fb-typed-constructor-navigation-unit-final.log` and
+`/tmp/fb-typed-constructor-navigation-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`ec82d78d23a3ea3062759e8aea7e1942204dee4999d080a377ee0fef24df7f05`.
+
+No compiler source/schema, production timeout, setting or version changes were
+needed. Full matrices/corpus/stress suites were not rerun; other host jobs
+stayed running. The remaining compiler-grade audit stays open.
+
+### Selected-constructor hover on TYPE<...>
+
+Both native backends reproduced a missing constructor entry on the written
+TYPE construction keyword. Hover now joins that physical operation to the
+existing committed temporary-construction selection and prefers its prototype,
+preserving optional defaults. Type-argument and namespace tokens remain on
+their own lookup paths. Aggregate-only initializers and incomplete calls without
+a committed target do not acquire a guessed constructor hover.
+
+First-use stock requests acquire the required binding facts without source-index
+type or overload inference. A complete cached stock constructor reply is reused
+without another acquisition or worker query. Bridge requests keep their existing
+binding path. No compiler hook or extra analysis pipeline was introduced.
+
+All 393 parser/provider checks and six focused native worker checks pass,
+including aliases, qualification, TYPEOF type arguments, Long/Double selection,
+prototype defaults, argument-token boundaries, aggregate-only refusal and
+incomplete-call refusal. Cold/cached provider cases check binding acquisition
+and one worker query. Installed-VSIX checks pass on VS Code 1.85 and 1.141 in
+all four stock/bridge and ordinary/qualified combinations, with existing
+signatures, linked inlays, references, CodeLens and hierarchy checks retained.
+Saved bytes remain unchanged; the bridge worker also uses an unsaved root.
+
+Logs: `/tmp/fb-typed-constructor-hover-before.log`,
+`/tmp/fb-typed-constructor-hover-native-final.log`,
+`/tmp/fb-typed-constructor-hover-unit-final.log` and
+`/tmp/fb-typed-constructor-hover-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`e862c86975e42d479e76ea9f78146537a52d6c39a6006a397eda2a12f19d2899`.
+
+No compiler source/schema, production timeout, setting or version changes were
+needed. Full matrices/corpus/stress suites were not rerun; other host jobs
+stayed running. The remaining compiler-grade audit stays open.
+
+### Linked parameter hints for TYPE<...> construction
+
+Stock and bridge regressions both reproduced missing parameter-name hints in
+typed construction. The existing native temporary selections now identify those
+constructors for inlays as well as signatures/navigation. A shared bounded
+syntax lookup finds the real argument opener beyond TYPEOF operands; it does
+not infer a type or target. Existing argument segmentation and compiler-selected
+physical formals provide the names, passing modes and declaration links.
+
+Stock FBC uses its existing semantic hint path. The bridge keeps trace-owned
+ordinary hints and supplements typed temporaries in the semantic identity domain,
+merging only final physical hint records. Duplicate/conflicting positions do not
+mutate either cached input. Visible typed calls acquire native bindings through
+the existing request path, including cold requests; ordinary plain bridge calls
+retain the smaller expressions-only acquisition.
+
+All 392 parser/provider checks and six focused native worker checks pass.
+They cover aliases, qualification, TYPEOF arguments, selected Long/Double
+prototype formals, absence of duplicate/misplaced constructor labels, direct
+versus combined requests, bounded opener scanning, and cold/cached acquisition.
+The bridge worker case retains unsaved root contents without saving them.
+Installed-VSIX checks pass on VS Code 1.85 and 1.141 in all four stock/bridge
+and ordinary/qualified combinations, with linked typed-construction inlays,
+unchanged saved bytes and existing signature/reference/CodeLens/hierarchy checks.
+
+Logs: `/tmp/fb-typed-constructor-inlays-before.log`,
+`/tmp/fb-typed-constructor-inlays-native-final.log`,
+`/tmp/fb-typed-constructor-inlays-unit-final.log` and
+`/tmp/fb-typed-constructor-inlays-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`7c333faa1ac3acdd5f600dffca4a4caa495a4fd2b2195cfca684907a6569fcd0`.
+
+These are committed-call hints, not overload inference for incomplete code.
+No compiler source/schema, production timeout, setting or version changes were
+needed. Full matrices/corpus/stress suites were not rerun; other host jobs
+stayed running. The remaining compiler-grade audit stays open.
+
+### Typed-construction Signature Help during incomplete arguments
+
+Real unsaved-buffer and provider regressions reproduced missing help for
+`Type<Alias>(1,` and a native recovery snapshot discarded after a failed binding
+upgrade. Bridge recovery now reuses surviving native type declarations and the
+actual native types of named TYPEOF operands. The existing constructor-family
+projection still owns caller access, imported-name ambiguity and shadowing.
+Parser offsets bound the operand lookup; it does not infer complex expressions.
+
+Aliases, qualification, named TYPEOF type/value/field operands, empty argument
+lists and missing arguments before a closing parenthesis retain accessible
+overloads. Internal callers can see private constructors; unrelated callers
+cannot. Pointer/scalar/provisional operands, unknown or inaccessible names,
+real value shadows, ambiguous imports and procedure names do not become guessed
+families. No overload selection, expression validity or navigation binding is
+restored. A retained current bridge recovery snapshot is signature-only, not
+a successful binding upgrade or permission to ask the source index for a type.
+
+All 391 parser/provider checks, four focused native worker checks and one
+additional worker guard pass. The new native matrix has twenty unsaved cases;
+existing ordinary recovery and complete stock/bridge typed calls stay green.
+Provider coverage includes failed upgrades, source-inference refusal, edits,
+closure and cancellation. Installed-VSIX checks pass on VS Code 1.85 and 1.141
+with twelve unsaved constructor cases each and unchanged saved bytes.
+
+Logs: `/tmp/fb-typed-constructor-recovery-before.log`,
+`/tmp/fb-typed-constructor-recovery-acquisition-{before,after}.log`,
+`/tmp/fb-typed-constructor-recovery-native-final.log`,
+`/tmp/fb-typed-constructor-recovery-guards.log`,
+`/tmp/fb-typed-constructor-recovery-unit-final.log` and
+`/tmp/fb-typed-constructor-recovery-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`e2854770c33aa58a3b80a865b459817b2b03cd5aefcb236a6e849490d296e633`.
+
+This is declaration-backed bridge recovery. Complex TYPEOF operands and stock
+sidecar recovery remain outside that path. No compiler source/schema, production
+timeout, setting or version changes were needed. Full matrices/corpus/stress
+suites were not rerun; other host jobs stayed running. The remaining compiler-
+grade audit stays open.
+
+### Signature Help for TYPE<...> construction
+
+Parser and real-compiler regressions reproduced typed construction falling back
+to an enclosing call's Signature Help. Signature-only scanning now recognizes
+`Type<UDT>(...)`, qualified aliases and `Type<TypeOf(...)>(...)`. Its 16-KiB
+backward scan distinguishes type delimiters from parenthesized comparisons;
+it does not resolve the type. Ordinary navigation scanning is unchanged.
+
+Both backends request native bindings directly and reuse counted temporary
+construction selections plus compiler-selected physical declarations. The
+chosen prototype preserves optional defaults without a second body row. No
+source type/overload inference or compiler instrumentation was added. Existing
+on-demand binding acquisition may upgrade a lighter cached snapshot. Plain aggregate
+initializers without a selected constructor return no constructor signature.
+At that checkpoint, partial/uncommitted typed construction still lacked help.
+The declaration-backed follow-up above now covers named operands without
+claiming these missing committed selection receipts.
+
+All 391 parser/provider checks and five focused compiler checks pass. The new
+native cases cover aliases, qualification, TYPEOF arguments, default values,
+duplicate-row refusal and aggregate-only initialization. The bridge case uses
+an unsaved root and verifies unchanged disk bytes. Installed-VSIX checks pass
+on VS Code 1.85 and 1.141 in all four stock/bridge and ordinary/qualified
+combinations, retaining exact references, CodeLens counts and symmetric Call
+Hierarchy while selecting constructor signatures for typed and TYPEOF calls.
+
+Logs: `/tmp/fb-typed-constructor-signatures-{parser,native}-before.log`,
+`/tmp/fb-typed-constructor-signatures-dedup-before.log`,
+`/tmp/fb-typed-constructor-signatures-native-final.log`,
+`/tmp/fb-typed-constructor-signatures-unit-final.log` and
+`/tmp/fb-typed-constructor-signatures-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`d78b677ad7697036ea63d7069ce59e9980d711a43a3c0e9f30a2336e4b9a3eb6`.
+
+Current-checkout source ownership audits also pass for 72 expression routes
+and 37 call-builder routes, with no unowned/stale/drifting entries. Logs are
+`/tmp/fb-current-expression-routes.log` and `/tmp/fb-current-call-routes.log`.
+These are source inventories, not proof of complete runtime language coverage.
+No compiler source/schema, production timeout, setting or version changes were
+needed. Full matrices/corpus/stress suites were not rerun; other jobs stayed
+running. The remaining compiler-grade audit stays open.
+
+### Completion request context and lifetime
+
+A regression reproduced a pending completion menu surviving compiler-generation
+changes. Completion now captures the compiler/workspace generations, selected
+context signature and trust at request start, and rejects stale menus after
+asynchronous reads or before publication. The same guard covers include-path
+replacement edits, source supplements and native member enrichment. Closure,
+edits and cancellation also retire the request. A missing context does not
+disable source-only completion; compatible snapshot enrichment still follows
+its existing one-replacement path without another retry or compiler pass.
+
+All 357 provider/member-completion checks pass. Extended cases cover native
+query changes, member-fact enrichment and asynchronous include-directory reads,
+including trust/context/generation changes and closed documents. Installed
+VSIX checks pass on VS Code 1.85 and 1.141 for stock FBC and the bridge, with
+three successive build selections on unchanged source and unchanged disk bytes.
+
+Logs: `/tmp/fb-completion-request-freshness-before.log`,
+`/tmp/fb-completion-request-freshness-providers-final.log` and
+`/tmp/fb-completion-request-freshness-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`7f4f2276e797a1dc9b4b1e0a9416bc30cabf67173361c67a12601e9c898b0053`.
+
+No compiler source/schema, production timeout, setting or version changes were
+needed. Full matrices, corpus and stress suites were not rerun. Other host jobs
+remained running. This improves completion correctness, not overall language
+coverage; the remaining compiler-grade audit stays open.
+
+### Incomplete callback-field Signature Help
+
+A native regression reproduced missing help for `MakeHolder().invoke(1,`.
+The compiler retained no exact receiver expression, but did retain accessible
+native member-completion types. Signature-only recovery now reuses those facts
+and the existing scalar callable-field checks. This adds no compiler pass,
+source type inference, expression validity receipt or indirect runtime target.
+The hint does not validate the receiver's arguments or restore navigation.
+
+Four native positive forms cover factory results, pointer-returning factories,
+array elements and grouped fields. Six negative forms cover private/missing
+members, scalar fields, extra callback-pointer indirection, incorrect member
+access and unknown receivers. A separate guard checks provisional members,
+unknown producer versions, array fields and pointer types. Existing callback
+and compound-index regressions remain green: seven focused worker checks and
+35 parser/provider checks pass. The expanded installed-VSIX callback case passes
+on VS Code 1.85 and 1.141, including unsaved buffers, parameter label offsets,
+the active parameter, private-field refusal and unchanged saved bytes.
+
+Logs: `/tmp/fb-callback-field-signatures-before.log`,
+`/tmp/fb-callback-field-signatures-native-final.log`,
+`/tmp/fb-callback-field-signatures-guards.log`,
+`/tmp/fb-callback-field-signatures-provider-final.log` and
+`/tmp/fb-callback-field-signatures-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`09fa3f927602335d861da6ee99be49317aea29b7ebadd8edf2a5b1bfc858d850`.
+
+Compiler sources/schema, production timeouts, settings and package version did
+not change. Full matrices, corpus and compiler/AZdecrypt stress suites were not
+rerun. Other host jobs remained running. This closes a narrow recovery gap, not
+the remaining compiler-grade audit.
+
+### Compound native index-receiver Signature Help
+
+Fresh parser/native regressions showed no signature context for `MakeIndex()[`
+or `values(0)[`. Signature-only scanning now recognizes expression receivers
+before brackets without changing ordinary navigation call contexts. Bridge
+queries require an exact non-provisional compiler aggregate type and native
+caller access, not inferred types or assumed pointer dereferences.
+
+Factories, array elements, grouped values and explicit pointer dereferences
+retain index families in complete and incomplete code. Complete calls preserve
+the selected native overload; incomplete calls do not select a target. Unknown,
+scalar, pointer, unindexed/invalid-rank array and provisional receivers remain
+unavailable. Native recovery can retain exact receiver types even when semantic
+selection ranges are withheld, so bounded source token starts schedule additional
+exact native queries within the existing callee window. This adds no source type
+inference and does not redirect compound indexing to indirect-call signatures.
+
+All 389 parser/provider checks and four focused native checks pass. The native
+matrix covers four receiver forms in complete/incomplete code, seven invalid
+forms, provisional-type refusal, preserved committed selections, ordinary index
+recovery and compound callback regressions. Installed unsaved-buffer checks pass
+on VS Code 1.85 and 1.141 with full parameter labels, native access restrictions
+and unchanged saved bytes.
+
+Logs: `/tmp/fb-compound-index-signatures-parser-before.log`,
+`/tmp/fb-compound-index-signatures-native-before.log`,
+`/tmp/fb-compound-index-signatures-native-final.log`,
+`/tmp/fb-compound-index-signatures-unit-final.log` and
+`/tmp/fb-compound-index-signatures-editor-{1.85,1.141}.log`.
+
+No compiler source/schema, production timeout, setting or version changes were
+needed. This is bridge-backed index Signature Help, not complete expression,
+stock-sidecar recovery, refactoring or corpus coverage. Full matrices and
+compiler/AZdecrypt stress suites were not rerun; other host jobs stayed running.
+
+### Native index Signature Help during incomplete brackets
+
+A native regression reproduced zero signatures for `item[` despite surviving
+public index operators. Signature-only recovery now uses native scalar receiver
+declarations, shape/type facts and projected caller scopes to intersect accessible
+index overloads. Aliases, public fields, qualified names and parameters are
+covered. An independently valid exact receiver expression can identify implicit
+`This`, without inferring it from a class or static-method context. The ordinary
+expression accessor preserves recovery-dependency taint checks.
+
+Arrays, pointers, scalars, type names, inaccessible fields, real shadowing and
+provisional receiver types cannot provide guessed operator signatures. Native
+access retains private overloads only where accessible. Navigation is unchanged,
+and no committed index target is selected. The displayed index signatures reuse
+their full physical prototypes instead of truncated legacy captions.
+
+All 347 provider checks and six focused native checks pass. The native receiver
+matrix covers fourteen ordinary/alias/member/qualified/parameter/implicit and
+negative access/shape/shadow cases, plus unchanged navigation and no selected
+target. A separate guard refuses provisional receiver types. Existing constructor,
+array-bound, ordinary recovery and committed index navigation checks remain green.
+Installed unsaved-buffer checks pass on VS Code 1.85 and 1.141 with full parameter
+labels, native private access, static-`This`/array/pointer/field/shadow exclusions,
+active parameter 0 and unchanged saved bytes.
+
+Logs: `/tmp/fb-index-signature-recovery-before.log`,
+`/tmp/fb-index-signature-recovery-native-final.log`,
+`/tmp/fb-index-signature-recovery-providers-final.log` and
+`/tmp/fb-index-signature-recovery-editor-{1.85,1.141}-final.log`.
+
+No compiler source/schema, production timeout, setting or version changes are
+required. This repairs named-value/implicit-receiver index signature recovery,
+not arbitrary expression-callee recovery or the broader compiler-grade audit.
+Full matrices and compiler/AZdecrypt stress suites were not rerun; other host
+jobs were left running.
+
+### Native constructor Signature Help during incomplete arguments
+
+A new native regression reproduced zero signatures for `RecoveryWidget(1,`
+despite surviving public constructor declarations. The signature query now uses
+native visible types and recovery token/scope coordinates to retain accessible
+constructor families for ordinary/NEW calls, aliases and qualified names.
+Caller contexts are intersected; native access, imported-owner ambiguity and
+value shadowing still apply. Pointer/scalar aliases do not become constructor
+calls. A compiler-rejected duplicate parameter does not shadow its valid type.
+
+The editor can reuse a current bridge recovery snapshot after a failed identity
+upgrade instead of discarding those signature-only facts. Incomplete calls still
+have no committed overload selection, and the recovery does not alter native
+navigation bindings or certify expression types. Stock-sidecar and complete weak
+snapshots are not accepted through this exception. Existing edit, cancellation
+and document-close guards remain in force.
+
+All 347 provider checks and five focused native checks pass. The latter cover
+constructor recovery, aliases, qualified/hidden types, both kinds of shadowing,
+private overload exclusion, scalar/pointer aliases, ambiguous imports, unchanged
+navigation and existing ordinary/compound-callback/committed constructor help.
+Installed unsaved-buffer checks pass on VS Code 1.85 and 1.141, including ordinary,
+NEW, rejected-parameter and real-shadow cases, with active parameter 1, hidden
+private overloads and unchanged saved bytes.
+
+Logs: `/tmp/fb-constructor-signature-recovery-before.log`,
+`/tmp/fb-constructor-signature-recovery-native-final.log`,
+`/tmp/fb-constructor-signature-recovery-providers-final.log` and
+`/tmp/fb-constructor-signature-recovery-editor-{1.85,1.141}.log`.
+
+No compiler source/schema, production timeout, setting or version changes were
+needed. This closes one common recovery gap, not the full expression/recovery,
+refactoring or corpus audit. Full matrices and compiler/AZdecrypt stress suites
+were not rerun; other host jobs were left running.
+
+### Physical operator presentation for native symbols
+
+A native regression reproduced an external index operator displayed as
+`operator [ As long` in Outline records, with a one-bracket selection. Native
+Outline and workspace-symbol presentation now use one matching physical header
+for the operator label, complete signature and selection. Native scope, kind,
+visibility and parent relationships are unchanged; parsing cannot add symbols.
+Macro-derived, ambiguous and expanded-view entries retain native presentation.
+
+All 358 provider/workspace-index checks pass. Focused native checks verify
+complete index-operator captions and selections, native parent ownership,
+workspace/Outline parity, and existing scope/macro/recovery symbol behavior.
+The cache regression verifies snapshot isolation, reuse, LRU eviction and refusal
+of oversized sources before parsing. Cold-start installed Outline checks pass
+on VS Code 1.85 and 1.141 with complete index/cast labels, native type ownership,
+two-bracket selection, unchanged buffers and inactive declarations excluded.
+Runtime fingerprint:
+`bd75b523e04b4c5a179b32b734be7a97fab371b8da0e494602477913d1436076`.
+
+Logs: `/tmp/fb-native-operator-presentation-before.log`,
+`/tmp/fb-native-operator-presentation-native-final.log`,
+`/tmp/fb-native-operator-presentation-unit.log`,
+`/tmp/fb-native-operator-presentation-cache.log` and
+`/tmp/fb-native-operator-presentation-editor-{1.85,1.141}.log`.
+
+The existing lazy source-declaration cache is shared with navigation/hierarchy
+instead of parsing each operator independently. Its four-MiB, 20,000-declaration
+and eight-document limits are unchanged, and caches remain snapshot-local. No
+extra compiler execution, source/compiler schema change, setting or version bump
+is required. This is a symbol-presentation repair, not new typing/recovery
+coverage or completion of the broader compiler-grade audit.
+Full matrices and compiler/AZdecrypt stress suites were not rerun; other host
+jobs were left running.
+
+### Native outgoing implicit-call ownership and round-trips
+
+A packaged-editor regression showed that a correctly discovered conditional
+operator caller expanded to no operator calls. Outgoing projection now reuses
+native lifetime/operator reference families and mapped statement ownership,
+covering named and anonymous bodies and file-level calls without source-scope
+attribution. Complete arrays own ordinary and implicit edges together; source
+supplements are no longer merged back in. Unavailable projection retains the
+existing fallback. Unknown ownership and ambiguous operator receipts refuse a
+partial native tree.
+
+Construction and cleanup can occupy the same physical span. The collector now
+keys outgoing occurrences by their proven callee and deduplicates repeated
+evidence, without weakening conflicts between ordinary CALL targets. Declaration
+tokens still anchor symbol families but do not compete with cleanup as call edges.
+
+Native statement ordinals also recover header prefixes omitted by D keyword
+spans, preserving DECLARE/modifiers and continued prefixes in presentation.
+Legacy bridge operator captions use their unique matching physical header, so
+an outgoing target can pass the later incoming stale-signature guard. Modules
+with non-index operators flag full projection because populated procedure traces
+can omit those edges; ordinary/index-only populated graphs retain their fast path.
+
+All 346 provider checks pass, including authoritative empty results, stale/edit/
+cancellation guards, retained unavailable-analysis fallback and the ordinary
+bridge fast path. Native checks pass for lifetime round-trips, namespace shared
+initialization, ordinary/index/binary overloads, shared-span callee deduplication,
+ordinary-target conflicts, ambiguous operator refusal and physical bridge captions.
+The bridge check also verifies that index-only graphs retain their fast path.
+
+The installed 1.20.5 VSIX passes the extended operator round-trip on VS Code
+1.141 and recursive construction/cleanup expansion on 1.85, each with stock FBC
+and the bridge. The operator case expands a conditional caller and then expands
+its outgoing target back to incoming callers. Closed-file discovery is checked
+before explicit expansion; loading that caller afterward does not change editor
+focus. Saved bytes remain unchanged. Runtime fingerprint:
+`40271d10fa2087f1e5d0433576d661379da36decab0da9916ced6bcfb72671f9`.
+
+Logs: `/tmp/fb-native-implicit-outgoing-editor-before.log`,
+`/tmp/fb-native-implicit-outgoing-native-final.log`,
+`/tmp/fb-native-implicit-outgoing-final-guards.log`,
+`/tmp/fb-native-implicit-outgoing-operators-final.log`,
+`/tmp/fb-native-implicit-outgoing-bridge.log`,
+`/tmp/fb-native-implicit-outgoing-providers-final.log` and
+`/tmp/fb-native-implicit-outgoing-editor-{1.85,1.141}-final.log`.
+
+No compiler source/schema, production timeout, setting or version changes were
+needed. This does not complete implicit grammar/macro-origin coverage or the
+broader expression, recovery, refactoring, responsiveness and corpus audit.
+Full matrices and compiler/AZdecrypt stress suites were not rerun. Other host
+jobs were left running.
+
+### Native incoming operator callers across modules
+
+Incoming operator hierarchy now uses native read-only overload families and
+mapped statement ownership in the active build. The same bounded range index
+used for lifetime calls supplies procedure or module callers. Header selection
+is revalidated in the current compiler pass; no model-local symbol ID crosses a
+project pass. Source parsing presents the selected header, not successful native
+caller ownership. The implementation consumes the existing operator receipt
+reader rather than restricting the new path to particular operator spellings.
+
+Local physical receipts are retained before a project transaction can evict
+their model. Successful native lists, including valid empty lists, avoid the
+older project-reference scan and source caller grouping. Unavailable ownership
+keeps the existing project-reference and captured-snapshot fallback, including
+shared-prototype anchors that differ from the displayed header. Source edits,
+compiler-context changes and cancellation still discard results. A selected
+unmapped caller range withholds the native tree rather than publishing a partial
+one. Existing constructor/destructor and ordinary-call modes are unchanged.
+
+All 346 provider checks pass, including complete/empty native lists, unavailable
+and failed ownership, shared-header reference fallback, eviction without stale
+ID queries, edits/context changes/cancellation, and no duplicate project scan on
+success. The focused stock/bridge project regression passes for binary and index
+overloads, two selected builds, separate routine/module callers, unchanged source
+bytes and explicit refusal of unmapped caller ownership.
+
+The installed 1.20.5 VSIX passes the combined operator reference/hierarchy check
+on VS Code 1.85 and 1.141 with both compiler backends. It finds callers in a
+closed module, chooses the native active conditional header, retains module-level
+operator calls and excludes sibling overloads. References/highlights still have
+their expected scope; closed callers remain unopened and saved bytes unchanged.
+Runtime fingerprint:
+`57227a3980f4fd8890b775a669b8dc3b3f1f744a52b2ed2077198425e0ce3d1e`.
+Logs: `/tmp/fb-native-operator-incoming-before.log`,
+`/tmp/fb-native-operator-incoming-native-final.log`,
+`/tmp/fb-native-operator-incoming-providers.log` and
+`/tmp/fb-native-operator-incoming-editor-{1.85,1.141}-final.log`.
+
+At this checkpoint outgoing implicit/operator calls retained their supplement
+path; the newer outgoing checkpoint above replaces it where native projection
+is available. This checkpoint does not establish full grammar coverage or close
+the expression, recovery, refactoring, performance and corpus audit above. No
+compiler source/schema, production timeout, setting or version change is needed.
+Full editor/unit matrices and compiler/AZdecrypt stress suites were not rerun.
+
+### Native incoming lifetime callers across modules
+
+Constructor/destructor incoming hierarchy now uses the read-only project path
+in the active build. Native lifetime references supply the selected overload;
+mapped native statement ranges and construct owners supply the caller. The
+receipt's object/formal-parameter owner is never treated as a procedure owner.
+Physical headers join families across modules. Variable declarations and their
+implicit cleanup share tokens, so the read-only lifetime graph stays separate
+from ordinary variable bindings. No rename permission is inferred from a site.
+
+Complete native results, including empty lists, defer the source fallback.
+Missing/unmapped ranges, conflicting owners and exhausted bounded range joins
+leave the native projection unavailable. Repeated include contexts must agree;
+no source-only scope or arbitrary includer chooses their caller. The range
+projection is requested only for incoming lifetime hierarchy, not routine editor
+snapshots or ordinary incoming/outgoing calls. At this checkpoint operators
+retained their existing path; the newer operator checkpoint above extends
+project-wide incoming discovery.
+
+Installed validation also exposed two entry/presentation defects. Stock FBC
+discarded a proven constructor prototype when its body was not in the source
+index; preparation now uses the native header identity. Ordinary native caller
+records selected the UDT name while implicit outgoing records selected the
+callable keyword. Native lifetime hierarchy serialization and project header
+presentation now agree on the keyword, preserving round-trip target identity
+and short UDT labels. Existing destructor prototype/body routing is retained.
+
+All 345 provider checks pass. The seven focused worker/project checks pass,
+including compiled/executed cleanup, native caller ownership, temporary cleanup,
+missing/unmapped/conflicting range refusal, guarded external prototypes and the
+existing constructor header/body join. The separate cross-module/build checks
+also pass for both backends, covering constructor overloads, argument conversion,
+DELETE, explicit destruction, early cleanup and unrelated types, plus existing
+named incoming and anonymous-body outgoing behavior.
+
+The installed 1.20.5 VSIX passes the new active-build project lifetime check on
+VS Code 1.85 and the recursive cleanup/round-trip check on 1.141. Both exercise
+stock FBC and the bridge. The former starts with a destructor before warming
+constructor bindings, finds closed callers, excludes inactive routine headers
+and leaves caller documents closed. The latter verifies incoming/outgoing target
+selections and cleanup ranges from both body and prototype. Saved bytes remain
+unchanged. Runtime fingerprint:
+`96a688af14fb84b6b28900e0b898c719d05a12e1df9cfdd5b4a69b825fab39a1`.
+
+Logs: `/tmp/fb-native-lifetime-incoming.log`,
+`/tmp/fb-native-lifetime-roundtrip-final.log`,
+`/tmp/fb-native-lifetime-provider-final.log` and
+`/tmp/fb-native-lifetime-incoming-editor-{1.85,1.141}-final.log`.
+
+No compiler source/schema, production timeout, setting or version changes were
+needed. This is a bounded lifetime-hierarchy improvement, not completion of the
+expression, recovery, refactoring and corpus audit above. Full matrices and the
+upstream/AZdecrypt stress suites were not rerun for this checkpoint. Other host
+jobs were left running.
+
+### Native file-level outgoing calls with stock FBC
+
+File nodes now use the existing read-only projection with the compiler's module
+caller value, zero. A distinct module selector replaces the need for a procedure
+symbol; no native symbol ID is fabricated. Physical file filtering separates a
+root's global sites from included-file globals and routine-owned calls. Mapped
+callee proof remains required, while indirect calls and address-taking are not
+guessed. Conflicting or unmapped projections remain unavailable, not empty.
+
+Successful projections replace ordinary source guesses while preserving native
+construction/cleanup/operator receipts. The old fallback remains on failure;
+complete current bridge trees retain their existing fast path. The worker rejects
+module projection in write/declaration modes before native work starts. Project
+references and rename still require their explicit contexts.
+
+All 344 provider checks pass, including native/source precedence, valid empty
+results, unavailable/error fallback, edits/cancellation and constructor retention.
+Ten focused native/collector checks passed across module projection, header
+contexts and the configured-project regression. The updated module case also
+passes on both backends with runtime-only/empty files and actual namespace
+construction, without leaking constructor-body calls. The worker mode guard
+passes separately. Installed checks pass on VS Code 1.85 for root/include file
+nodes, A/B/A context retention and closed-root reload; 1.141 passes the namespace
+initializer tree, including selected constructors and ordinary-call deduplication.
+Both editor checks exercise stock FBC and the bridge.
+
+No compiler source, format/schema, new setting, production timeout or version
+changed. Full matrices were not rerun. This checkpoint did not yet add project
+incoming discovery for anonymous callees; the lifetime checkpoint above extends
+that coverage. The broader compiler-grade audit remains open. Runtime fingerprint:
+`69d25dadb61556118895a4fee5a0a2b574972df9f99b751860a9c4e03d5f1f6b`.
+Logs: `/tmp/fb-native-module-outgoing-native-final.log`,
+`/tmp/fb-native-module-outgoing-constructors.log`,
+`/tmp/fb-native-module-outgoing-providers.log`,
+`/tmp/fb-native-module-outgoing-worker-guards.log` and
+`/tmp/fb-native-module-outgoing-editor-{1.85,1.141}.log`.
+
+### Known module contexts through included-header hierarchy nodes
+
+Hierarchy items now retain the originating module for included files when no
+project contexts are configured. Context metadata carries a file path, not a
+compiler symbol ID or a guessed includer. Incoming/outgoing expansion can reload
+that module without displaying it. Request guards cover both document lifetimes,
+the compiler/build signature, cancellation and trust.
+
+Read-only target selection acquires the root model while querying the physical
+header. The proxy validates snapshot identity through the root; worker/native
+binding checks still reject sources outside its captured context. Ordinary
+queries retain their existing default. Explicit project contexts retain their
+previous path, and non-hierarchy refactoring cannot use the context override.
+Local implicit-call receipt reads use the same root context when required.
+
+All 343 provider checks pass, including context propagation and rejection after
+root/header edits, root closure, context changes or cancellation. Seven focused
+native/query checks pass: stock/bridge header queries, A/B/A root-specific defines,
+unconsumed-header refusal, snapshot replacement/generation/cancellation, and the
+existing configured multi-module regression. The installed A/B/A shared-header
+case passes on VS Code 1.85 and 1.141 with both backends. It unloads and reloads
+the first root, verifies editor focus, follows both tree directions, and leaves
+disk bytes and project settings unchanged. The first editor attempt exposed a
+focus assertion racing the tab-close notification; its baseline is now settled
+before checking background loads.
+
+No compiler source, schema, new setting, production timeout or version changed.
+Full matrices were not rerun. Module-level outgoing was still pending at this
+checkpoint; the later module-outgoing section above covers it. Project incoming
+discovery for anonymous callees and the broader compiler-grade audit remain open.
+Runtime fingerprint:
+`366b50f19f9acb90bc76c5e4d99e149ddfa2136805d1d4d248b37dce47444547`.
+Logs: `/tmp/fb-header-call-context-before.log`,
+`/tmp/fb-header-call-context-native-final.log`,
+`/tmp/fb-header-call-context-providers.log`,
+`/tmp/fb-header-call-context-editor-1.85-after.log` and
+`/tmp/fb-header-call-context-editor-1.141.log`.
+
+### Current-module native call context without project setup
+
+Read-only hierarchy can now derive one job from the existing compiler context
+when no project contexts are configured. It preserves compiler arguments and
+include options, works for standalone .bas files, and never searches for other
+modules. Configured projects still use their declared active build. The separate
+hierarchy capability does not enable project references or rename; those retain
+their workspace/explicit-context requirements. Analysis-off and malformed
+explicit contexts refuse the native lookup rather than selecting another scope.
+
+The initially failing native case now passes in all four stock/bridge and
+workspace/standalone combinations, checking incoming/outgoing sites under two
+compiler-argument sets, an invalid unrelated module that must not be compiled,
+rename refusal, disabled analysis, invalid explicit contexts and unchanged disk
+bytes. The existing configured multi-module/build native regression also passed.
+All 342 provider checks pass. The new installed standalone module case passes
+on VS Code 1.85 and 1.141 with both backends and both argument sets; it verifies
+incoming/outgoing expansion, module parents and unchanged project settings.
+
+This checkpoint covered the module-local portion of default native hierarchy.
+At that point, included-header items still needed explicit translation units;
+the later header-context checkpoint above closes that propagation gap.
+Stock-sidecar module-level outgoing and project-wide incoming discovery for
+anonymous callees are also not added here. These limits are not completion of
+the broader hierarchy/compiler-grade requirements. No compiler source, schema,
+new setting, production timeout or version changed; full matrices were not rerun.
+Runtime fingerprint:
+`496d201df5dc72011d455a638f6a5ce2eb0e96ebfbda675ee12ca736aa72011d`.
+
+Logs: `/tmp/fb-default-native-call-context-before.log`,
+`/tmp/fb-default-native-call-context-native-final.log`,
+`/tmp/fb-default-native-call-context-native.log`,
+`/tmp/fb-default-native-call-context-providers.log` and
+`/tmp/fb-default-native-call-context-editor-{1.85,1.141}.log`.
+
+### Native-first incoming hierarchy and deferred fallback
+
+Incoming hierarchy now acquires the current compiler model without forcing a
+source semantic model. Stock-sidecar requests try the configured native project
+graph first. The source-model lookup, fallback call-binding query and source
+caller scan run only when needed. Bridge-native local sites retain their
+existing merge path, and absent/failed project results or missing project
+contexts still use the existing source fallback. Request freshness is checked
+before and after asynchronous fallback work.
+
+The updated regression fails before the change. It verifies zero source-model
+lookups and zero fallback binding queries for complete/empty native results,
+one fallback lookup/query when needed, and rejection after edits or cancellation
+during fallback. All 342 provider checks pass. The installed conditional/closed
+caller case passes on VS Code 1.85 with both compiler backends/builds. The
+namespace/property-accessor case passes on 1.141 with both backends, retaining
+getter/setter identities and outgoing expansion. These are two focused editor
+cases, not a full matrix rerun or a wall-clock latency benchmark.
+
+No compiler interface, cache, setting, production timeout or version changed.
+The remaining compiler-grade audit is still required. Runtime fingerprint:
+`7bcc52f6b307ebf22ef53c799fdacb21c81fcea617c8a8f1c5d0fcc21bff6d5f`.
+Logs: `/tmp/fb-native-first-incoming-before.log`,
+`/tmp/fb-native-first-incoming-providers.log` and
+`/tmp/fb-native-first-incoming-editor-{1.85,1.141}.log`.
+
+### Native incoming-call precedence
+
+Complete configured incoming call graphs no longer merge unconfirmed ordinary
+source calls back into the native caller list. The frontend distinguishes
+source fallback results from native query results; independently proven native
+sites can still supplement project results. Missing or failed project analysis
+retains the existing fallback. Valid empty results do not revive source-only
+calls. No compiler pass or worker query was added.
+
+The new provider regression fails before the correction and passes afterward,
+covering native, empty, unavailable and failed results. All 342 provider checks
+pass. The installed closed-caller case now includes conditional call sites
+inside an unconditional routine, verifying the active site in both builds on
+stock FBC and the bridge. It passes on VS Code 1.85 and 1.141, including closed
+caller expansion, overload/address exclusions and unchanged source files.
+
+No compiler source, schema, setting, production timeout or version changed.
+Full unit/corpus/editor matrices were not rerun. Runtime fingerprint:
+`12ce45513246ebafa2018e3f7bb079233e39f1376e42a251247b7b8059469818`.
+Logs: `/tmp/fb-native-incoming-source-precedence-before.log`,
+`/tmp/fb-native-incoming-source-precedence-providers.log` and
+`/tmp/fb-native-incoming-source-precedence-editor-{1.85,1.141}.log`.
+
+### Native outgoing ownership for special routine bodies
+
+Configured outgoing Call Hierarchy now covers constructor, destructor and
+operator bodies through the existing native CALL caller identities and physical
+declaration-family anchors. Lifetime headers can be selected at their keyword
+or written owner type; native D records select the exact declaration instead of
+borrowing the first prototype/body in its family. Native project projection
+refuses prototype requests rather than returning implementation-file ranges.
+Existing source-only prototype handling is unchanged.
+
+The installed test exposed a second issue: source-only ordinary calls from an
+inactive branch were being merged back into a complete native outgoing tree.
+Successful native projections now replace those guesses. Existing compiler-
+backed operation/index/lifetime receipts remain supplements; unavailable native
+analysis retains the full fallback. The supplement is computed only after a
+successful native result, without another query or compiler pass. Existing
+current-snapshot bridge fast paths and request-freshness guards remain.
+
+The new native case passes on stock FBC and the bridge for both configured
+builds, including conditional constructor headers, owner-type selections,
+inactive calls, address-taking and prototype refusal. The named-procedure and
+namespace/property native regressions also passed. All 341 provider checks pass,
+including source/native precedence and preservation of native implicit cleanup.
+The combined installed-editor case passes on VS Code 1.85 and 1.141, exercising
+all three body kinds on both backends/builds and leaving source bytes unchanged.
+
+No compiler source, binary schema, setting, production deadline or version
+changed. Full unit/corpus/editor matrices were not rerun. Cross-module incoming
+discovery for constructor/destructor/operator callees is not added by this
+outgoing-only change; the remaining compiler-grade audit is still required.
+Runtime fingerprint:
+`d1d6ed5c7f76ddf08fea8edcf14400693bcc21134bc4740ad12487483fe90bd9`.
+
+Logs: `/tmp/fb-native-anonymous-outgoing-native-final.log`,
+`/tmp/fb-native-anonymous-outgoing-native.log`,
+`/tmp/fb-native-anonymous-outgoing-providers-final.log` and
+`/tmp/fb-native-anonymous-outgoing-editor-{1.85-final,1.141}.log`.
+The initially failing merge check is recorded in
+`/tmp/fb-native-anonymous-outgoing-source-merge-before.log`.
+
+### Thread-local declarations in the source index
+
+Current compiler syntax prefixes module declarations with THREAD LOCAL. Those
+declarations were highlighted but absent from the source index. The existing
+variable-declaration parser now consumes the paired storage modifier while
+retaining the original physical source coordinates. DIM SHARED and EXTERN forms,
+private visibility, namespace ownership and continued/common-type declarations
+use the existing symbol model. Separate identifiers named thread or local are
+not consumed as storage modifiers.
+
+Both new parser/identity regressions fail before the correction. All 407 parser,
+semantic-model and provider checks pass afterward, including global/local
+shadowing and exact CRLF source ranges. The new installed-editor case passes
+on VS Code 1.85 and 1.141 for Outline, completion and Definition, using an
+untitled document to verify the source-index path without compiler support.
+Native analysis still owns compiler-backed decisions; this does not validate
+thread-local runtime behavior, storage rules or ABI support. No compiler,
+schema, setting, timeout or version changed. Full unit/corpus/editor matrices
+were not rerun for this delta.
+
+Logs: `/tmp/fb-thread-local-source-before.log`,
+`/tmp/fb-thread-local-source-unit.log` and
+`/tmp/fb-thread-local-source-editor-{1.85,1.141}.log`.
+
+### Broad unit checkpoint and current-source language data
+
+The serial unit run, excluding the dedicated upstream-corpus and AZdecrypt
+files, completed 1,384 checks with 1,381 passes and three failures. The existing
+Expand Selection expectation omitted its intentional native procedure parent;
+it now verifies that block as well as all expression ranges. The macro-heavy
+worker resource check exceeded its default deadline under competing host work;
+only that test now uses the existing five-minute worker ceiling. Both corrected
+native checks pass, including the unchanged memory-retention and semantic-token
+assertions. The resource check completed in about 150 seconds.
+
+The third failure identified stale generated reference data. Regeneration from
+the current compiler tree updates Integer/UInteger 128-bit descriptions and
+graphics-header source links. A follow-up source-coverage check also exposed
+missing THREAD and EVENT_DROP entries; the grammar now includes both, with a
+real TextMate check for thread-local storage and qualified drop-event constants.
+All 17 reference, packaging-smoke and TextMate checks pass. Current uncommitted
+compiler manual changes are included in the reference input hash; this does not
+claim native 128-bit semantic coverage from the pinned compiler executables.
+
+The refreshed VSIX passes the installed builtin hover/signature/completion case
+on VS Code 1.85 and 1.141. Language-service JavaScript is unchanged from the full
+132-check runs on each editor below. Only grammar/reference runtime data changed
+after those full runs; the updated runtime fingerprint is
+`9a07dc8044be3980cdefd7a0abfa7aa55d9efe70c9f5b04f4bc6a6f39d73e1a9`.
+The full unit suite was not rerun after the focused corrections, and the
+dedicated upstream/AZdecrypt files were not run in this checkpoint. Compiler
+sources, schema, production deadlines, host limits and other jobs are untouched.
+The remaining expression/corpus/refactoring audit is still required.
+
+Logs: `/tmp/fb-noncorpus-unit-checkpoint.log`,
+`/tmp/fb-noncorpus-native-corrections.log`,
+`/tmp/fb-source-refresh-checkpoint.log` and
+`/tmp/fb-source-refresh-editor-{1.85,1.141}.log`.
+
+### Full two-version editor checkpoint and snapshot-safe operator receipts
+
+The full minimum-version run initially stopped after 128 passes: a stock-sidecar
+compound operator returned no Definition target. The case passed cold, while
+the full-run log showed a model expiring during its lookup. A binding-capable
+snapshot can still be retired by a concurrent macro upgrade; its capability
+flag alone is not a freshness check.
+
+Binding acquisition now checks current identity before reusing a supplied
+model. Operator operation/expression receipt queries use the existing bounded
+replacement-query helper and retain the model that owns the returned target
+identities. The full selection also checks document version, closure and
+cancellation. Native target proof is unchanged; no source-name/operator guess
+replaces an unavailable receipt, and backend switches are rejected.
+
+The failing unit regression now passes across expression, operation and fallback
+replacement, plus edit/close/cancellation/backend refusal. All 341 provider
+checks pass. The exact repaired runtime passes all 132 installed-editor checks
+on VS Code 1.85 and all 132 on 1.141, including shutdown validation, using both
+pinned compiler backends listed below. This completes the two-version editor
+checkpoint, not the remaining expression/corpus/refactoring coverage audit.
+The full unit and compiler-corpus matrices were not rerun. No compiler source,
+binary schema, new setting, queue bound, production timeout or package version
+changed; other host jobs and limits remain untouched.
+
+Full logs: `/tmp/fb-consolidated-editor-1.85-after-upgrade.log` and
+`/tmp/fb-consolidated-editor-1.141-after-upgrade.log` (132 passes each).
+Provider log: `/tmp/fb-operator-snapshot-upgrade-providers.log`.
+Runtime fingerprint:
+`7776494a4fa551065a8dcbcb2339ce8c39dd5ffa112eab3cafffff7114273dd3`.
+
+### Consolidated editor checkpoint and source-diagnostic batching
+
+The consolidated VS Code 1.141 run initially stopped after 31 passes: a header
+constructor returned no Call Hierarchy item. The case also failed in isolation.
+The compiler log showed the bounded 16-request worker queue filling while
+background diagnostics queued three reads for each included open document.
+Inactive ranges, lexical masks and unreachable ranges now use one batched read
+from the same snapshot. Queue bounds and all fact projections are unchanged.
+
+The isolated constructor case passes after the change. Both native backend
+checks pass for the batch contents. The repaired installed VSIX then passes all
+132 integration checks on VS Code 1.141, including extension-host shutdown
+validation. Focused constructor-family and combined unreachable/inactive/bracket
+checks also pass on the minimum supported VS Code 1.85. The full 1.85 matrix,
+full unit suite and compiler corpus were not rerun at this checkpoint; this is
+not completion of the remaining compiler-grade requirements.
+
+The host reported filesystem-watcher exhaustion and load around 153 during
+validation. Other jobs and host limits were left untouched. No compiler source,
+binary schema, new setting, production timeout or package version changed.
+
+Full logs: `/tmp/fb-consolidated-editor-1.141.log` (before) and
+`/tmp/fb-consolidated-editor-1.141-after-batch.log` (132 passes).
+Focused logs: `/tmp/fb-constructor-header-isolation-{before,after}.log` and
+`/tmp/fb-batched-source-diagnostics-{native,family-editor-1.85,hints-editor-1.85}.log`.
+Runtime fingerprint:
+`e2da41e304cfddb07dc799aa2977a66cb1a22f6ae03041c134413f7551eed442`.
+
+### Compiler-aware lexical folding in the worker
+
+The existing folding query now combines compiler-correct lexical folds with
+native block boundaries inside the worker. Escape spans, REM identifiers and
+per-line REM policy reach the folding scanner, so quoted block-comment text and
+region markers inside real comments cannot invent folds. The editor consumes
+that complete projection instead of merging source-only guesses back into it.
+The projection is cached on the immutable source document for repeat requests;
+no second editor query, compiler invocation or worker protocol was added.
+Unavailable/partial models retain the existing source fallback.
+
+All 392 parser/formatter/provider checks pass, including the initially failing
+REM/comment-boundary regression. Two native ownership/header checks pass on
+stock FBC and the bridge. A focused worker query test verifies corrected ranges
+and cache reuse. The installed lexical-folding case passes on VS Code 1.85 and
+1.141 with both pinned backends listed below: externally supplied escape/REM
+options, correct comment groups, exclusion of false regions, retained procedure
+boundaries, repeated requests, and unchanged source files. Other full unit,
+corpus and editor matrices were not rerun. No compiler source, schema, settings,
+production timeout or package version changed; user jobs were left running.
+
+Logs: `/tmp/fb-native-lexical-folding-{tests,worker,cache}.log` and
+`/tmp/fb-native-lexical-folding-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`b4156f8ee51881b89761ab572f601ec18f079ce54e235f56a208d8fe5e592acb`.
+
+### Cached native lexical context in formatting
+
+Formatting now reads the existing cached lexical-mask facts alongside inactive
+ranges. Native escape spans, committed REM identifiers and per-line REM policy
+reach both statement parsing and standalone-comment scanning. This prevents an
+escaped quote from turning quoted text into a false block comment, including
+when the relevant option came from a forced header. Parser arguments remain
+optional for source-only callers. BOM adjustment keeps the first line's policy
+at offset zero while shifting token and string positions into editor text.
+
+The original escaped-string regression reproduced a missed comment indentation.
+All 391 parser/formatter/provider checks now pass, including external REM policy,
+BOM handling and existing lifecycle guards. The installed formatting case passes
+on VS Code 1.85 and 1.141 with stock FBC and the bridge: source-only formatting,
+inactive regions, forced-header escape/REM options, CRLF/Unicode preservation,
+selection formatting, repeated requests and unchanged disk files. Ambiguous
+out-of-order scopes remain unchanged when native lexical facts are unavailable,
+so a repeat cannot undo the native-aware result.
+
+The two cached queries share one model/currentness check and do not start FBC.
+Other full unit, corpus and editor matrices were not rerun. No compiler source,
+schema, settings, production timeout or package version changed; user jobs were
+left running.
+
+Logs: `/tmp/fb-native-lexical-formatting-tests.log` and
+`/tmp/fb-native-lexical-formatting-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`6779ee221215356e65d33e4646512d01434cc2bcc105b33473de830800618e66`.
+
+### Cached native inactive regions in indentation formatting
+
+Document and selection formatting now reuse cached compiler-inactive source
+ranges without requesting a compiler analysis. An offset-preserving mask keeps
+disabled block keywords out of indentation structure while leaving the original
+inactive bytes untouched. The mask retains line endings and UTF-16 positions,
+merges overlapping ranges, and is bounded like the compiler query. Native query
+failure, replacement, document changes, cancellation and context-generation
+changes cannot publish guessed or stale formatting edits.
+
+Language scopes crossing conditional boundaries remain a conservative no-op;
+this is not a complete preprocessor-structural formatter. The repeat-format
+regression showed why that guard is needed when native facts expire after the
+first edit. Ordinary source-only formatting remains available for supported
+layouts. No new worker query, compiler interface or formatting setting was
+added.
+
+All 349 formatter/provider checks pass, including the initially failing inactive
+structure and repeat-format cases. The combined installed formatting case passes
+on VS Code 1.85 and 1.141 with both pinned backends listed below. It covers the
+existing source-only behavior, native active indentation, untouched inactive
+text, CRLF/Unicode preservation, selection-only edits, repeat formatting and
+unchanged disk files. Other full unit, corpus and editor matrices were not
+rerun. No compiler source, schema, production timeout or package version
+changed, and user jobs remain untouched.
+
+Logs: `/tmp/fb-native-formatting-providers.log` and
+`/tmp/fb-native-formatting-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`91097c96f4ef8b2208265bec6a33858dfbf4bb6d8e86ea8644d9e0abe5abeffc`.
+
+### Translation-unit-local query-time snapshot expiry
+
+A source-freshness check now retires only the stale snapshot, its worker model
+and expanded view. Independent snapshots and their diagnostics remain cached,
+and unrelated native queries are not globally cancelled. This matters when a
+provider observes a changed buffer before the editor's delayed change event.
+Filesystem watcher cancellation, trust changes and context invalidation retain
+their existing broader behavior; no watcher or worker protocol was added.
+
+The regression failed before the change for both direct and remote snapshots.
+All 77 analysis-service checks now pass with stock FBC and the bridge enabled,
+with no skips. Native cases verify that a second translation unit retains its
+worker snapshot ID and still answers a typed expression query after the first
+is expired, without reanalysis or disk writes. The direct/remote cases also
+check expanded-view retention and targeted worker release. Full provider,
+corpus and editor matrices were not rerun for this internal cache change.
+No compiler source, schema, settings, production timeout or package version
+changed, and user jobs were left running.
+
+Log: `/tmp/fb-local-snapshot-expiry-service.log`; the failing regression is
+recorded in `/tmp/fb-local-snapshot-expiry-before.log`.
+Runtime fingerprint:
+`38d9ecce9c14bb40747920c34113f29d0f3795cf85a89cedcff41efc7acf5f8b`.
+
+### Custom-extension FreeBASIC header buffers
+
+Named buffers explicitly using FreeBASIC language mode now participate in
+compiler input capture even when their extension is not `.bas` or `.bi`.
+Custom headers use the existing selected translation unit, must be consumed by
+that unit, and follow the same request, edit, close, save and context-selection
+paths as standard headers. Status guidance also treats them as headers instead
+of asking for a different filename. Unrelated plaintext remains excluded; the
+default file associations and broad filesystem watcher extension list are not
+changed. Stock sidecars still require saved inputs, while bridge overlays
+consume the unsaved custom-header contents.
+
+The service suite passes 70 tests with three optional native cases skipped;
+two stock-FBC cases were then run and pass separately for dirty `.bi` and `.inc`
+dependencies. All eight status checks pass, as do four workspace-symbol merge
+checks, including the added mixed-backend regression. The suspected mixed-root
+native-indexing gap was already prevented by `isConfigured()` requiring an
+explicit bridge path; the redundant runtime change was discarded.
+
+The packaged custom-header check passes on VS Code 1.85 and 1.141 with the pinned
+bridge listed below: change a `.inc` document to FreeBASIC mode, analyze it in
+its selected root, observe unsaved alias changes in the root's native type,
+and restore the alias without writing either disk file. Full provider/unit,
+corpus and editor matrices were not rerun. No compiler source, schema, new
+settings, production timeout or package version changed; user jobs remain
+untouched.
+
+Logs: `/tmp/fb-custom-header-{service,stock,status,mixed-workspace}.log` and
+`/tmp/fb-custom-header-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`82cf49680bba6578d616d642c42e3726805b01caa24a45cc7aede42ddb35eff3`.
+
+### Active-build native workspace symbol search
+
+Bridge-backed workspace search now follows an explicitly selected build across
+all of that build's configured modules, not just the selected translation unit.
+Without an active context, the existing labelled all-build discovery remains.
+Selection validation reuses the editor's context resolver, and the workspace
+settings signature now includes the active context so a selection changed
+during indexing cannot publish results from the earlier build. Reference and
+rename build coverage is unchanged. This avoids compiling unrelated builds for
+ordinary workspace search when a build has been selected.
+
+Two service checks pass, covering resource/window setting scopes, both builds,
+unselected all-build mode, invalid/malformed selections, and an in-flight change.
+The packaged native check passes on VS Code 1.85 and 1.141 using the pinned
+bridge listed below. It switches between both builds, clears the selection,
+then returns to the first build through a different module. Both configured
+modules remain searchable while closed, results do not leak from another build,
+and disk files remain unchanged. Full provider/unit, corpus and editor matrices
+were not rerun. No compiler source, schema, new settings, production timeout or
+package version change was needed; user jobs were left running.
+
+Logs: `/tmp/fb-workspace-build-selection-service.log` and
+`/tmp/fb-workspace-build-selection-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`ab0b576f95fc8936d769b86f8ccabea6d29085e630f65be492b06cd9eae9cd38`.
+
+### Quiet native unreachable-code diagnostics
+
+Compiler-proven unreachable statement tokens now receive Hint diagnostics with
+the standard Unnecessary tag, even when editor inlay hints are disabled. These
+reuse the existing conservative control-flow facts and a shared UTF-16 source
+projection with unreachable inlays. The range stays at the compiler's physical
+opening token; no whole-line or surrounding-statement reachability is guessed.
+Opaque or incomplete flow still supplies no unreachable facts. Publishing uses
+only cached models, bounds hint counts like inactive-code diagnostics, and
+checks the exact document lifetime and current model before combining replies.
+Edits and closure clear the separate unreachable-code collection.
+
+Two native checks pass on stock FBC and the bridge, covering the shared inlay
+projection, Unicode prefix offsets, and exclusion of the reachable label path.
+Both flow-projection tests pass, retaining opaque-transfer suppression. The
+focused packaged-editor case passes on VS Code 1.85 and 1.141 with both pinned
+backends listed below: inlays disabled, exactly one native unreachable token,
+unchanged inactive-code fading and bracket suppression, immediate edit clearing,
+and unchanged disk files. Full provider/unit, corpus and editor matrices were
+not rerun. No compiler source, user jobs, production timeout, schema, settings,
+or package version changed.
+
+Logs: `/tmp/fb-unreachable-code-{worker,flow}.log` and
+`/tmp/fb-unreachable-code-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`83532bc5fc03a946166176896363aeedf46f6d9bbdc874121ae65a4fa427fdce`.
+
+### Native block parents for Expand Selection
+
+Expand Selection reuses the retained native block spans alongside expression
+ranges. A compiler-proven opener replaces its competing source-derived scope,
+preventing an inactive terminator from offering a truncated procedure parent.
+Whole-line native bounds include the closing statement and comment without
+interpreting compiler byte columns as editor UTF-16 columns. Existing tokens,
+expressions, statements, comment groups, and unrepresented source scopes remain.
+Block and expression candidates have separate bounded allowances. Block lookup
+is opt-in for explicit selection requests; callback-signature inference keeps
+its existing expression-only lookup. No additional compiler analysis is needed.
+
+The provider regression first reproduced the false procedure parent, then
+passed in both ordinary and cached-replacement modes. All 337 provider checks
+pass. Two native checks cover procedure/IF parents, included-header isolation,
+expression-only sidecars, and a Unicode closing comment on both backends. The
+combined folding/selection packaged-editor case passes on VS Code 1.85 and
+1.141 with both pinned backends listed below, without editing source files.
+Full unit, corpus, and editor matrices were not rerun. No compiler source, user
+jobs, production timeout, settings, schema, or package version changed.
+
+Logs: `/tmp/fb-native-block-selection-{providers,worker}.log` and
+`/tmp/fb-native-block-selection-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`30ba03de11de6204f3e43a3e61a04b6685841fb98d207adfc77ac000f9b6492f`.
+
+### Cached native block folding
+
+Folding now uses physical construct openings and closures from an already
+cached, complete compiler snapshot. Proven native openers correct or add source
+folds, so an inactive `End Sub` cannot prematurely close the active procedure.
+Comment, region, import, and unrepresented source folds remain. The compiler
+advertises only partial source-construct coverage; these spans do not replace
+all source folding. Partial, unavailable, replaced, or over-budget native data
+retains source fallback, and stale requests are discarded. The native lookup
+is bounded before allocation and conflicting repeated-include closures are
+withheld. No folding request starts a compiler analysis, and model changes
+refresh the folding provider.
+
+All 337 provider checks pass. Two real-compiler checks verify active procedure
+and IF spans, physical header filtering, and expression-only cached snapshots
+on stock FBC and the bridge. The installed check passes on VS Code 1.85 and
+1.141 with both pinned backends listed below, retaining comment, region and
+import folds and leaving files unchanged. Full unit, corpus and editor matrices
+were not rerun. No compiler source, user jobs, production timeout, schema,
+settings, or package version changed.
+
+Logs: `/tmp/fb-native-folding-{providers,worker}.log` and
+`/tmp/fb-native-folding-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`236d9888dab68cef8dca3c48b7a7e4fc63a114ea34c5893f2cd26fab6fa6847e`.
+
+### Cached bridge outgoing-hierarchy expansion
+
+Populated outgoing trees now reuse the complete bridge snapshot when that exact
+model is still current. This avoids a second compiler/project transaction for
+the same routine body while retaining selected implicit targets. Empty or failed
+queries, unknown completeness, partial snapshots, replacements, and stock
+sidecars retain the existing project fallback. Context, document lifetime,
+generation, trust, and cancellation guards still apply.
+
+All 336 provider checks pass. The new case verifies that the complete bridge
+path makes no project request, preserves ordinary and implicit targets, keeps
+the fallback boundaries, and rejects stale results. The installed conditional
+caller and namespace/property-accessor cases pass on VS Code 1.85 and 1.141 with
+both pinned compiler backends listed below. These checks preserve separate
+getter/setter identities and source ranges without changing source files or the
+visible editor. Full unit, corpus, and editor matrices were not rerun.
+
+No compiler source, user jobs, production timeout, settings, schema, or package
+version changed. The large-module offline allowance remains ten minutes.
+Logs: `/tmp/fb-cached-outgoing-providers.log` and
+`/tmp/fb-cached-outgoing-{calls,accessors}-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`d94e926c0964d48186006ec17d79982240f1ea20eb1fa936c51361f9ae48f576`.
+
+### Native outgoing routine-body ownership
+
+Outgoing trees from configured named functions, Subs, and property bodies now
+reuse the native call/statement projection in the selected translation unit.
+Caller identity, callee header identity, and source sites remain compiler-owned;
+header parsing supplies presentation only. The collector requires unambiguous
+callee anchors and preserves distinct getter/setter targets. Module and lifetime
+items retain their existing paths, and local implicit targets are merged rather
+than erased. Header-only or different-file caller bodies are refused because
+outgoing ranges must belong to the displayed item's file.
+
+All 335 provider checks pass, including local-site retention, prototype/body
+deduplication, unavailable/evicted fallback, and stale context/lifecycle/trust
+requests. Six native checks cover conditional caller bodies, namespace functions,
+and separate property accessors on both backends. Collector refusal checks and
+focused native references/rename compatibility pass.
+The installed conditional-caller and namespace/accessor cases pass on VS Code
+1.85 and 1.141 with both pinned backends. Closed incoming callers expand outgoing
+using their native body ownership, and getter/setter callee locations and source
+ranges remain separate. Source files and the visible editor stay unchanged.
+Full unit/corpus/editor matrices were not rerun; no compiler rebuild by this
+agent, schema, settings, version, or production-timeout change was required.
+
+The host stock compiler was replaced during the editor run, correctly rejecting
+that in-flight result. Remaining validation uses private executable copies under
+`dist/validation-compiler.2pdkYC/bin/`, with the existing SDK through symlinks:
+stock FBC 1.20.5-1 SHA256
+`6fe69dcc24788a9f07429242e4f5280b8dcf09d9a9af36a15ac136a99a23908c`,
+and bridge 1.20.5 SHA256
+`307ddb18093c1ff5f6eaad441d984407aa9830416ac1282c7d8749e17ac6bd6a`.
+No compiler source or user jobs were changed.
+
+Logs: `/tmp/fb-native-outgoing-calls-{providers,project,collector,compatibility}.log`
+and `/tmp/fb-native-outgoing-{calls,accessors}-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`0c9aa4e974a6873c694013a3aa0b71128fbd60fc35f104ffbc8e77ce1f65960c`.
+
+### Namespace and property incoming-hierarchy validation, 2026-10-17
+
+The project incoming path now has explicit real-compiler and packaged-editor
+coverage for namespace functions and property accessors. Getter reads and setter
+writes remain distinct native families. Namespace-owned Subs are Function items,
+not UDT Method items. Both local module sites and closed-module namespace callers
+are checked, with unchanged source files.
+
+The native case passes on stock FBC and the bridge, and the installed case passes
+on VS Code 1.85 and 1.141 with both backends. No runtime correction was needed;
+the tested runtime fingerprint remains the prior incoming-hierarchy checkpoint.
+Full unit/corpus/editor matrices and the provider suite were not rerun for these
+test-only changes. No compiler rebuild, schema, settings, version, or timeout
+change was required.
+
+Logs: `/tmp/fb-project-accessor-callers-native.log`
+and `/tmp/fb-project-accessor-callers-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`914e256bd2161562db0b94dfc1995013091995c9c2a153d3aca191939d1a8095`.
+
+### Project incoming Call Hierarchy, 2026-10-17
+
+Incoming trees for named functions, Subs, and properties now scan configured
+modules in the active build. An opt-in projection retains stable native call
+kinds, static virtual targets, and OWN/ST/BLK ownership only for this explicit
+project request. Ordinary editor models do not retain the additional index.
+Indirect runtime targets are not inferred.
+
+The read-only collector joins callee identities through physical declarations
+and requires unambiguous caller anchors. Native D headers select caller identity;
+isolated header parsing supplies presentation, including constructor callers
+after mutually exclusive procedure headers. No source-name lookup chooses a
+caller. Unprojectable/ambiguous project origins fall back to the local tree.
+Project sites are deduplicated while independently proven local sites remain.
+Constructor/destructor/operator callee discovery keeps its existing local paths;
+this does not claim full project coverage of every implicit-call kind.
+
+All 334 provider checks pass. Native project checks pass on stock FBC and the
+bridge for both builds, constructor/module callers, closed modules, overload
+separation, address-taking exclusion, and unchanged files. Collector checks cover
+unmapped/conflicting ownership and unchanged subtype/override traversal. Focused
+native reference and rename checks still pass. The installed case passes on
+VS Code 1.85 and 1.141 with both backends/builds, including incoming expansion
+of a closed conditional caller without showing an editor or changing sources.
+Full unit/corpus/editor matrices were not rerun; no compiler rebuild, schema,
+settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-project-incoming-calls-{native,providers,collector,reference-compatibility,rename-compatibility}.log`
+and `/tmp/fb-project-incoming-calls-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`914e256bd2161562db0b94dfc1995013091995c9c2a153d3aca191939d1a8095`.
+
+### Project base-method bodies, 2026-10-17
+
+Go to Base Method now follows a known native parent prototype to its body in
+configured modules using the active build. Parent selection is repeated inside
+the original translation unit before the existing read-only definition scan;
+it neither borrows a header context nor looks up a method by name. Local bodies
+and abstract prototypes avoid the scan. Missing/incomplete project results
+retain the native prototype, including after model eviction. Existing lifecycle,
+trust, and context guards discard stale replies and fallback.
+
+All 333 provider checks pass, including fast paths, project success/refusal,
+evicted fallback, and stale requests on both backends. The extended native
+project fixture passes with stock FBC and the bridge in both builds, selecting
+the immediate parent's guarded body rather than the root or leaf. Existing
+static navigation, overload separation, and ordinary references still pass.
+The installed project-override case passes on VS Code 1.85 and 1.141 with
+both backends/builds. It invokes the command from a leaf call and checks the
+parent body's physical terminal-name location, including the initially closed
+implementation file. Source files remain unchanged. Selection waiting starts
+before the command, while its UI timeout starts after project analysis returns.
+Full unit/corpus/editor matrices were not rerun; no compiler rebuild, schema,
+settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-project-base-method-{native,providers}.log`
+and `/tmp/fb-project-base-method-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`eb70ee45e0103852e1d46c900d2b7e80b1df4a8c1e0e4d01b33f7316cfb89cee`.
+
+### Native calling-convention policy provenance, 2026-10-17
+
+The model already retained ABI policy statement identities, but its hover DTO
+dropped them. Uniquely selected procedure hovers now preserve that provenance
+so calling-convention refactors can match their native typing statement.
+Multi-symbol ABI summaries still omit statement identities when comparing
+common facts across overloads. Missing identities cannot compare equal and
+authorize an edit.
+
+All 332 provider checks pass, including the missing-identity refusal. The native
+procedure ABI fixture reproduces the old omission and now verifies the statement
+match. Its Cdecl rewrite compiles and preserves the selected calling convention,
+ByRef-return status, and return storage type; the written-convention flag changes
+as expected. The installed refactor case passes on VS Code 1.85 and 1.141 with
+both backends. It verifies Cdecl and existing Override actions, and refuses
+redundant convention/root-method markers. Override required no implementation
+change. Full unit/corpus/editor matrices were not rerun; no compiler rebuild,
+schema, settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-procedure-policy-{before,native,providers}.log`,
+`/tmp/fb-procedure-policy-editor-before.log`, and
+`/tmp/fb-procedure-policy-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`f4133df6b1b3dcd90194d4f404b2409e2fb559cd4507cc920aa4e2d3b09e9143`.
+
+### Native parameter, declaration, and enum refactor facts, 2026-10-17
+
+The populated-entry handoff now also covers normal/continued parameters and
+variable/constant declarations. Parameter facts require a matching physical
+name range. Storage facts require that range or the selected stock semantic
+symbol identity. A small shared merge retains existing entry facts/properties;
+it does not select identities or infer types from names.
+
+Stock enum entries without enum-input facts can use the existing physical
+enum range and constant-value query. Existing entry facts still take priority
+when present, preserving conflicts, provisional-input refusals, and explicit
+initializer checks.
+
+All 332 provider checks pass. Expanded regressions cover populated normal,
+ByRef/suffix, continued, and array parameters, populated inferred Var storage,
+wrong-symbol refusal, and populated enum entries. The installed case initially
+failed with actual replies and now passes on VS Code 1.85 and 1.141 with both
+backends. It checks parameter passing-mode edits, CLng-inferred Var rewrites,
+implicit enum value 8, existing return-type actions, and unchanged sources.
+Full unit/corpus/editor matrices were not rerun; no compiler rebuild, schema,
+settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-data-refactors-{before,providers,continued}.log`,
+`/tmp/fb-data-refactors-editor-before.log`, and
+`/tmp/fb-data-refactors-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`a99b3d1d6c329425d603316afbbf368f248fd12eea836def030f8f6c21f89b2d`.
+
+### Current-context code actions and procedure fact retention, 2026-10-17
+
+Refactor and diagnostic Quick Fix requests now share a document-version,
+lifecycle, cancellation, compiler-generation, context-signature, and trust-state
+guard. Requests stop between asynchronous helpers and discard late replies.
+Missing header contexts still permit source-only fixes, and an initially
+untrusted workspace retains source-only bracket actions.
+
+Packaged validation exposed a second issue: real stock-sidecar hovers now
+return navigable procedure entries, while ABI, visibility, and storage facts
+remain separate. The refactor helper formerly combined those facts only for
+its empty-entry fallback. It now also enriches an existing entry after its
+compiler-provided physical header range agrees with the selected name.
+Existing entry facts are retained. A mismatched header cannot authorize edits.
+
+All 332 provider checks pass. Regressions reproduce the old late-context edit
+and populated-entry fact loss, cover ended/lifecycle/trust changes, and retain
+the original refactor assertions. A focused negative header-range check passes.
+The existing native implicit/suffix return fixture also passes and confirmed
+the actual producer's entry/fact layout without changing compiler output.
+The new installed refactor case passes on VS Code 1.85 and 1.141 with stock
+FBC and the bridge. A valid FBLite/DefInt fixture confirms the selected Integer
+return edit at the physical header end, without modifying the buffer or file.
+The assertion permits the compiler's Integer/integer display casing. Full
+unit/corpus/editor matrices were not rerun; no compiler rebuild, schema,
+settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-code-actions-freshness-{before,providers}.log`,
+`/tmp/fb-code-actions-populated-entry-{before,after}.log`, and
+`/tmp/fb-code-actions-native-facts.log`.
+Editor logs: `/tmp/fb-code-actions-freshness-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`c72eb45f38972e6dd95fe7d3e999ea31bbc2e579d224ecf35dae7052519a1e4a`.
+
+### Cached reference CodeLens freshness, 2026-10-17
+
+Reference CodeLens now captures document version, lifecycle, compiler generation,
+build signature, and trust state before querying the cached model. Late results
+are discarded after changes. A retired query can follow one already-cached
+successor only when its backend and binding capability remain compatible.
+This passive provider never starts analysis to replace an expired snapshot.
+Declaration ranges are checked against the current document before constructing
+lenses, and reference file paths must be strings.
+
+All 331 provider checks pass. The added check covers both backends, edits,
+closure, cancellation, trust/build changes, retirement, compatible enrichment,
+backend changes, weaker bindings, repeated churn, ended requests, and invalid
+declaration ranges. The existing cache-only assertion remains in place.
+The installed temporary-constructor case passes on VS Code 1.85 and 1.141
+with both backends and qualified/unqualified fixtures. Reference counts, lens
+commands, and physical locations still agree with Find References. Full
+unit/corpus/editor matrices were not rerun; no compiler rebuild, schema,
+settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-codelens-freshness-{focused,providers}.log`
+and `/tmp/fb-codelens-freshness-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`a42e09655f21ba8b8653ef8b17b42e38f53c343efd6b32a205cd61baf0c040b4`.
+
+### Native implementation lookup from typed values, 2026-10-17
+
+Go to Implementation also accepts variables, fields, parameters, and extern
+storage. The native Type Hierarchy selector first identifies the actual
+aggregate behind inferred, aliased, or pointer storage. Primitive values stop
+before descendant lookup or project scanning. The existing descendant query
+and active-build project path then supply the implementation locations.
+Procedure and constructor navigation retain their existing targets.
+
+All 330 provider checks pass, including value kinds on both backends,
+primitive refusal, replacement snapshots, and edits during native selection.
+Older navigation fixtures now return distinct hierarchy replies instead of
+reusing their definition/reference replies for every query. Their binding,
+operator-index, stale-model, and ordinary-navigation assertions remain.
+The native override fixture also passes value, parameter, alias-pointer field,
+and extern-pointer queries on both backends.
+The expanded installed project case passes on VS Code 1.85 and 1.141 with
+both backends/builds. It requests implementations from a typed value, verifies
+active-build transitive results and alias origins, and checks local-only value
+lookup after disabling project contexts. Full unit/corpus/editor matrices were
+not rerun; no compiler rebuild, schema, settings, version, or timeout change
+was required.
+
+Logs: `/tmp/fb-value-implementations-{native,providers}.log`
+and `/tmp/fb-value-implementations-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`f5ab13dd959009057753ba8be82c3ae4c14070f1c40194cba6532c4f3977fb4d`.
+
+### Native type implementations, 2026-10-17
+
+Go to Implementation on a user-defined type or type alias now follows all
+committed inheritance descendants. It excludes the selected root, ancestors,
+and unrelated types. The current compiler snapshot supplies local results;
+configured projects use the active build and the existing read-only transaction.
+Type Hierarchy still returns only direct children. Its internal traversal mode
+now distinguishes direct and transitive inheritance without joining rename or
+static resolution families. Alias origins are selected through native Type
+Hierarchy preparation so their underlying physical type anchors project joins.
+
+All 329 provider checks pass. The local native override fixture also covers
+type descendants, derived origins, leaves, and alias origins on both backends.
+The native project case passes for transitive children and alias origins across
+both builds/backends; collector checks preserve direct levels and reject
+unanchored reachable descendants. Existing method/static-navigation probes
+remain in those checks.
+The expanded installed project case passes on VS Code 1.85 and 1.141 with
+both backends and builds. It verifies transitive implementation locations,
+alias origins, inactive-branch exclusion, local-only results without project
+contexts, and unchanged direct Type Hierarchy levels. Full unit/corpus/editor
+matrices were not rerun; no compiler rebuild, schema, settings, version, or
+timeout change was required.
+
+Logs: `/tmp/fb-type-implementations-{native,project,providers}.log`
+and `/tmp/fb-type-implementations-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`592ddba55ec8ecf6384148dec6ffffd98d9ed69b8ba43e6cd775061e4c3f1dfe`.
+
+### Project-wide native Type Hierarchy subtypes, 2026-10-17
+
+Subtype expansion now scans configured modules in the active build through
+the existing read-only project transaction. Stock units retain semantic base
+identities and bridge units retain validated native aggregate shapes. Shared
+physical declarations join module-local identities; only immediate children
+are returned. Aliases use their compiler-selected base, not a source-name
+comparison. Native families used for references and rename remain unchanged.
+
+The provider retains the current snapshot's children if project analysis is
+unavailable or incomplete. Edits, closure, cancellation, trust changes, and
+context/generation changes discard late replies and fallback. Missing physical
+anchors on direct children reject that project level; incomplete grandchildren
+do not erase their complete parent level.
+
+All 328 provider checks pass. The native project case passes on stock FBC and
+the bridge for both build contexts, local/closed children, alias bases,
+unrelated roots, direct levels, further expansion, and unchanged sources.
+Collector checks cover direct-child refusal and the existing directional
+virtual-implementation behavior.
+The installed project case passes on VS Code 1.85 and 1.141 with both backends
+and both builds. It finds closed-module children, expands a returned child to
+its direct leaf, verifies physical name ranges, and leaves the active editor
+and sources unchanged. Full unit/corpus/editor matrices were not rerun; no
+compiler rebuild, schema, settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-project-type-hierarchy-{native,providers}.log`
+and `/tmp/fb-project-type-hierarchy-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`205777c40b19f45218977e4a9da4288d1b28c518ef99e0f633dd3bdaa7170077`.
+
+### Closed-file native Type Hierarchy expansion, 2026-10-17
+
+Type Hierarchy now loads a closed item's document in the background before
+expansion, so an evicted or invalidated compiler snapshot can be reacquired.
+It shares the existing Call Hierarchy document loader; call-specific include
+indexing remains separate. Loading does not show or save the document, and
+ended requests stop before acquiring another model.
+
+Two new provider regressions reproduced source-only fallback after eviction
+before the fix. All 327 provider checks now pass, including closed-file
+supertype/subtype acquisition on both backends and existing Call Hierarchy
+loading, replacement, and stale-result coverage.
+The installed closed-type case passes on VS Code 1.85 and 1.141 with both
+backends. It observes a genuinely unloaded root, invalidates its snapshot,
+checks the compiler-active conditional base in a closed header, and expands
+back to the derived type without showing an editor or modifying either file.
+Full unit/corpus/editor matrices were not rerun; no compiler rebuild, schema,
+settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-closed-type-hierarchy-{before,providers}.log`
+and `/tmp/fb-closed-type-hierarchy-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`bf71b5f95f7a9222e3b334bb6285416320096724184d71b0d04cf4881f8def8a`.
+
+### Immediate native base-method navigation, 2026-10-17
+
+FreeBASIC: Go to Base Method is available from the Command Palette and the
+editor context menu. It follows exactly one committed override edge, prefers
+a body in the current compiler snapshot, and otherwise uses the base prototype.
+Repeated invocation climbs the hierarchy. This initial checkpoint did not search
+other project modules for a missing base body; project lookup is added above.
+Neither path infers relationships from method names.
+Partial, ambiguous, or missing native links yield no target. Edits, closure,
+cancellation, trust/context changes, and cursor movement discard late jumps.
+
+All 325 provider checks and 8 smoke checks pass. The native override fixture
+passes on both backends for immediate parents, overload identity, abstract-base
+prototypes, roots, and unrelated methods. A stock included-header check also
+passes for an implicit override with no written Override modifier.
+The installed virtual-navigation case passes on VS Code 1.85 and 1.141 with
+both backends, including two successive command invocations from prototype
+to parent body to root body. The check waits for VS Code's selection event
+because command completion precedes that editor update. Existing downward
+Implementation and static Definition/Declaration probes remain in the case.
+Full unit/corpus/editor matrices were not rerun; no compiler rebuild, schema,
+settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-base-method-{native,header-native,providers,smoke}.log`
+and `/tmp/fb-base-method-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`c99dd2f8f6fcb1dfa4d1fac716a09a188eb04e496ad801214d84303b242a06f0`.
+
+### Project virtual implementation discovery, 2026-10-17
+
+Go to Implementation now follows committed override descendants across explicit
+project modules in the active build. Stock units retain semantic override edges
+and bridge units reuse validated dispatch records. The read-only collector joins
+physical method families, then traverses downward only for implementation
+declaration requests. It does not merge ordinary resolution, references, or
+rename families. A derived origin excludes its ancestors and sibling branches.
+Reachable overrides without physical anchors fail closed to native fallback.
+
+Virtual metadata now schedules project discovery even when the current snapshot
+already has a base body. Local snapshot discovery remains available without
+project contexts. Definition, Declaration, and static references retain the
+selected method, and overloads/unrelated same-name methods remain separate.
+
+All 324 provider checks pass, including project expansion of a known local
+virtual result. The native project case passes on both backends for transitive
+closed-module bodies, active build selection, derived origins, overloads,
+static navigation/references, and unchanged files. A collector regression covers
+directionality and unanchored descendants. The existing local-snapshot override
+case still passes on both backends. The installed project case passes on VS Code
+1.85 and 1.141 with both backends/builds and a closed implementation file.
+Full unit/corpus/editor matrices were not rerun; no compiler rebuild, schema,
+settings, version, or timeout change was required.
+
+Logs: `/tmp/fb-project-override-implementations-{native,providers,collector,local-compatibility}.log`
+and `/tmp/fb-project-override-implementations-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`f8bb5734bb7a1e010b8687dbb60838cb5337d0236353c6f90cd9476919fe76aa`.
+
+### Qualified procedure project-navigation classification, 2026-10-17
+
+Project navigation now matches a qualified procedure header at its exact native
+terminal-name token when reading the declaration role. The existing matcher
+required the parser's full `Api.Worker.Adjust` span/name to equal the compiler's
+physical `Adjust` binding. As a result, Definition could return both prototype
+and body, and Implementation could lose the body. The correction only supplies
+role/presentation metadata for already-bound declarations; native family keys
+still select the namespace, owner, and overload.
+
+The native regression reproduces the extra-prototype result before the change.
+It passes on both compiler backends for namespaced functions and UDT methods,
+all three navigation operations, exact terminal ranges, overloaded/same-name
+siblings, and unchanged files. All 324 provider checks pass. The installed
+case passes on VS Code 1.85 and 1.141 with both backends and a closed
+implementation. Full unit/corpus/editor matrices were not rerun, and no
+compiler source, binary, schema, settings, or timeout changed.
+
+Logs: `/tmp/fb-qualified-project-navigation-{before,native,providers}.log` and
+`/tmp/fb-qualified-project-navigation-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`291baa240501fd2f87063db2b2e52ad4caba4cf4f2f21ef94cce940e3c158a34`.
+
+### Native virtual implementation descendants, 2026-10-17
+
+Go to Implementation now follows committed override descendants within the
+current compiler snapshot. Stock FBC uses semantic override edges; the bridge
+retains its validated dispatch graph. The traversal is downward and bounded,
+not a source-name family match. A derived origin excludes ancestors/siblings,
+overloads remain separate, and abstract prototypes are not implementations.
+Definition and Declaration retain the statically selected method.
+
+The bridge exposes a conceptual virtual-method hint on native definition
+replies so ordinary implementation queries keep their existing route. Virtual
+requests reuse the native query adapter and can retain a known local body if
+the additional query is unavailable. Edits discard the result.
+
+All 324 provider checks pass, including virtual/ordinary routing, unavailable
+query fallback, and edit rejection. One native case passes on both backends
+for transitive descendants, overloaded siblings, unrelated same-name methods,
+abstract methods, derived origins, and static navigation. The targeted installed
+case passes on VS Code 1.85 and 1.141 with both backends. No full suite or
+compiler rebuild was run for this delta. Project-wide override discovery
+outside the selected compilation snapshot remains unfinished.
+
+Logs: `/tmp/fb-native-override-implementations.log`,
+`/tmp/fb-native-override-implementations-providers.log`, and
+`/tmp/fb-native-override-implementations-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`e3bbd88825f105deea1a043e8c5d4702c6bba3b471decdac6dc2b276683d6172`.
+
+### Actionable on-demand compiler failure status, 2026-10-17
+
+Language status now includes a bounded, single-line compiler failure reason.
+A request-local outcome carries errors through compatibility preparation and
+shared/replaced background passes without another cache or compiler request.
+Stock-FBC changed dependencies are identified by the consumed file and offer
+an explicit Save All action. Rendering status and running analysis do not save
+files. Generic failures retain the Analyze action and expose their actual cause.
+
+All 77 service/status checks pass with the native compiler environment enabled.
+They cover direct/background failures, message limits, invalidation/retry
+behavior, passive status rendering, and a real stock-FBC dirty-header rejection
+that leaves both disk contents and the dirty buffer unchanged. Stock unsaved
+analysis was investigated but not enabled: the current compiler invocation
+reads saved inputs, and its help/source do not expose the bridge overlay input.
+The existing saved-input safety checks remain. No compiler changes were needed.
+
+Log: `/tmp/fb-analysis-failure-status-tests.log`. No packaged-editor or broad
+suite rerun was performed for this status-only delta; prior editor evidence
+belongs to the preceding runtime below.
+Runtime fingerprint:
+`0eba011b0e38c3d79fdff0be5adebfd4d4370010a65b811c8a8bb7463e1ff167`.
+
+### Ordinary project navigation build/freshness correction, 2026-10-17
+
+Declaration-only project lookups now use the active build for ordinary
+procedures too, not only operators and lifetime procedures. Default-option
+requests retain the exact-argument matching rule. Reference collection and
+rename validation still use every configured build. The ordinary navigation
+adapter rejects replies and local fallbacks after edits, closure, cancellation,
+generation changes, context changes, or a failed request followed by an edit.
+
+The regression reproduced both inactive function bodies being returned and a
+stale provider reply after an edit. All 323 provider tests pass after the fix.
+The native fixture passes on both compilers for active/default navigation,
+guarded implementations, all-build references, and unchanged source files.
+The installed case passes on VS Code 1.85 and 1.141 with both backends, both
+builds, all three navigation commands, no buffer edit, and a closed body file.
+No full unit/corpus/editor rerun or compiler rebuild was performed for this
+delta. No schema, settings, version, or timeout changed.
+
+Logs: `/tmp/fb-active-project-navigation-{before,provider-before,native,providers}.log`
+and `/tmp/fb-active-project-navigation-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`b0b9b2de2bbe38b8e09108fefa6ce111d8d1345f3e72bb56d80384fa1a178922`.
+
+### Active-build constructor/destructor project navigation, 2026-10-17
+
+Constructor/destructor jumps now fill missing native roles from other configured
+modules using the active build. The lifetime target query optionally returns
+physical declaration roles; ordinary reference queries keep their existing
+payload. Declaration-only lifetime units skip reference collection. Keyword
+anchors still join identities, while navigation presents the unique proven
+header's name/type span. Rename behavior is unchanged.
+
+Unbound argument conversions can select their committed constructor receipt.
+Own argument bindings, macro identities, and namespace qualifiers retain
+precedence, and NEW fallback selection remains callee-owned. Ordinary symbols
+do not acquire lifetime metadata or initialize a source index for this path.
+Native constructor results from the existing navigation probe can request the
+project lookup too. Empty/failed project lookups use saved native role ranges,
+not another query on the evicted snapshot. Edits, context/backend changes, and
+cancellation discard the result.
+
+All 322 provider tests pass, including the ordinary-symbol fast path and
+fallback/edit/context/cancellation checks. Native project navigation passes on
+both compilers for written/argument constructors, destructor prototypes, guarded
+bodies, sibling overloads, active builds, and unchanged files. Three existing
+local compatibility checks and both project constructor/destructor reference
+cases pass. The installed case passes on VS Code 1.85 and 1.141 with both
+compilers, build switching without buffer edits, qualified aliases, NEW,
+argument conversions, Declaration, namespace ownership, and a closed
+implementation. Full unit/corpus/editor matrices were not rerun; compiler
+source, binaries, schema, settings, and timeouts are unchanged.
+
+Logs: `/tmp/fb-project-lifetime-navigation-{native,providers,compatibility,reference-compatibility}.log`
+and `/tmp/fb-project-lifetime-navigation-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`8056dd3cb7d720f25834ab9e66778759270eba9528b9c36aedac5cf3ced8a2f1`.
+
+### Active-build project operator navigation, 2026-10-17
+
+Operator Definition/Declaration/Implementation can now fill missing native
+roles from other configured modules. A declaration-only operator unit skips
+operation/expression collection and the reference-specific expression request.
+Navigation restricts jobs to the active named build, or exact compiler-argument
+matches for default module options. References still cover all configured
+builds. Proven local roles retain their fast path; failed/empty project results
+do not authorize an unverified source body. Rename units are unchanged.
+
+The native check caught missing presentation names in declaration DTOs, then a
+root/header context mismatch when no named build was selected. Names are now
+retained inside proven headers, and an optional declaration-origin query finds
+the header in the existing root snapshot without requiring a separate header
+context. Foreign/out-of-range origins fail closed. Installed checks also caught
+an index Implementation lookup being stopped by a missing local body; index
+identity selection now precedes requested-role lookup across modules.
+
+All 321 provider tests pass, including local-role fast paths, empty-result
+fallback, edits, cancellation, context changes, and retired selections. Native
+project checks pass on both compilers for guarded bodies, sibling overloads,
+active build switching, default options, and untouched files. Four focused
+operator compatibility checks and the existing named-procedure project
+navigation check pass. The installed navigation case passes on VS Code 1.85
+and 1.141 with both compilers, both builds, binary/index calls, all three jump
+commands, and a closed implementation file. The 1.141 run also repeats project
+operator references. Full unit/corpus/editor matrices were not rerun, and no
+compiler source, binary, schema, setting, or timeout changed.
+
+Logs: `/tmp/fb-project-operator-navigation-{native,providers,compatibility,named-compatibility}.log`
+and `/tmp/fb-project-operator-navigation-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`9ba1dd89a435307573c1f19dfbd42943f3672d61a3cb9cbbbe0ee0d7472e1557`.
+
+### Native project operator references, 2026-10-17
+
+Compiler-selected operators now join explicit project modules/builds through
+physical D header anchors. The target is re-resolved on the acquired native
+model instead of carrying a model-local ID into another pass. A read-only
+operator unit retains proven declarations plus OP-first/typed-expression
+reference sites, including multiline endpoints. Project passes request the
+expression metadata needed by that fallback; ordinary transactions retain
+their existing options. These units do not enter rename validation.
+
+Installed validation exposed a cold source-index dependency and a bridge index
+route that skipped the shared selector. Operator-reference presentation now
+refreshes the current root and closed includes. Configured project index reads
+acquire typed/binding facts and share exact native index selection on both
+backends; ordinary bridge navigation and non-project queries retain their
+existing routes. Highlights stay document-local. Local reference facts are
+collected before project eviction so an ambiguous/failed project can fall back
+without querying a retired ID. Edits and context changes discard the result.
+
+All 320 provider tests pass, including project return/fallback after eviction
+and edit/context rejection. The native project fixture passes on both compilers
+for binary/index overloads across three modules and two builds, with declaration
+filtering, conditional sites, deduplication, and unchanged source files. Four
+focused compatibility checks pass. The new installed case passes on VS Code
+1.85 and 1.141, starting with cold index references and retaining a closed
+second module's uses. Full unit/corpus/editor matrices were not rerun for this
+delta. No compiler source, binary, schema, setting, or timeout changed.
+
+Unshared physical identities, ambiguous/overlapping project families, and
+unrepresented macro-origin sites still use the existing fallback boundaries.
+This is not evidence of complete project coverage for every operator form.
+
+Logs: `/tmp/fb-project-operator-references-{native,providers,compatibility}.log`
+and `/tmp/fb-project-operator-references-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`206baa685482b427938436d38fddf0b9ae1e8cc3b0ea51b6b02df0b690d0457c`.
+
+### Project destructor references and explicit lifetime calls, 2026-10-17
+
+Destructor Find References now shares the read-only project transaction with
+constructors. Native D prototypes join consuming modules to their bodies even
+when the selected translation unit has no implementation. The requested kind
+is retained separately so constructor/destructor uses at one physical temporary
+site do not become conflicting overload families. Rename units are unchanged.
+
+The native fixture exposed explicit destructor calls missing from the local
+collector. Their physical B use has an H link from the committed CALL node but
+no named B declaration or implicit cleanup receipt. That link and the F kind
+now supply exact explicit-call reference/highlight sites. The installed check
+then exposed ordinary project-target routing at a written destructor call;
+its spelling now schedules native lifetime acquisition without selecting an
+identity from source text.
+
+All 319 provider tests pass. Native project checks cover both compilers, three
+modules, header and explicit-call entry points, DELETE, lexical cleanup, early
+returns, exact ranges, unrelated types, and declaration inclusion/exclusion.
+The constructor project regression also passes with a destructor on the same
+type. Three existing native cleanup/constructor compatibility checks pass.
+The installed destructor case passes on VS Code 1.85 and 1.141 with both
+compilers. The full unit/corpus/editor matrices were not rerun for this delta;
+no compiler source or binary changes were needed. Shared physical anchors and
+the existing ambiguity/fallback boundaries still apply.
+
+Logs: `/tmp/fb-project-destructor-references-{native,providers,compatibility,constructors}.log`
+and `/tmp/fb-project-destructor-references-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`cad85732366c71e9a7c7716ba843f110a2f4e6be8bb85abc120146c615bab252`.
+
+### Project constructor references, 2026-10-17
+
+Find References can now follow the selected constructor across explicit project
+modules and builds with stock FBC or the editor bridge. Anonymous native IDs
+join through shared physical prototypes/bodies, using the existing frozen
+project transaction and source verification. The read-only constructor unit
+reuses native declaration and lifetime/call helpers; none of its implicit or
+type-token sites enters rename validation. Multiline ranges retain their end
+line. Namespace-only NEW receipts no longer masquerade as constructor sites.
+
+The native fixture verifies exact selected-overload locations across three
+modules and two builds, including NEW, implicit argument conversion, guarded
+calls, declarations, and physical deduplication on both compilers. A small
+collector check covers multiline ranges and conflicting constructor families.
+All 318 provider tests, four selected compatibility checks, and the worker's
+rename/publication check pass. The new installed project-reference case passes
+on VS Code 1.85 and 1.141, with both compilers, a closed second module, and
+guarded bodies joined through a shared prototype. No broad unit/corpus/full
+editor rerun was performed for this delta, and no compiler rebuild was needed.
+
+Unrelated build identities without a shared physical declaration remain
+ambiguous and fall back to the current translation unit. This does not establish
+project-wide coverage of every anonymous operation or macro-generated site.
+
+Logs: `/tmp/fb-project-constructor-references-{native,providers,compatibility,ranges,rename}.log`
+and `/tmp/fb-project-constructor-references-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`b3f63f3916c9034729f775483bcb6d86c78db07176433c6d22184d51c25ba16c`.
+
+### Cached native constant and enum hovers, 2026-10-17
+
+Complete saved stock-FBC bindings now answer constant/enum hovers directly,
+including their native value, without acquiring another model or building the
+host source index. The worker only looks up a value when the resolved native
+entry is a unique constant or enum member. Ordinary variable, field, and
+parameter hovers skip that lookup. Missing values, macros, ambiguous bindings,
+dirty documents, and recovery retain their existing fallback paths.
+
+All 324 provider/constant-formatting checks pass. The native check verifies
+constant/enum declaration and reference values and omission of the value field
+for ordinary variables. The targeted installed hover case passes on VS Code
+1.85 and 1.141. No full matrix or broad unit rerun was performed for this delta;
+the previous consolidated checkpoint remains recorded below.
+
+Logs: `/tmp/fb-cached-constant-hover-{before,providers,native}.log` and
+`/tmp/fb-cached-constant-hover-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`d6c21b2e43969b23091552300a13468456a086c4100cd6d1f62b511649f3b648`.
+
+### Single-snapshot symbol-constant hovers, 2026-10-17
+
+Saved-file constant/enum hovers now receive their optional native value in the
+same reply as declaration/type facts. This removes a second request that could
+read a retired snapshot. The existing bounded retry covers the combined read;
+normal hovers do not run the symbol-value lookup. Existing numeric/byte-string
+validation bounds still apply. No compiler or FBC schema change was needed.
+
+The regression rejected the old separate value query. All 324 provider/constant-
+formatting checks pass, including constant snapshot replacement and lifecycle
+guards. One native check verifies requested values for declarations/references,
+enum values, and omission of unrequested data. The targeted installed check
+passes on VS Code 1.85 and 1.141. The preceding 113/113 full
+editor matrix belongs to the previous runtime and was not rerun for this delta.
+At this checkpoint cross-module constructor references were still unfinished: their
+anonymous declaration identities and implicit occurrence sites need a dedicated
+read-only project join, not reuse of editable-name assumptions.
+
+Logs: `/tmp/fb-atomic-constant-hover-{before,providers,native}.log` and
+`/tmp/fb-atomic-constant-hover-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`fc37e051c89be6397df9efe2492cbad8309263a09aa8166216218970d7f975b3`.
+
+### Consolidated validation and expanded-view correction, 2026-10-17
+
+The full 29-file unit run on runtime `5d5ab95d...` executed 1,297 tests:
+1,295 passed and two member-completion fixture cases failed, with no skips or
+cancellations. The fixture returned a model without caching it and expected an
+undefined binding argument rather than the selector's explicit false. Its six
+tests pass after correcting that lifecycle. Six constant-value tests were also
+absent from the runner; they now run by default, and a new smoke guard checks
+coverage of every top-level test file. All 12 fixture/constant checks and all 11
+smoke/grammar checks pass. The large-module test passed in 402 seconds and the
+upstream expression comparison in 150 seconds, with other host jobs left running.
+The source audits cover 72 expression routes in 59 files and 37 call routes in
+186 files without unowned routes or reported drift.
+
+The full VS Code 1.141 run passed 103 checks before exposing a preprocessed-view
+navigation exception. Its inner document had tokens but no per-line index.
+Native document access now derives that index lazily. A new native regression
+also retains physical overload navigation/hover/references and uses view-local
+compiler-bound occurrences for expanded highlights, excluding the sibling
+overload. The existing source/expanded worker parity check passes too.
+
+The next full run passed 104 checks before exposing a separate opening race:
+metadata enrichment retired the captured preprocessed URI during an editor
+await, displaying an expiration message. Show Preprocessed now follows one
+currently published successor while retaining the original source revision,
+build signature, and trust. Repeated replacement is bounded; retired views are
+not permanently aliased. Empty expansion text is also valid content. The new
+race tests cover opening, language assignment, display, edits, context changes,
+trust, and repeated replacement. All 398 focused service/provider/member/constant
+checks pass, along with the two expanded-query checks and the isolated generated-
+values editor scenario. The earlier 341-check transport/provider set also passed.
+
+The full unit command was not repeated after these runtime corrections; its
+earlier broad results are baseline evidence, not a fresh all-green current-
+runtime run. The corrected runtime now passes all 113 packaged-editor checks
+on VS Code 1.85 and 1.141, with both native compiler paths configured. The
+preprocessed navigation/highlight and opening-race scenarios pass in both full
+runs. No compiler or protocol change was needed. Windows validation and the
+broader corpus remain separate gates.
+
+Logs: `/tmp/fb-consolidated-20261017-unit.log`,
+`/tmp/fb-consolidated-20261017-fixture-rerun.log`,
+`/tmp/fb-consolidated-20261017-smoke-grammar.log`,
+`/tmp/fb-consolidated-20261017-expanded-{before,after}.log`,
+`/tmp/fb-consolidated-20261017-fix-focused.log`,
+`/tmp/fb-consolidated-20261017-overloads-fixed.log`,
+`/tmp/fb-expanded-open-retry-{before,after,focused}.log`,
+`/tmp/fb-expanded-open-retry-editor-isolated.log`, and
+`/tmp/fb-consolidated-20261017-editor-final-{1.85,1.141}.log`.
+Corrected runtime fingerprint:
+`2918a4c4e015c6b14e3feb8097a911f0341af7c4e7b40f37f1d055e5c7b9ae08`.
+
+### Cached stock data hover, 2026-10-17
+
+A complete cached stock binding snapshot can now render an unambiguous variable,
+field, or parameter hover directly. With an unchanged snapshot, one native query
+is reused by the existing renderer, avoiding a host source-index parse and another model
+acquisition on that path. Eligibility requires a committed native identity and
+matching physical name; macro identities/signatures, ambiguous sites, dirty
+documents, and partial models retain their existing paths. Snapshot replacement
+uses the existing bounded adapter and retains delivered macro requirements.
+
+The regression reproduced unnecessary model acquisition despite a complete
+cache. It now proves one query and no source parsing/acquisition for each data
+kind. All 318 provider tests pass. A real stock-compiler check distinguishes
+ordinary names from forwarded and same-named function-like macros with full
+macro export disabled. The installed expression/layout/cached-macro check passes
+on VS Code 1.85 and 1.141, including stock and bridge operation. No wall-clock
+speedup is claimed; full unit/corpus/editor matrices were not repeated.
+No compiler, worker protocol, setting, or timeout change was needed.
+
+Logs: `/tmp/fb-cached-scalar-hover-before.log`,
+`/tmp/fb-cached-scalar-hover-native-probe.log`,
+`/tmp/fb-cached-scalar-hover-providers.log`, and
+`/tmp/fb-cached-scalar-hover-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`5d5ab95d1ee9009031d487681f593e29af319bfac06b204af55019975cf272d2`.
+
+### Saved-file supplemental hover recovery, 2026-10-17
+
+Saved-file stock-FBC hovers now use the shared bounded query adapter when adding
+native facts to a source model. One replaced snapshot is followed, and the
+selected successor is retained for later lookups. Expression-only reads retain
+that capability instead of requesting full bindings merely because the producer
+is a stock compiler. Delivered bindings and requested macro data remain required;
+other adapter callers keep their previous default binding policy.
+
+The regression reproduced a disappearing expression hover. It now checks weak
+and binding-backed supplements across replacement, edits, closure, cancellation,
+backend changes, and repeated replacement. All 317 provider tests pass. Older
+hover fixtures now publish returned remote models into their mock cache, matching
+the real service; the conditional-REM fixture confirms native code context first.
+The installed expression-first/layout hover check passes on VS Code 1.85 and
+1.141 with stock FBC and the bridge. Full unit/corpus/editor matrices were not rerun.
+No compiler, worker protocol, setting, or timeout change was needed.
+
+Logs: `/tmp/fb-supplemental-hover-retry-before.log`,
+`/tmp/fb-supplemental-hover-retry-target.log`,
+`/tmp/fb-supplemental-hover-retry-providers.log`, and
+`/tmp/fb-supplemental-hover-retry-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`7d8642ba8139906da32594609b193264a672445483d4c90960315987ec946bfd`.
+
+### Native constructor navigation and occurrences, 2026-10-17
+
+Written NEW and type/alias calls now share argument-constructor navigation's
+committed physical-header reader. Definition selects a body when present,
+Declaration selects a prototype, and Implementation never returns an external
+prototype. Guarded configurations and qualified aliases retain their exact
+compiler-selected sites. Ordinary argument bindings keep precedence over an
+implicit conversion.
+
+The native regression first returned a type instead of a constructor. The
+installed cold-bridge run then exposed a missing upgrade when the closed header
+was not yet in the source index. Native type/constructor navigation results now
+schedule one binding upgrade at a written callee, using the existing snapshot
+adapter. Ordinary procedures keep their fast path and do not load the source
+index for this check. Source hints remain hints, not active-branch evidence.
+No compiler, schema, setting, module, or timeout change was needed.
+
+References/highlights also retain the selected constructor identity, including
+active prototypes and written type/alias callees that lifetime receipts alone
+can miss. Implicit initialization/conversion sites remain visible; repeated
+physical positions are deduplicated. Namespace qualification is not part of the
+constructor token. The bridge's Call Hierarchy graph is unchanged, and these
+read-only occurrence sites are not fed into rename edits.
+
+Cold explicit-call references reuse navigation's bounded upgrade rather than
+returning only trace-visible written calls. Selected constructors bypass the
+project's type-reference lookup. This covers the current translation unit/build
+context; constructor-specific cross-module aggregation remains unfinished.
+
+All 316 provider tests and six selected native checks pass without skips. The
+combined native case includes implicit conversions alongside written calls,
+matching the editor fixture. It covers both compilers/builds, Long/String
+overloads, guarded/external declarations, qualified aliases, missing identities,
+declaration inclusion, and qualifier/value ownership. Compatibility checks retain
+destructor references and constructor hierarchy behavior. A provider test covers
+cold command/reference upgrades and rejects the unrelated project type lookup.
+The strengthened installed-editor check passes on VS Code 1.85 and 1.141.
+It starts with bridge references before navigation/hover/Signature Help can
+warm metadata. Other editor checks were filtered, and full unit/corpus/
+editor matrices were not repeated for this follow-up.
+
+Logs: `/tmp/fb-guarded-constructor-occurrences-before.log`,
+`/tmp/fb-guarded-constructor-occurrences-native.log`,
+`/tmp/fb-guarded-constructor-occurrences-compatibility.log`,
+`/tmp/fb-guarded-constructor-occurrences-destructor.log`,
+`/tmp/fb-guarded-constructor-occurrences-providers.log`, and
+`/tmp/fb-guarded-constructor-occurrences-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`fd8ff61782d291116e247128091714cad7b99e4600f42d3d66b216fccb4ce7ae`.
+
+### Selected constructor hover, 2026-10-17
+
+Constructor hover now shares the committed target and bounded physical-header
+reader used by Signature Help. Guarded/external constructors and qualified
+aliases show the selected overload rather than a type-only hover or a source
+overload list. Only the terminal callee name owns this constructor result;
+namespace qualifiers and argument values retain their own declarations.
+Stock hover acquires native bindings on first use at a recognized type call,
+then keeps the selected native entry instead of refining it through a source
+family. No compiler, schema, setting, module, or timeout change was needed.
+
+The native regression failed before the change with no constructor entry.
+The first installed-editor run then exposed source refinement retaining sibling
+overloads. All 315 provider tests and five selected native tests now pass without
+skips. The native checks cover both compilers/builds, Long/String overloads,
+closed/external headers, qualified aliases, weak identities, argument/qualifier
+ownership, comments/strings, existing navigation, and conditional symbol kinds.
+The strengthened installed-editor check passes on VS Code 1.85 and 1.141.
+Hover precedes Signature Help to verify cold acquisition.
+Other editor checks were filtered; full unit/corpus/editor matrices were not
+repeated for this follow-up.
+
+Logs: `/tmp/fb-guarded-constructor-hovers-before.log`,
+`/tmp/fb-guarded-constructor-hovers-editor-before.log`,
+`/tmp/fb-guarded-constructor-hovers-compatibility.log`,
+`/tmp/fb-guarded-constructor-hovers-providers.log`, and
+`/tmp/fb-guarded-constructor-hovers-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`29c0bc9a839602645c89a18399451784645da2c1ff5e5b5e0644e40159248510`.
+
+### Native constructor Signature Help, 2026-10-17
+
+Constructor signatures now reuse navigation's bounded physical-declaration
+reader. A committed call target and native constructor kind select the overload;
+the reader supplies only the name and parameters within active D headers.
+Guarded, closed headers and external prototypes no longer require an indexed
+local body. The editor keeps the worker's selected signature instead of
+replacing it through source-only constructor refinement. NEW and explicit
+type/alias calls share this path; missing binding identity stays withheld.
+No compiler, schema, setting, module, or production-timeout change was needed.
+
+The regression failed before the change with an empty constructor signature.
+All 315 provider tests and 11 selected native tests now pass without skips.
+The native cases cover stock/bridge compilers, both guarded build configurations,
+Long/String overloads, external declarations, missing identity, existing argument
+navigation, aliases, qualified calls, and constructor inlays/completion. The
+strengthened installed-editor check passes on VS Code 1.85 and 1.141, with the
+header closed and build changes requiring no root edit. Other editor checks were
+filtered; the preceding full 113-check matrix belongs to the previous runtime.
+Full unit/corpus suites were not repeated for this follow-up.
+
+Logs: `/tmp/fb-guarded-constructor-signatures-before.log`,
+`/tmp/fb-guarded-constructor-signatures-native.log`,
+`/tmp/fb-guarded-constructor-signatures-compatibility.log`,
+`/tmp/fb-guarded-constructor-signatures-providers.log`, and
+`/tmp/fb-guarded-constructor-signatures-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`8348a4f9c3932415eb9ee92953980cb6a1990860098dfca061af6dc5526a1fed`.
+
+### Guarded constructor targets and binding-recovery uptake, 2026-10-17
+
+Argument-constructor navigation now joins the compiler's unique implicit-call
+target and constructor F kind to physical D prototype/body records. Constructor
+names have no named B declaration site; source parsing recovers only the exact
+display range within a proven header. Inactive identical-signature branches do
+not acquire targets. Closed headers, bare arguments, and string literals work;
+value bindings retain their own navigation, and prototype-only constructors do
+not gain a local implementation. Existing declaration-reader/cache bounds are
+shared with named navigation and operators, without new compiler query types.
+
+The compiler needed a five-line semantic-only hook in `ast-node-arg.bas`:
+trivial by-value UDT conversions bypass the temporary-copy path that previously
+exported their constructor selection. The hook records the already-selected
+constructor without changing lowering. The new compiler regression verifies
+one receipt per conversion and identical observable constructor side effects
+with semantic output off/full/bindings on GCC and GAS64.
+
+The full editor rerun also exposed a binding upgrade erasing provisional header
+types after an unrelated root error. A missing full-model completeness marker
+now causes one bounded trace-plus-expression recovery analysis, without joining
+graphs from separate invocations. Independent trace expressions keep their
+authoritative status; header recovery stays provisional. Actual unavailable
+binding/macro capabilities survive worker and direct publication. Hover can use
+that current partial trace for types without claiming an identity upgrade.
+
+The partial-trace lexical recovery also covers a cold metadata request that
+publishes a weaker trace while rejecting the identity upgrade. Compiler-negative
+comment contexts remain authoritative; unfinished REM members and keyword-call
+signatures can use proven current trace facts without changing the capability.
+
+Manual Analyze also follows one rejected capture when a closed dependency
+changes during a pass without globally invalidating the service. A focused
+lifecycle test covers source/capture changes and rejects retries after ordinary
+compiler failures, edits, context changes, or cancellation. The installed
+Outline refresh check passes with that behavior, and all 66 analysis-service
+tests pass with the native compiler enabled.
+
+All 520 focused provider/analysis/transport/service checks, nine selected
+worker checks, and the additional manual-analysis lifecycle check pass without
+skips. Three compiler semantic/runtime tests pass against each rebuilt
+executable. The binary exact-facts/all-modes check passes
+against old and new stock compilers. The constructor/native-reader transport
+test is blocked by the existing linter-source extraction of
+`FBLINT_MAX_SEMANTIC_MODEL_IDENTITIES`; the same failure reproduces with the
+previous compiler, so it is not counted as passing. Targeted installed checks
+pass on both VS Code versions, including closed-header build switching without
+source edits. The same-runtime full VS Code 1.85 and 1.141 runs each pass all
+113 checks with both native compilers configured. The Outline test polls
+through a provider's temporary empty response during snapshot replacement and
+still requires the exact final compiler-selected names. Full unit/corpus suites
+and Windows editor validation were not repeated.
+
+The compiler subtree at `a1979b710` matches the previous source checkpoint apart
+from the hook above. Both compilers were rebuilt in isolated directories without
+rebuilding runtime libraries. The validated normal compiler replaced `bin/fbc`
+atomically; its previous executable remains at
+`dist/compiler-native-GKmN5a/fbc-before` in the plugin checkout.
+
+- Stock FBC SHA-256: `635cfa0f887bc149501d42be02c3785b52fd4295a5d82f315add007ec9c8b168`.
+- Bridge SHA-256: `307ddb18093c1ff5f6eaad441d984407aa9830416ac1282c7d8749e17ac6bd6a`.
+- Previous stock SHA-256: `8e64681c746849c1e0934bee9960cbd1375be28b711414297a5986e23c0f8165`.
+
+Logs: `/tmp/fb-guarded-constructor-native-before.log`,
+`/tmp/fb-guarded-constructor-recovery-core.log`,
+`/tmp/fb-guarded-constructor-final-native.log`,
+`/tmp/fbc-trivial-argument-{native,bridge}-tests.log`,
+`/tmp/fbc-trivial-argument-binary-exact.log`,
+`/tmp/fbc-binary-constructor-harness-baseline.log`, and
+`/tmp/fb-manual-source-retry.log`,
+`/tmp/fb-manual-source-retry-service-native.log`, and
+`/tmp/fb-constructor-recovery-validated-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`22c24ce2a50a0af1de965a80259abdbe9d8e855d9ef6db94de3b85eba12ba64d`.
+
+### Constructor navigation and cold source mapping, 2026-10-17
+
+Constructor probes in Definition, Declaration, and Implementation now use the
+shared bounded query adapter. The providers retain their original buffer
+revision through native preparation and binding upgrades, rejecting edited,
+closed, cancelled, backend-switched, or repeatedly replaced requests. The new
+regression reproduced a constructor location being returned after an edit.
+
+The installed check also reproduced cold stock argument-constructor navigation
+returning no target. Native acquisition had bypassed the current source index,
+so the physical declaration mapper could not find its root. Navigation now
+refreshes that source before obtaining the mapping model; the compiler still
+selects the constructor. Analyze and Outline are not prerequisites.
+
+An ordinary argument fallback now reuses the validated binding-probe reply
+instead of repeating the same native query. The strengthened regression
+reproduced two queries and now requires one without weakening upgrade checks.
+No compiler pass, protocol, schema, or production deadline was added or changed.
+
+All 313 editor-feature tests pass without skips. The new installed-VSIX check
+passes on VS Code 1.85.0 and 1.141.0 with clean shutdowns. It tests two implicit
+argument-conversion overloads through all three navigation providers in stock
+and bridge modes, without Analyze or Outline, and verifies unchanged source.
+Other editor checks were filtered out; full unit/editor/corpus suites were not
+repeated for this change. Both compiler executable hashes remain unchanged.
+
+Logs: `/tmp/fb-constructor-query-before.log`,
+`/tmp/fb-cold-constructor-before.log`,
+`/tmp/fb-argument-query-reuse-before.log`,
+`/tmp/fb-constructor-query-core.log`, and
+`/tmp/fb-constructor-query-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`24e6bd70f75310e7b854a7764a1f6f5bfefb82df5788f35f010896840a491605`.
+
+### Primary native hover replacement, 2026-10-17
+
+The primary remote hover query now uses the existing bounded replacement
+adapter. A deterministic regression reproduced an empty hover after another
+provider retired its snapshot. The selected successor stays with the query
+result so later reads retain the same native model. Masked stock identifiers
+preserve full macro bindings already selected for their hover; bridge retries
+do not inherit unrelated macro metadata. Edits, closure, cancellation, backend
+changes, and repeated replacement discard the request. Separate source-mode
+fact enrichment is unchanged.
+
+All 311 editor-feature tests pass without skips, including current/replaced
+bridge facts, stock macro signatures, and request-ending cases. The existing
+installed first-use hover check passes on VS Code 1.85.0 and 1.141.0, covering
+stock/bridge array bounds, storage widths, field offsets, aggregate layout, and
+parameter passing with clean shutdowns. Other editor checks were filtered out;
+full unit/editor/corpus suites were not repeated. No compiler, schema, worker
+protocol, or production deadline changed.
+
+Logs: `/tmp/fb-hover-query-replacement-before.log`,
+`/tmp/fb-hover-query-replacement-core.log`, and
+`/tmp/fb-hover-query-replacement-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`90022c368575e775d3406130af3a2529f4ec647a92a0acd6ac2cd1979230a7d6`.
+
+### First-use bridge hover facts, 2026-10-17
+
+Ordinary bridge hover now requests native declaration bindings before querying.
+A weak trace model could resolve the symbol and display its signature without
+the compiler's array, layout, parameter, and storage facts. Those details no
+longer depend on coloring or another provider warming the cache. Stock hover
+keeps its existing fact-specific and macro acquisition paths; the bridge does
+not request an extra expression or macro capability.
+
+The new regression reproduced a missing storage-width detail on first hover.
+All 310 editor-feature tests now pass without skips. One installed-VSIX check
+passes on each of VS Code 1.85.0 and 1.141.0, covering stock and bridge array
+bounds/storage width, field offset, aggregate size, and parameter passing. The
+test leaves the source document inactive so coloring cannot prepare its first
+binding model, and verifies that the source stays unchanged.
+
+Other editor checks were filtered out; full unit/editor/corpus suites were not
+repeated. Neither compiler executable, schema, nor production deadline changed.
+Logs: `/tmp/fb-first-hover-bindings-before.log`,
+`/tmp/fb-first-hover-bindings-core.log`, and
+`/tmp/fb-first-hover-bindings-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`7e2268da27f0ed37571f8d6107776fd70cce4849b21d26aa854633f49fa92d44`.
+
+### Binding-backed semantic token modifiers, 2026-10-17
+
+Ordinary bridge semantic tokens now request native bindings for access and
+qualifier facts. Trace-only name resolution could supply token kinds but not
+the native write/readonly modifiers. Stock coloring retains its existing macro
+capability requirement; bridge coloring does not add that extra request.
+
+Native token queries also use the shared one-replacement adapter. Deterministic
+regressions reproduced first-use weak-snapshot selection and lost token results
+after replacement. The tests retain stock macro requirements without inheriting
+unneeded macro data from a bridge predecessor, and reject edits, cancellation,
+closure, backend changes, and repeated replacement. Source-only fallback and
+cached source-adapter qualifier reuse are unchanged.
+
+All 309 editor-feature tests pass without skips. The expanded installed-VSIX
+semantic-highlighting check passes on VS Code 1.85.0 and 1.141.0. Each run covers
+stock and bridge modes with both conditional builds, checking active kinds,
+inactive declaration exclusion, macro definitions/uses, readonly qualifiers,
+write modifiers, comments, and unchanged source. Other editor checks were
+filtered out; full unit/editor/corpus suites were not repeated for this change.
+No compiler, schema, transport, or production deadline changed.
+
+Logs: `/tmp/fb-native-token-bindings-before.log`,
+`/tmp/fb-native-token-bindings-core.log`, and
+`/tmp/fb-native-token-bindings-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`2827de038ca9f8cc40de4ceece15970dd9d578b55f2cffbf0c305c68b3b05dd3`.
+
+### Native occurrence queries and access roles, 2026-10-17
+
+Find References and document highlights now use the shared bounded native query
+retry. Deterministic regressions reproduced lost results after snapshot
+replacement and stale project-reference publication after an edit. The new
+checks cover both backends, ordinary and macro names, binding retention,
+read/write rendering, edits, cancellation, closure, backend changes, and repeated
+replacement. Project results and local fallback stop when the original buffer
+request ends.
+
+Installed-editor validation additionally exposed ordinary bridge highlights
+returning only Text roles. The compiler and worker already retain the correct
+roles; the provider had accepted a trace-only snapshot without native bindings.
+Highlighting now requests binding-backed access roles for configured compilers,
+reuses current cached bindings, and does not require unrelated macro metadata.
+No compiler, schema, worker query protocol, or analysis deadline changed.
+
+All 307 editor-feature tests pass without skips. One real-compiler worker check
+passes for module-variable access roles in both backends. The new installed-VSIX
+check passes on each of VS Code 1.85.0 and 1.141.0, covering variable and macro
+reference ranges, writes, compound writes, reads, and unchanged source in stock
+and bridge modes. Other editor checks were filtered out; the full matrix below
+belongs to the preceding runtime and was not repeated for this small follow-up.
+
+Logs: `/tmp/fb-occurrence-snapshot-before.log`,
+`/tmp/fb-occurrence-first-binding-before.log`,
+`/tmp/fb-occurrence-snapshot-editor-features.log`,
+`/tmp/fb-occurrence-roles-native-before.log`, and
+`/tmp/fb-occurrence-snapshot-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`8fe4eb3d2e9d90d95b661182963544b258fa552b5c578b0691ace3907c6a58e5`.
+
+### Editor lifecycle consolidation, 2026-10-17
+
+Full installed-editor runs exposed several related failures that isolated
+feature checks had missed. Unrelated closed/deleted buffers could cancel pending
+analysis, interrupt binding enrichment, or veto a compiler-validated project
+rename. Completion and navigation could also read a retired native snapshot
+after another provider requested stronger facts.
+
+Pending background passes now defer unknown header closures to mandatory worker
+validation of the sources actually consumed. Enrichment waits once when only
+closed buffers changed the captured overlay list. A discarded consumed header
+still invalidates its old pass; a later request may compile the current disk
+contents. Project verification retains the consumed-source inventory and returns
+bounded consumed-buffer indices for final host publication. Unrelated closures
+no longer invalidate edits, while consumed closures, source edits, new dirty
+buffers, changed disk inputs, and redirected targets remain rejected.
+
+Completion, Signature Help, and final definition/declaration/implementation
+queries share bounded replacement handling. The selected successor stays with
+its result, preserving native bindings, explicitly requested macro facts, and
+the stock/bridge backend. Edits, closure, cancellation, backend changes, and a
+second replacement discard the query. Stock implementation lookup and its
+definition fallback use the same adapter.
+
+All 463 focused checks pass without skips. Eleven selected project/worker
+lifecycle checks also pass, including consumed-header rejection, unrelated
+closures, enrichment, changed disk inputs, and edits during final verification.
+The installed VSIX passes all 109 checks on each of VS Code 1.85.0 and 1.141.0,
+using the same runtime with no test filter and clean extension-host shutdowns.
+All 65 packaged payloads match source, including all 50 libraries listed in both
+VSIX builders; archive integrity also passes. This is not a repeat of the complete
+npm/corpus suites or proof of the remaining compiler-grade requirements. Neither
+compiler executable nor production analysis deadlines changed.
+
+Logs: `/tmp/fb-native-consolidation-20261017-core.log`,
+`/tmp/fb-project-unused-buffer-native.log`,
+`/tmp/fb-analysis-closed-enrichment-after.log`,
+`/tmp/fb-project-host-closure-after.log`, and
+`/tmp/fb-native-consolidation-20261017-final-navigation-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`754a563c1e05cc7d995f5d5eb1b660c7a32b572e8b1588b319c564e00c956feb`.
+
+### Guarded types and cursor-relative source visibility, 2026-10-17
+
+Binding-backed type slots now retain same-name conditional declarations until
+exact native declaration-site bindings select the active branch. Candidate
+collection uses type-namespace lookup rather than folding names through value
+completion first. Inactive/unbound sites remain absent, while constructor
+recovery retains its existing conservative conditional policy.
+
+Native tests reproduced cached header types appearing before their include
+after an earlier query below it. Cache reuse now tracks the cursor's interval
+among native root-include sites, rebuilding reachable source only when that
+interval changes. A separate source regression prevents type lookup from using
+a later USING import. No compiler pass, schema change, or deadline was added.
+
+All 394 focused checks pass without skips. Five selected native worker checks
+pass: conditional branch selection, include-boundary movement within one
+snapshot, keyword types, and existing constructor/alias/header behavior. The new
+installed-VSIX check passes on VS Code 1.85.0 and 1.141.0 in stock and bridge
+modes, switching defines in both directions without text edits and verifying
+that completion/navigation agree on the active physical declaration. Full
+editor/unit/corpus suites were not repeated; broader acceptance remains open.
+
+Logs: `/tmp/fb-guarded-types-before.log`, `/tmp/fb-guarded-types-core.log`,
+`/tmp/fb-guarded-types-native.log`, and
+`/tmp/fb-guarded-types-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`0f9b5b756ae86b001595d24d8bbfbab88f0b28cc0bd8749df90a4e9ae8372405`.
+
+### Binding-backed keyword type completion, 2026-10-17
+
+Stock type slots now reuse the existing physical declaration-binding join for
+aggregate/alias, enum, and namespace candidates. Native REM/escape overrides
+preserve source declarations, and returned candidates carry native semantic IDs.
+The slot hint schedules lookup only; missing bindings cannot produce a type.
+Keyword-named qualifiers request stock bindings even at an empty suffix. This
+path does not require expression exports or add constructor arguments. Existing
+constructor recovery retains its aggregate policy and limits.
+
+Native tests also exposed bridge completion losing a committed keyword-named
+namespace owner through the source-only receiver classifier. It now uses the
+native namespace declaration and member/access rules, without overriding proven
+value receivers or changing source-only keyword classification.
+
+All 393 focused checks pass without skips. Three selected real-compiler worker
+checks pass, covering both backends, six keyword type/namespace positions, absent
+binding withholding, and existing constructor aliases/included-header behavior.
+The new installed-VSIX check passes on VS Code 1.85.0 and 1.141.0 in saved stock
+and unsaved bridge modes, including immediate-after-dot suggestions and name-only
+insertion. Source bytes are unchanged. Full suites/corpora and broader conditional
+type/header-scope acceptance were not repeated; those remain separate work.
+Compiler, binary schema, package version, and deadlines did not change.
+
+Logs: `/tmp/fb-stock-type-completion-before.log`,
+`/tmp/fb-stock-type-completion-core.log`, `/tmp/fb-stock-type-completion-native.log`,
+and `/tmp/fb-stock-type-completion-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`6339529c2d46bcd7c03fe8a283a103ed979d8e8c7bdf9defac0d474ce247a621`.
+
+### Type-position completion and unfinished owner recovery, 2026-10-17
+
+`As` and `Extends` completion now uses existing declaration kinds to retain
+types/aliases, namespaces, and type-producing macros. Constructor snippets are
+not inserted into type names; macro expansion templates and bundled type imports
+remain available. The existing context scan handles continued declarations and
+qualified names with a 64 KiB statement bound. TYPEOF operands, initializers,
+string lengths, calling conventions, file operands, and SELECT CASE AS CONST
+remain outside this restriction. NOKEYWORD AS/EXTENDS hints withhold the filter.
+
+Real compiler checks exposed missing namespace suggestions after an unfinished
+type suffix. Direct token projections can now recover native namespace/static
+owner candidates using scoped names, native members/access, and bounded owner
+chains. Local value shadows and failed scalar receivers do not become static
+owners. No binding or expression type is created for the unfinished suffix;
+unproven global/macro prefixes remain withheld. Editor checks also exposed a
+stock constructor-enrichment path that erased ordinary TYPEOF value choices.
+It now retains ordinary nonconditional source candidates with native names first.
+
+All 392 focused checks pass without skips. Three selected native worker checks
+pass, covering stock/bridge contexts, simple/nested unfinished owners, negative
+receivers, absent suffix bindings, and conditional escape/REM regressions. One
+new installed-VSIX check passes on VS Code 1.85.0 and 1.141.0, covering eight type
+slots, four expression/convention boundaries, and unsaved incomplete namespace
+typing in addition to saved stock/source and unsaved bridge menus. Full suites
+and compiler corpora were not repeated. Compiler, schema, package version, and
+deadlines are unchanged; full compiler-grade acceptance remains open.
+
+Logs: `/tmp/fb-type-completion-before.log`, `/tmp/fb-type-completion-core.log`,
+`/tmp/fb-type-completion-native.log`, and
+`/tmp/fb-type-completion-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`586a026e7569b1fbb494a63001fb7df7019c65c4ac6942396ee0fdf2e2b376bd`.
+
+### Procedure-address completion and global lookup, 2026-10-17
+
+Accepting a procedure completion after a same-line `@` now inserts its name, not
+an argument snippet. Qualified names retain their namespace/global prefix and
+replace only the terminal identifier. Documentation and import edits survive.
+Fresh function-like macros keep their required expansion template; written
+macro arguments remain protected by the existing argument-preservation path.
+No target identity, compiler request, or `ProcPtr` keyword inference is added.
+
+Installed-editor validation exposed two related global-completion failures.
+Source/inventory lookup now starts at module scope for an explicit global dot,
+bypassing local shadows and retaining FBC's double-dot escape inside WITH.
+Single-dot WITH receivers, including unresolved ones, never fall back to globals.
+Declared keyword receivers are also withheld from that fallback. Stock native
+value-type enrichment no longer erases globals with an empty receiver query.
+Visible-name/include/access filtering shares the ordinary lookup implementation.
+
+Both address-editing and global-lookup regressions failed before their fixes.
+All 389 focused checks pass without skips. Two real-compiler worker checks pass
+with the expanded callback/address fixture. The installed-VSIX callback check
+passes on VS Code 1.85.0 and 1.141.0, exercising five address forms in saved stock
+and unsaved bridge modes, plus existing signatures, arrays, overloads, and broken
+calls. Full suites and compiler corpora were not repeated. Compiler, schema,
+version, and deadlines are unchanged; full compiler-grade acceptance remains open.
+The installed disabled-keyword regression check also passes on VS Code 1.141.0,
+retaining native REM member completion, signatures, navigation, and comment guards.
+
+Logs: `/tmp/fb-address-completion-before.log`,
+`/tmp/fb-address-global-before.log`, `/tmp/fb-address-completion-core.log`,
+`/tmp/fb-address-completion-native.log`, and
+`/tmp/fb-address-completion-editor-{1.85,1.141}.log`, and
+`/tmp/fb-address-completion-keywords-1.141.log`. Runtime fingerprint:
+`fbaadf5a270df11ce497efc2a90239bc47a3ddbad2965e17179f2b02ec2b275b`.
+
+### Current-buffer inlay hints, 2026-10-17
+
+Type and parameter hints now capture the buffer revision and compiler-analysis
+generation before lookup. Changes during acquisition or querying discard the
+reply after edits, closure, cancellation, or build-context invalidation. Ended
+requests do no parsing or model work. Existing model-change notifications request
+fresh hints, so these guards add no retry, compiler pass, cache, or deadline.
+
+The regression first failed by publishing a type hint after document closure.
+It now covers 40 stock/bridge, type-only/combined, acquisition/query, and state
+change combinations, plus two already-ended requests. All 387 focused checks pass
+without skips. Both installed-editor inlay checks pass on VS Code 1.85.0 and
+1.141.0, retaining type/parameter hints and build-context refresh without edits,
+with clean shutdowns. Full suites and compiler corpora were not repeated for this
+provider-only change; compiler-grade completion remains unproven.
+
+Logs: `/tmp/fb-current-inlay-regression-{before,after}.log`,
+`/tmp/fb-current-inlay-core.log`, and
+`/tmp/fb-current-inlay-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`f2ee88c7ec8d5b1e05d51e35aacf2f936f048e207e5183764ebb8a77130323de`.
+
+### Native array-index Signature Help, 2026-10-17
+
+Indexing now shows explicit `Array` signatures, with separate dimension labels
+and compiler-selected fixed bounds when available. Dynamic arrays retain their
+known rank; descriptor parameters without a fixed rank show `indices...`.
+Lightweight bridge inventories can supply rank without bounds, which remain
+explicitly unavailable rather than inferred from source declarations. Native
+binding facts supply bounds and descriptor passing modes in enriched snapshots.
+Arrays of callbacks remain distinct from callback invocation, and arrays named
+after builtins replace inactive procedure guesses without borrowing intrinsic
+signatures. Cold stock array indexing still does not force binding analysis.
+
+All 386 focused checks pass without skips. Four selected real-compiler worker
+checks pass, covering stock/enriched/lightweight bridge arrays, callable-value
+distinctions, builtin shadowing, and existing compound-call recovery. The expanded
+installed-VSIX callback/array and disabled-keyword/builtin-shadowing checks pass
+on VS Code 1.85.0 and 1.141.0, with clean editor shutdowns. Full
+editor/unit/native-worker/compiler-corpus suites were not repeated for this
+feature. No compiler, schema, version, or timeout changed.
+
+Logs: `/tmp/fb-array-index-signatures-core.log`,
+`/tmp/fb-array-index-signatures-native.log`, and
+`/tmp/fb-array-index-signatures-editor-{1.85,1.141}.log`, and
+`/tmp/fb-array-index-shadowing-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`fb77b22d52fa584d0686abd6a52d5a57366bfe9fd89c8904b72bf699d85fa6f8`.
+
+### Compound callback Signature Help, 2026-10-17
+
+Signature Help now recognizes compound callees without changing navigation's
+call-context scanner. Native expression receipts supply callback types for array
+elements/descriptor parameters, factory results, grouped values, and explicit
+pointer dereferences. The worker matches the callee's ending range rather than
+using the outer call's scalar result or a factory's own parameter list. Short
+expression labels retain parameter offsets; long/multiline labels are generic.
+No indirect runtime target is selected and no source-only type is invented.
+
+Probes confirmed that native callee types exist in complete stock/bridge models
+but disappear when outer arguments are incomplete. Bridge recovery now uses
+scoped native declarations for the tested array, factory, grouped-value, and
+dereference forms. It checks array rank/indices and native pointer depth, and
+unwraps FBC's TYPEOF(callable-type) PTR display form after a proven dereference.
+These are signature-only declaration projections, not reusable expression facts
+or editable bindings. Other complex incomplete callee forms remain withheld.
+No compiler interface, source, binary, schema, or deadline changed.
+
+All 384 focused provider/parser/model/workspace/smoke/transport checks pass without
+skips. Two selected real-compiler worker checks pass, covering complete calls in
+both backends, six incomplete bridge forms, and negative descriptor/rank/scalar/
+missing-dereference cases. The expanded installed-VSIX callback check passes on
+VS Code 1.85.0 and 1.141.0, including the existing callback, array-versus-call,
+overload, and broken-buffer assertions. Source/off mode withholds compound help
+without native facts. Full editor/unit/native-worker/compiler-corpus suites were
+not repeated for this feature.
+
+Logs: `/tmp/fb-compound-callee-final-core.log`,
+`/tmp/fb-compound-callee-native-negative.log`, and
+`/tmp/fb-compound-callee-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`9f32ffed9c3aacd5fe214b16a4e0c739329ff6117cabb9e82c5a43086bdb53b5`.
+
+### Consolidated native-provider editor checkpoint, 2026-10-16
+
+All 106 installed-VSIX checks pass in a complete, unfiltered run on each of
+VS Code 1.85.0 and 1.141.0, on the same final runtime with clean extension-host
+shutdowns. These runs consolidate the accumulated native highlighting, selection,
+type navigation, and hierarchy changes with existing completion, signatures,
+unsaved headers, recovery, macros, contexts, diagnostics, and project refactoring.
+
+The initial 1.141.0 run lost Signature Help for an inferred callback, while its
+isolated rerun passed. New failing-then-passing provider cases expose a discarded
+native signature reply after replacement in both stock and bridge modes. Direct
+and source-overload signature queries now join one successor, retain the selected
+model, and reject stale requests, backend changes, or repeated replacement.
+Binding requirements are preserved; unrelated macro enrichment in a predecessor
+does not become a callback retry requirement. Actual macro calls retain theirs.
+
+The initial 1.85.0 run lost inferred conditional-type member completion. A
+temporary probe run passed, showing the timing dependence. Deterministic tests
+then exposed lost member facts after the base-chain query, and failed acquisition
+despite a valid cached model. Type acquisition now uses the shared selector;
+the entire base-chain/member-fact read retries once on one cached successor.
+Both stages use the same source capture and native model. Churn, edits, closure,
+and cancellation withhold members; unchanged empty results do not retry. All
+temporary probes were removed before both final editor runs.
+
+All 380 focused provider/parser/model/workspace/smoke/transport checks pass
+without skips. Existing macro, constructor, callback, array-versus-call, overload,
+and stale-refinement assertions remain; several old mocks now publish the native
+model they return, matching the real service. No compiler source, binary, schema,
+production deadline, or export bound changed. Full unit/native-worker and heavy
+compiler-corpus suites were not repeated. Compiler-grade completion remains
+unproven against the requirements above.
+
+Logs: `/tmp/fb-signature-snapshot-replacement-repro.log`,
+`/tmp/fb-member-fact-transaction-repro.log`,
+`/tmp/fb-native-provider-consolidation-final-core.log`, and
+`/tmp/fb-native-provider-consolidation-final-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`656043bdbdec3027a8e4fb12fd2212459337ce90f500e3c2d83e430c499e7f18`.
+
+### Current native type navigation and member fallback, 2026-10-16
+
+Type Definition and Type Hierarchy preparation now follow one replaced native
+query, preserving binding requirements and the stock/bridge backend. Type
+Definition retains the selected successor for later expression lookup instead
+of querying a released predecessor. Root freshness checks cover context/model
+acquisition, native replies, and late source-type refinement. Edits, closure,
+cancellation, backend changes, and repeated replacement withhold results.
+
+All 378 focused provider/parser/model/workspace/smoke/transport checks pass
+without skips. Four new failing-then-passing type-provider cases cover both
+providers/backends, replacement, edits during acquisition/query/retry,
+cancellation, closure, backend changes, and retry bounds. An additional member
+completion regression covers a native base-chain replacement when an enclosing
+scalar expression and unavailable source inference cannot identify the receiver.
+
+Both type-navigation installed-VSIX checks pass on VS Code 1.85.0 and 1.141.0
+with clean shutdowns. The inferred-type case retires the native context between
+VAR, TYPEOF, and alias requests without changing text. Existing NOKEYWORD saved
+stock and unsaved bridge scenarios also pass. An initial combined run exposed
+empty stock member completion before its type assertions, although that case
+passed alone. Temporary centralized probes confirmed a stable scalar receiver
+result followed by a discarded native base-chain reply after replacement.
+That query now follows one already-cached binding successor and uses its source
+capture/member facts together, without another compiler pass. The probes were
+removed. A background macro-enrichment request also reached the existing full
+model export bound; that bound and macro-export behavior were not changed here.
+
+Compiler source, binaries, schema, and production deadlines are unchanged.
+Full editor/unit/native-worker/compiler-corpus suites were not repeated.
+Logs: `/tmp/fb-current-type-navigation-{repro,focused,final-core}.log`,
+`/tmp/fb-member-base-chain-replacement-repro.log`,
+`/tmp/fb-current-type-navigation-bound-probe.log`, and
+`/tmp/fb-current-type-navigation-final-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`f46a36238b2349e7f3231c388643cba2cc95172459b9c4866b26774d810a0990`.
+
+### Current-buffer native selection ranges, 2026-10-16
+
+Expand Selection now captures the document version before parsing source and
+acquiring native expression facts through the shared model selector. Edits,
+closure, and cancellation discard the request rather than mapping old offsets
+into a changed buffer. A remote query follows one already-cached replacement;
+repeated replacement or unavailable native facts retain structural source
+selection only when the buffer is unchanged. This retry adds no compiler pass.
+
+All 373 focused provider/parser/model/workspace/smoke/transport checks pass
+without skips. Regressions failed before the change for a superseded native
+query and an edit during acquisition. They now cover both asynchronous stages,
+closure, cancellation, unchanged source fallback, native nested spans, and the
+two-query limit during model churn. A stricter Position-only mock also reproduces
+the real editor API contract.
+
+The first installed-editor native-expression check exposed plain worker range
+endpoints being passed directly to TextDocument.offsetAt, rejected by VS Code
+1.85.0. Validated endpoints now become VS Code Positions at that boundary. Both
+selection checks pass on VS Code 1.85.0 and 1.141.0 with clean shutdowns. The
+extended case proves native multiplication/containing-sum selection from two
+carets in a saved module, alongside existing delimiter, statement, scope, and
+comment behavior. Source text and disk contents remain unchanged. No compiler
+source, schema, deadline, or export format changed. Full editor/unit/native-worker
+and compiler-corpus suites were not repeated.
+
+Logs: `/tmp/fb-selection-freshness-repro.log`,
+`/tmp/fb-selection-position-repro.log`, `/tmp/fb-selection-freshness-final-core.log`,
+and `/tmp/fb-selection-freshness-final-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`9ff1725e6e85c928c3cc0c85fa3fa34fcba32edff8123ae42b02e091479bb207`.
+
+### Native stock-FBC semantic highlighting, 2026-10-16
+
+Ordinary saved stock-FBC files now request native symbol and macro bindings for
+semantic tokens, without requiring a NOKEYWORD option. Previously the shared
+model selector took the source fallback for these requests even when native
+bindings were cached. Coloring now uses the compiler-selected active declaration
+kinds, readonly qualifiers, access roles, and macro definitions/uses. No separate
+expression pass or new compiler export was added. The existing on-demand service,
+snapshot cache, size/work limits, and source fallback remain in place. Macro
+metadata makes these snapshots larger than compact symbol-only models; it is
+required to avoid dropping existing macro coloring. No responsiveness claim is
+made for large macro-heavy modules in this checkpoint.
+
+All 371 focused provider/parser/model/workspace/smoke/transport checks pass
+without skips. The new failing-then-passing provider regression forbids source
+guessing for ordinary stock tokens, checks both binding capabilities, and covers
+edits, closure, and cancellation during acquisition/query. All three highlighting
+installed-VSIX checks pass on each of VS Code 1.85.0 and 1.141.0 with clean shutdowns.
+The new cold-request case switches one name between variable/function builds,
+excludes inactive declarations, and checks native macro definitions/uses,
+readonly values, assignment markers, comments, and unchanged disk contents.
+Existing NOKEYWORD and source/bridge callable-owner checks remain green.
+
+The first broader 1.141.0 run passed the stock coloring cases but returned an
+empty callable-owner hierarchy item; that check passed in isolation. A separate
+deterministic provider regression exposed an unretried bridge Prepare replacement.
+Preparation now shares the existing bounded native query retry and checks root
+freshness around context/model acquisition and its common query. Later editor
+reruns pass. A macro-specific editor regression also exposed the compact-model
+omission, corrected by requesting the existing macro-binding capability.
+Full editor/unit/native-worker/compiler-corpus suites were not repeated.
+
+Logs: `/tmp/fb-stock-native-coloring-{repro,macro-core}.log`,
+`/tmp/fb-native-prepare-replacement-repro.log`, and
+`/tmp/fb-stock-native-coloring-complete-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`eba948bca271b9f067d8630add80494e1b7434692a805359e81bbf70ec890e89`.
+
+### Native Call Hierarchy model refresh, 2026-10-16
+
+Incoming and outgoing tree expansion now reacquires expired native snapshots
+through the existing on-demand service instead of silently taking the source
+call-graph path. Queries follow one concurrent replacement, preserving the
+original model's binding requirement, physical declaration position, native
+targets, and mapped call ranges. Current empty results do not retry. Edits,
+closure, cancellation, and repeated replacement withhold results. Ordinary
+methods retain their inexpensive weak-model path; stock-sidecar and source-only
+adapters keep their existing behavior. No compiler export or schema changed.
+
+All 369 focused provider/parser/model/workspace/smoke/transport checks pass
+without skips. Two new failing-then-passing provider cases cover both directions
+with cache misses, replacement, empty results, freshness, and retry bounds. The
+weak-destructor fixture now publishes its upgraded model as the real service
+does, while still asserting that ordinary methods do not request that upgrade.
+Three selected provider checks also pass after strengthening the capability
+assertion. All seven Call Hierarchy installed-VSIX checks pass on each of VS Code
+1.85.0 and 1.141.0, with clean shutdowns. The native editor case retains items
+across a compiler-context change and verifies direct and macro-mapped calls
+without preparing the items again. Existing closed-document, source, stock,
+constructor, and destructor coverage remains green. Other editor checks were
+filtered; full unit/native-worker/compiler-corpus suites were not repeated.
+
+Logs: `/tmp/fb-call-hierarchy-refresh-{repro,core,unit}.log` and
+`/tmp/fb-call-hierarchy-refresh-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`610f4cc121ecedbb5a630ea84a5686fb1c5d3cf793b1beec40686261181dbfbc`.
+
+### Consolidated operator and hierarchy editor checkpoint, 2026-10-16
+
+All 105 installed-VSIX checks pass in a complete, unfiltered run on each of
+VS Code 1.85.0 and 1.141.0. Both extension hosts shut down cleanly. These runs
+cover the accumulated guarded/external operator changes alongside signatures,
+completion, navigation, references, hierarchy, unsaved roots/headers, recovery,
+contexts, diagnostics, formatting, brackets, and project refactoring.
+
+The first 1.141.0 pass exposed a native Type Hierarchy race, also reproducible
+in isolation. A temporary centralized probe confirmed that an Outline binding
+upgrade replaced the queried snapshot before its reply returned. The remote
+model correctly discarded the stale reply, but hierarchy expansion treated it
+as an empty result. Supertypes and subtypes now request current binding models
+for open buffers and retry once after replacement, using physical declaration
+positions rather than stored native IDs. The probe was removed. Unchanged empty
+results do not retry; edits, closure, cancellation, and repeated replacements
+still withhold results.
+
+All 367 focused provider/parser/model/workspace/smoke/transport checks pass
+without skips. Two failing-then-passing provider regressions cover both hierarchy
+directions, freshness, empty results, and the retry bound. The previously failing
+installed-editor case and both complete editor reruns pass. Compiler binaries,
+source, schema, and deadlines were not changed. Full unit/native-worker and
+compiler-corpus suites were not repeated; the remaining compiler-grade
+requirements and cross-root identity joins remain open.
+
+Logs: `/tmp/fb-type-hierarchy-replacement-{repro,fixed,core}.log`,
+`/tmp/fb-type-hierarchy-replacement-editor-1.141.log`, and
+`/tmp/fb-native-operators-consolidated-editor-{1.85,1.141}.log`. The failed editor
+probe is recorded in `/tmp/fb-native-hierarchy-editor-probe-1.141.log`.
+Runtime fingerprint:
+`1e8a67c2d706760e11483e78cfcf202f5cdd635bd92df9506dcb754785552d13`.
+
+### Native operator incoming Call Hierarchy, 2026-10-16
+
+Guarded/external operator items prepare from compiler-proven declarations and
+index receipts. Declaration-name requests explicitly acquire native bindings
+even when a qualified indexer header has no call frame. Incoming calls re-resolve
+the physical declaration in the current snapshot, reject changed signatures,
+and group native reference ranges using the existing recognized source caller
+scopes. Opaque item data is not required, and native IDs are not carried across
+model replacements. Cross-root joins and unresolved caller scopes remain open;
+outgoing-call handling was not expanded here.
+
+All 365 focused checks and six selected query/provider/native cases passed.
+Failing-then-passing regressions cover guarded indexer call/prototype/body origins,
+module and named-function callers, omitted item data, overload isolation, and
+stale item signatures. The expanded guarded-operator installed-VSIX check passed
+on VS Code 1.85.0. All seven operator-related editor checks passed on 1.141.0,
+including existing namespace/outgoing, signature, navigation, and assignment
+receipts. Complete editor/native-worker/compiler-corpus suites were not repeated.
+No compiler changes or additional export formats were needed.
+
+Logs: `/tmp/fb-native-operator-incoming-{repro,body-repro,focused,core}.log` and
+`/tmp/fb-native-operator-incoming-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`a27f6df62de9d69d084013477e69a7161a1e490725f72955e730ae065b7461a3`.
+
+### Qualified operator owner bindings, 2026-10-16
+
+Shared operator/indexer declaration probes now match only the terminal entry
+span. The written owner in a qualified body remains a type reference rather
+than incorrectly selecting the operator. Model offsets preserve compatibility
+with lightweight document facades used by Call Hierarchy.
+
+All 365 focused checks passed. Six source navigation variants cover Cast/indexer
+owners with and without namespaces, preserve operator-token targets, and reject
+an owner-type Call Hierarchy item. The source regression failed before the fix;
+the installed-VSIX check passed on VS Code 1.85.0 in source-only, stock-FBC, and
+bridge modes. VS Code
+1.141.0 and complete editor/native-worker/compiler-corpus suites were not repeated
+for this declaration-span change. No compiler changes were needed.
+
+Logs: `/tmp/fb-operator-owner-{repro,focused,core}.log` and
+`/tmp/fb-operator-owner-editor-1.85.log`. Runtime fingerprint:
+`b79e3b824541d1157e5bc303351ba90d73bd9223ea026245a52352d4d950d29b`.
+
+### Native operator query target filtering, 2026-10-16
+
+Operator reference/highlight queries now send the selected snapshot's native
+symbol to the worker. Bulk collection filters physical ranges before applying
+the existing 5,000-site budget, then retains all targets at each matching range
+so ambiguity is not hidden. Unfiltered queries and the matching target's limit
+are unchanged. No compiler pass, export, or query type was added.
+
+All 365 focused checks and five selected query/provider/native cases passed.
+The failing-then-passing regression covers 5,001 unrelated sites, absent and
+invalid targets, matching-target overflow, and ambiguous receipts in both native
+collection paths. The stock-FBC provider case verifies filter forwarding. The
+installed-VSIX guarded-operator check passed on VS Code 1.85.0. VS Code 1.141.0
+and complete editor/native-worker/compiler-corpus suites were not repeated for
+this worker-query change. Package contents and integrity were verified.
+
+Logs: `/tmp/fb-operator-target-filter-{repro,unit,focused,core}.log` and
+`/tmp/fb-operator-target-filter-editor-1.85.log`. Runtime fingerprint:
+`ce322f66b5d70f2d39aa69caabed3213d7c77d828a98750c785d88d05f808a45`.
+
+### Guarded operator navigation and native references, 2026-10-16
+
+Selected indexer and ordinary operator receipts carry bounded physical D
+prototype/body ranges for the selected native symbol. Guarded targets use exact
+source ranges and declaration roles, including bodies using type aliases.
+Operation and typed-expression selection prefer a known body but retain a
+proven prototype when an external callee has no P body. Declaration-only
+call-site hover, references, highlighting, and navigation therefore use the
+native identity too. Call and declaration origins share the navigation adapter.
+Go to Declaration selects native prototypes while definition and implementation
+navigation retain the body, including requests from guarded prototypes or bodies.
+Definition falls back to a proven prototype when no local body exists, while
+implementation stays empty. Compiler-known unindexed bodies retain physical
+header jump targets. Existing unconditional navigation to indexed implementations
+in other units is preserved. Indexer Signature Help and hover select the active
+prototype. Prototypes and bodies remain separate physical sites even when the
+source model assigns them one family ID; distinct same-line sites remain
+ambiguous. Older receipts retain their previous fallbacks. No compiler changes
+were needed.
+
+Call-site references and highlights now carry the selected receipt's native
+identity and its own compiler snapshot, including a replacement obtained during
+indexer binding acquisition. Only native-observed uses and physical declarations
+are returned; source-reference guesses cannot introduce inactive or sibling
+overloads. Native operation receipts retain priority with the typed-expression
+fallback. Edits, closure, and cancellation discard asynchronous results. These
+results are scoped to the selected compilation snapshot.
+
+References/highlights also resolve guarded prototype and body origins through
+native F operator kinds and physical D header ranges. Anonymous operators retain
+their kind without a named B binding. Source syntax gates the operator name;
+parameters and qualified owners are not treated as operator origins. An explicit
+negative native lookup cannot fall back to inactive or ambiguous source guesses.
+Header requests require the selected translation unit/build context. External
+operators retain native call receipts without a local P body. Cross-root
+operator-reference joins were still unfinished at this checkpoint.
+
+All 365 focused provider/parser/model/workspace/smoke/transport checks passed.
+Eleven selected query/provider/native cases also passed. The external-call-site
+regression failed before the change and now retains the stock compiler's
+prototype without a local body. Existing tests cover connected source families,
+both receipt forms, declaration/body round trips, unindexed body targets,
+ambiguity, inactive declarations, and freshness. The expanded installed-VSIX
+guarded-operator check passed on VS Code 1.85.0 and 1.141.0. Declaration-only
+indexer and binary calls now verify hover, Definition/Declaration, an empty
+Implementation result, repeated references, and highlights while excluding
+same-result Long/Double siblings. Earlier prototype/body and context checks remain.
+Complete editor, native-worker, and compiler-corpus suites were not repeated.
+Compiler source, binaries, schema, and deadlines are unchanged.
+
+Logs: `/tmp/fb-external-operator-calls-{repro,focused,unit}.log` and
+`/tmp/fb-external-operator-calls-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`cb0eb54a731f406a3fce2ec6aa2ab21f46105ca0811a1ee366d9bf407533bb84`.
+
+### Nested operator receipt selection, 2026-10-16
+
+Operator-expression query compaction now retains physical UTF-16 offsets. The
+at-position query previously calculated widths from missing offsets, discarding
+all overlapping receipts. It now selects the innermost native range and retains
+equal-width ambiguity. A failing-then-passing query regression covers nested,
+multiline, Unicode-offset, provisional, and equal-width cases. All 363 focused
+provider/parser/model/workspace/smoke/transport checks also passed without skips.
+The expanded configured-normal-FBC installed-VSIX check passed on VS Code 1.85.0
+and 1.141.0 with clean shutdowns: nested indexers retain both signature choices,
+activate the inner Double overload, and navigate independently to inner Double
+and outer Long bodies. Complete editor, native-worker, and compiler-corpus suites
+were not repeated; compiler source, binaries, schema, and deadlines are unchanged.
+Guarded indexer prototype mapping was not part of this checkpoint; see the
+follow-up above.
+
+Logs: `/tmp/fb-nested-operator-{repro,fixed,focused}.log` and
+`/tmp/fb-nested-operator-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`89e904a22a832900e1c70289781a68c46c4a80d045b1319af2b946fe15f06602`.
+
+### Conditional operator target follow-up, 2026-10-16
+
+Committed native operation and typed-expression targets now accept conditional
+operators at their reported physical procedure sites. The mapping must identify
+one source entry; multiple operators on the reported line remain ambiguous.
+Provisional entries and key-only operator joins keep their previous safeguards.
+No signature or return-type inference is used to choose an inactive branch.
+
+All 363 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. The new regression failed before the change and now verifies both
+receipt paths against identical declarations in alternative branches, including
+provisional and ambiguous-entry rejection. The expanded installed-VSIX NOKEYWORD
+check passed on VS Code 1.85.0 and 1.141.0 with clean shutdowns. It verifies hover
+and Go to Definition for guarded-header operator overloads with identical return
+types. These are targeted editor runs; complete editor, native-worker, and
+compiler-corpus suites were not repeated. Compiler source, binaries, schema, and
+deadlines are unchanged.
+
+Logs are `/tmp/fb-conditional-operators-focused.log` and
+`/tmp/fb-conditional-operators-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`119af4a3f76688e6445a04717822be7684da6cb9e6b224d0ef771d90503fd987`.
+
+### Conditional call declaration follow-up, 2026-10-16
+
+Committed call selection now accepts conditional source declarations at exact
+native-selected physical sites. An ABI signature alone cannot admit an inactive
+branch with the same declaration. Existing key-only joins keep their previous
+conditional/provisional safeguards. This fixes overload hovers through guarded
+headers without inferring the callee from its return type.
+
+All 362 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. A regression checks both possible native-selected branches of
+identical conditional signatures. The expanded installed-VSIX NOKEYWORD check
+passed on VS Code 1.85.0 and 1.141.0 with clean shutdowns, including a guarded
+header whose two overloads return the same type. These are targeted editor runs;
+complete editor, native-worker, and compiler-corpus suites were not repeated.
+Compiler source, binaries, schema, and deadlines are unchanged.
+
+Logs are `/tmp/fb-conditional-call-sites-focused.log` and
+`/tmp/fb-conditional-call-sites-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`b4c6966eef0c7614352fef7d5acdc51a31d3314f578534b09f0733cf6c696c05`.
+
+### Native overload evidence priority follow-up, 2026-10-16
+
+Shared stock overload selection now checks available committed call bindings
+before expression return-type matching. The cursor's type can belong to an
+argument or conversion, so it cannot override a proven callee. Weak models keep
+their existing fallback without an upfront binding upgrade. Indexer candidates
+query typed index receipts directly, omitting unrelated expression and ordinary
+callee queries. Missing index receipts remain unselected.
+
+All 361 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. New direct regressions verify committed identity precedence and
+one dedicated index query without expression probing. The configured-normal-FBC
+installed-VSIX check passed on VS Code 1.85.0 and 1.141.0 with clean shutdowns,
+including ordinary and same-result overloads, indexers, navigation, and hierarchy.
+These are targeted editor runs; complete editor, native-worker, and compiler
+corpus suites were not repeated. Compiler source, binaries, schema, and deadlines
+are unchanged.
+
+Logs are `/tmp/fb-native-overload-priority-focused.log` and
+`/tmp/fb-native-overload-priority-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`75086d1879039e66342c595aa748e318c64d60115ccc6ec8b4b9b8a90d0fbcbb`.
+
+### Hover refinement freshness follow-up, 2026-10-16
+
+Hover now checks the requesting document after compiler acquisition, native fact
+queries, and late operator/overload refinement, and before rendering. A failing
+regression reproduced an old source declaration being returned after an edit
+made compiler acquisition unavailable. Edited, closed, or cancelled requests now
+stop before further snapshot lookup or presentation. Already-cancelled requests
+do not read source lines. Current source-only hovers still work without native
+data; no new compiler request, query type, or infrastructure was added.
+
+All 359 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. Deterministic request-state cases cover current, edited, cancelled,
+and closed documents, plus absence of subsequent cache lookup and pre-cancelled
+source reads. Editor, native worker, and full suites were not repeated for these
+provider-only guards. Compiler source, binaries, schema, and deadlines are
+unchanged. The 1.20.5 VSIX payload and archive were verified against source.
+Log: `/tmp/fb-hover-freshness-focused.log`. Runtime fingerprint:
+`0a5988c5011ec6d585964042e1a62c21ea64305562ff6c116fde4c05d6f12620`.
+
+### Stock hover mixed-kind identity follow-up, 2026-10-16
+
+Ambiguous source hover declarations now request native bindings up front,
+including mixtures of procedures and values. The earlier guard upgraded only
+all-non-callable ambiguities. A regression reproduced procedure return-type
+rescoring for a conditional name whose active build declares a scalar. Native
+identity now selects that scalar without relying on another provider's cached
+bindings. Unambiguous source hover acquisition is unchanged.
+
+All 358 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. One compiler/model check verifies that expression-only output
+reports Long without a symbol entry while binding output identifies the active
+variable. The expanded installed-VSIX NOKEYWORD check passed on VS Code 1.85.0
+and 1.141.0 with clean shutdowns. The configured-normal-FBC regression check
+also passed on 1.85.0. These are targeted runs; the complete editor matrices in
+the preceding checkpoint were not repeated for this binding-hint change.
+Compiler source, binaries, schema, and deadlines are unchanged.
+
+Logs are `/tmp/fb-mixed-symbol-hover-focused.log`,
+`/tmp/fb-mixed-symbol-hover-native.log`,
+`/tmp/fb-mixed-symbol-hover-editor-{1.85,1.141}.log`, and
+`/tmp/fb-mixed-symbol-hover-stock-regression.log`. Runtime fingerprint:
+`a9e2dbe1f6abd4df5654f77e30fb08c98d5f393f6380d4559ba2b425c4997b01`.
+
+### Consolidated packaged-editor checkpoint, 2026-10-16
+
+All 104 installed-VSIX checks pass in one complete run on each of VS Code
+1.85.0 and 1.141.0, without filters or skipped checks. Both extension hosts shut
+down cleanly. These runs cover the accumulated signature/completion changes
+alongside navigation, symbols, macros, contexts, unsaved roots/headers, recovery,
+diagnostics, formatting, bracket behavior, hierarchy, and project refactoring.
+
+The full pass exposed a real cached-stock indexer regression: function-pointer
+scheduling forced square-bracket requests onto a native-only path without its
+source operator candidates. Excluding indexers from that scheduling restores
+the existing native operator-selection path, including same-result overloads.
+A failing provider regression and failing installed-editor case now pass.
+All 357 focused provider/parser/model/workspace/smoke/transport checks pass
+without skips. Full unit and compiler-corpus suites were not repeated here.
+
+Several editor assertions still expected snippets inside already-written call
+arguments or only one committed overload. They now assert name-only edits at
+written calls, fresh-site placeholders, and both alternatives with the native
+target active. Word-based Text items cannot satisfy the affected name-only
+completion assertions. No compiler source, binary, schema, or deadline changed.
+This consolidates editor evidence, not every remaining compiler-grade requirement.
+
+Logs are `/tmp/fb-consolidated-signature-focused.log` and
+`/tmp/fb-consolidated-signature-editor-{1.85,1.141}.log`. The targeted stock
+regression logs are `/tmp/fb-cached-index-signature-repro.log` and
+`/tmp/fb-stock-cached-index-editor-fixed.log`. Runtime fingerprint:
+`d4388f670082d3a3fb21f0f72d73710deb076a1df0a25b8c2b1377ac20245d0c`.
+
+### Native callable-type precedence follow-up, 2026-10-16
+
+Late stock signature probes now use native callable-value and macro payloads,
+not just selected declaration sites. A conditional source model can contain two
+procedure guesses alongside an active function pointer. The native pointer type
+now replaces those guesses and stops another return-type/overload probe. Direct
+native requests and late stock probes share conversion, retaining anonymous
+parameter labels and their UTF-16 offsets without inventing a runtime target.
+
+All 356 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. Four selected compiler/model checks passed, including conditional
+callbacks in stock/full/trace-only modes, existing callable types, value
+shadowing, and macro signatures. The expanded installed-VSIX NOKEYWORD check
+passed on VS Code 1.85.0 and 1.141.0 with clean shutdowns, verifying one native
+callback signature and parameter label offsets on a fresh conditional source
+file alongside the existing cases. Other editor checks were filtered out;
+complete suites were not repeated. Compiler source, binaries, schema, and
+deadlines are unchanged.
+
+Logs are `/tmp/fb-native-callable-precedence-focused.log`,
+`/tmp/fb-native-callable-precedence-native.log`, and
+`/tmp/fb-native-callable-precedence-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`4c2cf55969c8d58db6577f4d20a2c2865b8e4f43b162eeb70cb17c81c09baccb`.
+
+### Native value precedence over source overload guesses, 2026-10-16
+
+The source-mode stock signature probe now discards procedure candidates when
+native data identifies a value. A real source parse of conditional Abs
+declarations returned two procedures and an array; even after FBC selected the
+array, the editor previously rendered the inactive procedure signatures. Native
+value entries now replace those guesses. Sparse replies can instead select the
+source value through an exact declaration-site match. Values absent from the
+source index are also retained, without another return-type or overload probe.
+Actual native procedure selections still preserve the source overload list.
+
+All 355 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. Four selected compiler/model checks passed, including conditional
+array identities across stock/full/trace-only modes and overload regressions.
+The expanded installed-VSIX NOKEYWORD check passed on VS Code 1.85.0 and 1.141.0
+with clean shutdowns, checking a fresh saved conditional source file alongside
+its existing native keyword, value-shadowing, and recovery cases. Other editor
+checks were filtered out; complete suites were not repeated. Compiler source,
+binaries, schema, and deadlines are unchanged.
+
+Logs are `/tmp/fb-native-value-precedence-focused.log`,
+`/tmp/fb-native-value-precedence-native.log`, and
+`/tmp/fb-native-value-precedence-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`f621815902a2374d9c3f01e4a288f4a955a156b191488e2d6cb83cd5d40c638a`.
+
+### Signature Help builtin shadowing follow-up, 2026-10-16
+
+Reference signatures no longer override a resolved non-callable name or a
+positive native selection whose signature metadata is unavailable. An array
+named Abs previously displayed intrinsic ABS overloads. Stock parenthesized
+callee receipts also cover indexing; queries now retain the selected value
+declaration and do not report its symbol as a selected procedure. Source-only
+arrays use the same presentation guard. Genuine unbound intrinsics retain
+reference help, including after an independently failed scalar call.
+
+All 354 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. Five selected compiler/model checks passed, including stock and
+full/trace-only bridge array identities, broken scalar calls, callback signatures,
+and overload regressions. The expanded installed-VSIX NOKEYWORD check passed on
+VS Code 1.85.0 and 1.141.0 with clean shutdowns. It asserts no intrinsic help for
+the bound array or scalar and preserves genuine SIN help, alongside its existing
+keyword, recovery, member, and type-navigation cases. Other editor checks were
+filtered out; complete suites were not repeated. Compiler source, binaries,
+schema, and deadlines are unchanged.
+
+Logs are `/tmp/fb-builtin-shadow-signature-focused.log`,
+`/tmp/fb-builtin-shadow-signature-native.log`, and
+`/tmp/fb-builtin-shadow-signature-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`0aa4cdd8fc857ffddfa4385b2d6788d5d7acd4e1cc86afadc27d99874990e09c`.
+
+### Native keyword-named Signature Help follow-up, 2026-10-16
+
+Bare-call Signature Help now consults available native models before the
+source-only keyword guard. Generated declarations can be absent from the source
+index even when the compiler supplies their complete signature. Cached bridge
+models, including lightweight snapshots, are reused without a binding upgrade.
+Explicit NOKEYWORD hints can acquire native bindings on first use; they only
+schedule lookup and do not authorize a callable. Ordinary source-only keyword
+triggers retain their existing guard. A REM-only probe already passed before
+this change; the reproduced failure involved an ordinary keyword such as IF.
+
+All 353 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. One selected worker check covers stock physical declarations,
+generated full/trace-only bridge declarations, and incomplete calls. The expanded
+installed-VSIX NOKEYWORD check passed on VS Code 1.85.0 and 1.141.0 with clean
+shutdowns, including bare, parenthesized, continued and incomplete IF calls and
+first-use acquisition without preceding REM context. Existing comment/string,
+member, and type-navigation assertions remain covered. Other editor checks were
+filtered out; complete suites were not repeated. No compiler source, binary,
+schema, or deadline changed.
+
+Logs are `/tmp/fb-keyword-callee-focused.log`, `/tmp/fb-keyword-callee-native.log`,
+and `/tmp/fb-keyword-callee-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`931c464130eba9938b6b927d94ac0b85db44ea6657a6331dab3bddcc9609595b`.
+
+### Signature Help refinement freshness follow-up, 2026-10-16
+
+Signature Help now rejects an edited, cancelled, or closed requesting document
+after asynchronous source refinement. A regression reproduced stale constructor
+help after workspace indexing outlived the request. Constructor lookup now stops
+before reading the source model in that case. Source-mode overload selection
+also stops when a native probe correctly returns no result for a stale request,
+instead of starting another probe or rendering the old source candidates.
+Already-cancelled requests do not copy the document text.
+
+All 352 focused provider, parser/model, workspace-index, smoke, and binary
+transport checks passed without skips. Deterministic provider cases cover current
+requests and edits/cancellation/closure during constructor refinement and stock
+overload selection, including the absence of further lookups. Editor, native
+worker, and full suites were not repeated for this provider-only guard change.
+Compiler source, binaries, and deadlines are unchanged. The 1.20.5 VSIX was
+rebuilt and its 65 payloads verified against source, with a clean archive check.
+Log: `/tmp/fb-signature-freshness-focused.log`. Runtime fingerprint:
+`834c0abc9700c2fa1b892e82cd9c9e5de33bde49ab73677dd914bba16b6bad03`.
+
+### Cached stock-FBC overload alternatives follow-up, 2026-10-16
+
+Cached stock binding models now retain public overload alternatives through
+explicit native `overload-next` links while keeping FBC's selected target active.
+Native procedure kinds separate property getters/setters. Binding-event order
+excludes later declarations, including header declarations. This ordering is
+audited for the 1.20.5 producer family, not assumed for every schema-27 producer.
+Unknown producers and cyclic, conflicting, or oversized chains keep the selected
+signature. A selected private/protected overload remains available; other
+restricted siblings still need caller-access proof and are not added here.
+No compiler source, binary, schema, or extra analysis pass changed.
+
+All 350 focused provider/parser/model/workspace/smoke/transport checks passed
+without skips. Seven selected compiler/model checks passed, covering both
+numeric choices, headers, namespaces, bare calls, public methods, inaccessible
+siblings, property roles, later declarations, unknown producers, and chain
+bounds, alongside existing bridge, REM, and macro regressions. The expanded
+installed-VSIX signature check passed on VS Code 1.85.0 and 1.141.0 with clean
+host shutdowns, verifying both cached stock overload choices and the existing
+bridge/callback/recovery cases. Other editor checks were filtered out; complete
+suites were not repeated.
+
+Logs are `/tmp/fb-stock-overload-family-focused.log`,
+`/tmp/fb-stock-overload-family-native.log`, and
+`/tmp/fb-stock-overload-family-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`c97d01a6e67c3185beef4af32db30beba19bf850dfe6196391035e491fcf37a1`.
+
+### Native REM contexts and cached stock signatures follow-up, 2026-10-16
+
+Completion and Signature Help now use native lexical facts after conditional
+NOKEYWORD REM identifiers. Accepted option lines also preserve physical tokens
+in recovery snapshots, where failed statements have no committed bindings.
+Real string/comment boundaries remain intact, including block comments opened
+after a disabled keyword. Stock member completion reaches its existing native
+receiver-type lookup when source-only masking lost the receiver.
+
+Cached stock binding models now return the selected procedure's signature from
+the existing exact native declaration lookup, preferring physical prototypes.
+The reply retains declaration sites for source-mode overload selection. Neither
+change guesses types, selected call targets, or bindings for unfinished names.
+Compiler source, binaries, schema, and deadlines are unchanged.
+
+All 350 focused provider, parser/model, workspace-index, smoke, and transport
+checks passed without skips. Six selected compiler/model checks passed, including
+stock overload and macro regressions. The expanded installed-VSIX NOKEYWORD
+check passed on VS Code 1.85.0 and 1.141.0 with clean host shutdowns. It covers
+saved stock input, BOM-bearing unsaved bridge buffers, actual incomplete member
+prefixes and missing arguments, and comment/string/type-navigation negatives.
+The unfinished field still has no definition. Other editor checks were filtered
+out; complete suites were not repeated.
+
+Logs are `/tmp/fb-rem-context-focused.log`, `/tmp/fb-rem-context-native.log`, and
+`/tmp/fb-rem-context-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`7022b2bc8a4bd1f71381d7c1245dea5e307175fc7fd77a9d8aa0cf2f76f5bbcb`.
+
+### Bare-call completion argument preservation follow-up, 2026-10-16
+
+Callable completion also preserves written arguments in statement-head bare
+calls. The existing Signature Help parser must identify the exact edited name
+as the bare callee; declarations, assignment targets, and nested argument names
+do not qualify. Qualified and pointer methods, strings, explicit continuations,
+colon-separated statements, and inline IF branches use that shared parser.
+Fresh calls retain their argument templates. This is an edit guard, not a new
+source-based symbol or overload decision, and it adds no compiler request.
+
+All 290 focused provider, workspace-index, smoke, and binary-transport checks
+passed with no skips. The installed-VSIX member-completion check passed on
+VS Code 1.85.0 and 1.141.0, retaining its fresh and bracketed-call assertions
+and adding bare member calls, continued arguments, and inline IF calls. Both
+editor hosts shut down cleanly, and the edited fixture was restored. Other
+editor checks were filtered out; complete suites were not repeated. Compiler
+source, binaries, and deadlines are unchanged. Logs are
+`/tmp/fb-bare-completion-focused.log` and
+`/tmp/fb-bare-completion-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`e649f43329be6ea9c432d98014d91322df1bb2c394a61f9b3d21c83cde5e8cd0`.
+
+### Completion argument preservation follow-up, 2026-10-16
+
+Accepting a callable completion before written parentheses or square brackets
+now inserts only the selected identifier and replaces the whole current name,
+including its suffix after the caret. It no longer duplicates argument snippets
+or depends on the editor's suggest insert mode. Member, constructor, macro, and
+offline-reference call snippets use the same finalization path. Case-insensitive
+matching handles reference labels whose generated snippet uses different casing.
+Documentation and additional import edits survive; fresh call sites retain
+their argument placeholders. An edited or cancelled request cannot publish
+replacement ranges. Immediate calls use a cheap line check; comments and
+explicit continuations have a 64 KiB lookahead bound. This change handles written
+bracketed arguments, not all possible bare-call editing contexts.
+
+All 289 focused provider, workspace-index, smoke, and binary-transport checks
+passed with no skips. The expanded installed-VSIX member-completion check passed
+on VS Code 1.85.0 and 1.141.0, asserting fresh-call snippets plus name-only edits
+and full-identifier ranges inside existing method and built-in calls. It leaves
+the document unchanged. Other editor checks were filtered out, and complete
+suites were not repeated. Compiler source, binaries, and deadlines are unchanged.
+Logs are `/tmp/fb-existing-arguments-focused.log` and
+`/tmp/fb-existing-arguments-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`f3a78f75ae3de4d784da70ffa7d73e83760bbd5a33cad538b392ecc32efed5d0`.
+
+A separate probe confirmed that complete array-element, factory-result, and
+dereferenced callback expressions already have native callable types, but their
+invocation frames are not recognized by the Signature Help scanner. Missing
+outer arguments erase their semantic expressions, trace types, and completion
+receivers. That candidate needs more native callee-recovery information; it was
+not implemented as a valid-buffer-only feature in this checkpoint.
+
+### Native bare-call overload alternatives follow-up, 2026-10-16
+
+Committed bridge calls without parentheses now retain their accessible overload
+alternatives and activate FBC's selected target. A point query on the terminal
+callee obtains the native call-expression bounds; the written receiver span
+still anchors the exact AST call start. Qualified namespace names, arrow access,
+and whitespace around dots remain part of that anchor. There is no source scan
+to guess the end across continuations or adjacent statements. Parenthesized calls
+retain the existing range query, and incomplete calls still report no selected
+overload. No compiler source, binary, schema, or analysis pass changed.
+
+All 287 focused provider, workspace-index, smoke, and binary-transport checks
+passed with no skips. Seven selected worker checks passed, including Long/Double
+bare-call selections through namespaces, methods, arrows and spaced dots,
+continuations, both inline IF arms, colon-separated calls, and trailing comments.
+The existing parenthesized, getter/setter, access, callback, and recovery checks
+also passed. The expanded installed-VSIX signature check passed on each of
+VS Code 1.85.0 and 1.141.0, asserting visible alternatives and the active native
+choice for ordinary, method, continued, and inline-branch bare calls. Other
+editor checks were filtered out; complete suites were not repeated.
+
+Logs are `/tmp/fb-bare-overload-focused.log`, `/tmp/fb-bare-overload-native.log`,
+and `/tmp/fb-bare-overload-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`0ad3a99654140fe16cb6f4f97ee4a857afc789d12df23fbfdda3f1bd1f9173f2`.
+
+### Committed-call overload alternatives follow-up, 2026-10-16
+
+Bridge Signature Help now retains accessible overload alternatives for committed
+parenthesized calls when the existing AST query proves FBC's selected target.
+That native identity selects the active signature. The shared visibility helper
+expands only its native owner, retaining caller access and declaration-order
+checks. Getter and setter groups remain separate. A cheap native-name inventory
+check skips the AST lookup for single-signature families. No source overload
+scoring, compiler pass, schema change, or new selected-target inference was added.
+Calls without an exact AST target keep their existing result; stock-sidecar and
+incomplete-call selection behavior are unchanged.
+
+All 287 focused provider, workspace-index, smoke, and binary-transport checks
+passed with no skips. Six selected worker checks passed, including both numeric
+selections for ordinary procedures, methods, and indexed property getters,
+private-overload and setter exclusion, and callback/incomplete-call regressions.
+The expanded installed-VSIX signature check passed on each of VS Code 1.85.0 and
+1.141.0, retaining both ordinary/method alternatives and asserting that FBC's
+Long/Double choice becomes the active signature. Other editor checks were
+filtered out; complete suites were not repeated. Compiler binaries are unchanged.
+
+Logs are `/tmp/fb-committed-overload-focused.log`,
+`/tmp/fb-committed-overload-native.log`, and
+`/tmp/fb-committed-overload-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`a8a20a79cc0527bdc78ad90d49ed80c0672049f1085beac24853250ad717ea17`.
+
+### Native incomplete-call Signature Help follow-up, 2026-10-16
+
+Bridge Signature Help now retains ordinary procedure, bare-call, and method
+signatures when incomplete arguments have no surviving call-site binding. It
+reuses the native scope/member recovery used by completion and callback
+signatures. Exact-name lookup runs before the result cap, retaining the callee
+in modules with more than 2,000 earlier declarations. Overload expansion stays
+within the visible native owner and checks declaration order and access in every
+projected caller context. Namespace shadowing is preserved; unrelated namespaces,
+ambiguous imports, and inaccessible private overloads are withheld. Invalid
+duplicate declarations do not hide independently valid native procedures.
+
+Recovered candidates do not reinstate references, navigation, or expression
+bindings. No selected-overload identity is fabricated for a failed call. Native
+committed-call selection, stock-sidecar behavior, compiler binaries, and
+production deadlines are unchanged. A native valid-call probe still returned
+only the selected declaration from a two-overload family. The later follow-up
+above closes that gap for parenthesized calls with an AST target
+receipt; other call forms remain outside that new guarantee.
+
+All 287 focused provider, workspace-index, smoke, and binary-transport checks
+passed with no skips. Five selected worker checks also passed, including the
+callback regressions, both incomplete-call forms, a large module, bare calls,
+FBLite type-suffixed names, scope/shadowing negatives, and method access. The
+expanded installed-VSIX signature check passed on VS Code 1.85.0 and 1.141.0,
+covering callbacks plus incomplete ordinary overloads, bare procedures, and
+public methods without revealing their private overload. Other editor checks
+were filtered out; complete suites were not repeated.
+
+Logs are `/tmp/fb-ordinary-signature-recovery-focused.log`,
+`/tmp/fb-ordinary-signature-recovery-native.log`, and
+`/tmp/fb-ordinary-signature-recovery-editor-{1.85,1.141}.log`.
+Runtime fingerprint:
+`8252637470fee67fe9527a947099cb12058b68b49ccc27042b8d78c17c2142e1`.
+
+### Native procedure-pointer Signature Help follow-up, 2026-10-16
+
+Signature Help now presents the native function/Sub type of named callable
+values, including aliases, inferred variables, fields, and callback parameters.
+The binary decoder retains the canonical spelling already present in the T
+record. Stock queries select it through a physical native binding; bridge queries
+use the native inventory and can retain a declared type through completion's
+scope/member recovery while arguments are incomplete. Neither path guesses the
+routine that the pointer will call or adds a navigation/refactoring identity.
+No compiler source, binary, or schema changed.
+
+Source indexing only schedules stock binding acquisition. Known array
+declarators stay on the normal source-only path rather than triggering a binding
+export for each index. Native array metadata, including array parameters, also
+prevents indexing from being shown as a callback invocation. Edits/cancellation
+during indexing stop acquisition. Canonical spellings omit names and defaults;
+the UI shows anonymous parameter types with explicit UTF-16 label ranges so
+repeated and nested type labels identify the correct parameter. Parsing is
+bounded to 16 KiB, 64 nested levels, and 256 parameters. Expression callees such
+as array elements and explicitly dereferenced pointer-to-pointer values still
+need broader call-context support. Stock analysis remains saved-input-only.
+
+Verification: all 287 focused provider, workspace-index, packaging-smoke, and
+binary-transport checks passed, with no skips. Three selected worker checks also
+passed, covering bounded formatting, both compiler modes, and bridge recovery
+without full sidecar/binding export. Full and bounded binary readers retained
+the same 13 procedure-pointer type records in a direct fixture check. The new
+installed-VSIX editor check passed on each of VS Code 1.85.0 and 1.141.0, with
+stock saved input and a bridge unsaved buffer, correct Function/Sub labels and
+parameter offsets, array negatives, and incomplete-argument recovery. Other
+editor checks were filtered out; complete suites were not repeated.
+
+Logs are `/tmp/fb-procedure-pointer-focused.log`,
+`/tmp/fb-procedure-pointer-native.log`,
+`/tmp/fb-procedure-pointer-decoder-parity.log`, and
+`/tmp/fb-procedure-pointer-editor-{1.85,1.141}.log`. Runtime fingerprint:
+`abc78882b8616638d3fc81d518461717767ec588a5b5cce983541bb8b4dcbb66`.
+
+### Disabled-keyword type navigation follow-up, 2026-10-16
+
+Type Definition and Type Hierarchy now use the existing native-only binding
+acquisition before source-only guards for a potentially disabled keyword. This
+retains conditional NOKEYWORD REM identifiers that the local scanner masks as
+comments. The source option is only an acquisition hint; native symbol/type
+queries determine whether an identity exists and which type it denotes.
+Native-only acquisition does not substitute a source model for missing binding
+facts; the existing fallback path remains separate. Edits or cancellation during
+acquisition stop the request before another acquisition or source fallback.
+Other providers, compiler scheduling, and compiler ABI did not
+change.
+
+All 273 focused provider, workspace-index, and packaging-smoke checks passed;
+`/tmp/fb-nokeyword-type-focused.log` records the run. One new installed-VSIX check
+passed on each of VS Code 1.85.0 and 1.141.0, testing both stock FBC on saved input
+and the bridge on an unsaved overlay, with BOM-prefixed FBLite source and a
+conditional NOKEYWORD declaration. Both features find the selected UDT, while
+comment and literal spellings produce no type identity. The logs are
+`/tmp/fb-nokeyword-type-editor-{1.85,1.141}.log`. Negative hierarchy checks inspect
+the raw command result because VS Code 1.85's public command converter
+dereferences a null item for an empty hierarchy; positive checks use the public
+API. Other editor checks were filtered out, and complete suites were not
+repeated. Stock-sidecar on-demand analysis remains saved-file-only.
+
+Runtime fingerprint:
+`2dd97760134a15b4614e1de3d02e1206cc23940f599e4ea1c851a2573d379510`.
+
 ### Cold native context and Type Hierarchy follow-up, 2026-10-16
 
 Ambiguous default-string requests now acquire accepted compiler option facts

@@ -31,6 +31,7 @@ const { collectGrammarCoverage, readFreeBasicVersion, resolveFreeBasicRoot } = r
 
 const REPOSITORY_ROOT = path.resolve(__dirname, "..");
 const HEADER_PATHS = ["inc/builtin.bi", "inc/fbgfx.bi", "inc/fbgfx3.bi", "inc/fbcom.bi", "inc/fbserialize.bi", "inc/sfxlib_effects.bi", "inc/sfxlib_raw.bi"];
+const REFERENCE_INPUT_PATHS = ["mk/version.mk", "doc/fdl-1.2.txt", ":(glob)doc/manual/cache/KeyPg*.wakka", ...HEADER_PATHS];
 /* Compiler intrinsics exposed through opt-in header macros are not grammar names. */
 const OPT_IN_REFERENCE_HEADERS = Object.freeze({
     SERIALIZE: "fbserialize.bi",
@@ -39,20 +40,39 @@ const OPT_IN_REFERENCE_HEADERS = Object.freeze({
 /* Manual prose is useful in hovers, but example blocks and large pages are not. */
 const MAX_REFERENCE_RETURN_LENGTH = 600;
 const MAX_REFERENCE_DESCRIPTION_LENGTH = 1800;
+/* A whole manual refresh can modify many paths; keep Git output bounded. */
+const MAX_REFERENCE_STATUS_BYTES = 1024 * 1024;
 
 function referenceSourceRevision(freeBasicRoot) {
     /* Compiler-only commits do not change the cited manual/header contents.
-       First-parent history finds a tree with the same complete input set,
-       instead of selecting one side of an unrelated merge. */
+       First-parent history identifies their committed baseline. Working-copy
+       input changes are tracked separately rather than cited as that tree. */
     const revision = execFileSync("git", ["-C", freeBasicRoot, "log", "-1", "--first-parent",
-        "--no-show-signature", "--format=%H", "--", "mk/version.mk", "doc/fdl-1.2.txt",
-        ":(glob)doc/manual/cache/KeyPg*.wakka", ...HEADER_PATHS], {
+        "--no-show-signature", "--format=%H", "--", ...REFERENCE_INPUT_PATHS], {
         encoding: "utf8", timeout: 5000, maxBuffer: 65536
     }).trim();
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(revision)) {
         throw new Error("Unable to identify the reference input revision.");
     }
     return revision;
+}
+
+function referenceSourceModifiedPaths(freeBasicRoot) {
+    // NUL-delimited status keeps spaces and Git-quoted filenames literal.
+    // Include untracked manual pages, but not unrelated compiler work.
+    const rows = execFileSync("git", ["-C", freeBasicRoot, "status", "--porcelain=v1", "-z",
+        "--untracked-files=all", "--", ...REFERENCE_INPUT_PATHS], {
+        encoding: "utf8", timeout: 5000, maxBuffer: MAX_REFERENCE_STATUS_BYTES
+    }).split("\0");
+    const paths = new Set();
+    for (let index = 0; index < rows.length; index++) {
+        const row = rows[index];
+        if (!row) continue;
+        paths.add(row.slice(3));
+        // Rename/copy records carry the original path in a second field.
+        if (/[RC]/.test(row.slice(0, 2)) && rows[index + 1]) paths.add(rows[++index]);
+    }
+    return [...paths].sort();
 }
 
 /* ------------------------------------------------------------------------- */
@@ -326,6 +346,7 @@ function generateReference(freeBasicRoot, grammar) {
         sourceVersion,
         sourceRevision: referenceSourceRevision(freeBasicRoot),
         sourceHash: sourceHash.digest("hex"),
+        sourceModifiedPaths: referenceSourceModifiedPaths(freeBasicRoot),
         attribution: "Manual excerpts: The FreeBASIC documentation contributors, GNU Free Documentation License 1.2. See docs/reference-attribution.md and docs/fdl-1.2.txt.",
         sourceRepository: "https://github.com/jasonkfirth/fbc",
         entries: Object.fromEntries(Object.keys(entries).sort().map((key) => [key, entries[key]]))
@@ -350,6 +371,6 @@ if (require.main === module) {
     try { main(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
 
-module.exports = { generateReference, parseManualEntry, plainText, readSections, referenceSourceRevision };
+module.exports = { generateReference, parseManualEntry, plainText, readSections, referenceSourceRevision, referenceSourceModifiedPaths };
 
 /* end of tools/build-language-reference.js */

@@ -11,6 +11,7 @@
     Responsibilities:
 
         - index declarations and occurrences across multiple documents
+        - keep large-workspace source models within one file's include closure
         - replace stale symbols after a document changes
         - distinguish reopened document lifetimes when versions are reused
         - remove deleted files from all index views
@@ -122,6 +123,41 @@ test("workspace index can provide source resolution beside a remote compiler mod
     assert.equal(compiler, compilerModel);
     assert.notEqual(source, compilerModel);
     assert.equal(source.resolveAt(uri, 0, 6)[0].name, "sourceValue");
+});
+
+test("large workspaces build cached source models from the active file's include closure", async () => {
+    const rootUri = createUri("/workspace/root.bas");
+    const headerUri = createUri("/workspace/shared.bi");
+    const documents = new Map([
+        [rootUri.toString(), createDocument(rootUri, [
+            '#include "shared.bi"',
+            "Sub Work()",
+            "    Print SharedValue",
+            "End Sub"
+        ].join("\n"))],
+        [headerUri.toString(), createDocument(headerUri, "Dim Shared SharedValue As Integer")]
+    ]);
+    const otherUris = [];
+    for (let index = 0; index < 70; index++) {
+        const uri = createUri(`/workspace/module-${index}.bas`);
+        otherUris.push(uri);
+        documents.set(uri.toString(), createDocument(uri, `Dim ModuleValue${index} As Integer`));
+    }
+
+    const index = new FreeBasicWorkspaceIndex(createVscodeMock(documents), "freebasic");
+    await index.ensureInitialized();
+    index.documents.get(rootUri.toString()).includeUris.add(headerUri.toString());
+
+    const model = index.getSemanticModel(rootUri, { sourceOnly: true });
+    assert.ok(model);
+    assert.equal(model.workspaceComplete, false);
+    assert.equal(model.documents.size, 2, "the source resolver should retain the root and its included header");
+    assert.equal(model.resolveAt(rootUri, 2, 10)[0].declaration.name, "SharedValue");
+    assert.equal(index.getSourceSemanticModel(), null, "a large workspace must not build an unbounded global model");
+    assert.equal(index.getSourceSemanticModel(rootUri), model, "the active root model should be reused");
+
+    for (const uri of otherUris.slice(0, 8)) index.getSourceSemanticModel(uri);
+    assert.ok(index.sourceModelCache.size <= 4, "source models must have a bounded cache");
 });
 
 test("reopened documents cannot reuse a previous lifetime's version cache", () => {

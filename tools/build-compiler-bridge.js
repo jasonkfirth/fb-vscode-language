@@ -283,6 +283,10 @@ function instrumentRecovery(files) {
         "\t\t'' datatype\n\t\tcTypeOf( dtype, subtype, lgt, is_fixlenstr )\n\n\t\t'' ')'\n\t\tif( hMatch( CHAR_RPRNT ) = FALSE ) then",
         "\t\t'' datatype\n\t\tif( environ(\"FB_VSCODE_TRACE\") = \"1\" ) andalso (lexGetToken( ) = FB_TK_EOL) then\n\t\t\t'' An explicit continuation is not an EOL token here. Keep the\n\t\t\t'' next physical editor statement out of TYPEOF() recovery.\n\t\t\terrReport( FB_ERRMSG_EXPECTEDEXPRESSION )\n\t\t\tdtype = FB_DATATYPE_INTEGER\n\t\t\tsubtype = NULL\n\t\t\tlgt = typeGetSize( dtype )\n\t\t\treturn TRUE\n\t\tend if\n\t\tcTypeOf( dtype, subtype, lgt, is_fixlenstr )\n\n\t\t'' ')'\n\t\tif( hMatch( CHAR_RPRNT ) = FALSE ) then");
 
+    result["parser-decl-symbtype.bas"] = instrumentFunction(result["parser-decl-symbtype.bas"], "cTypeOrExpression", (source) =>
+        replaceOnce(source, "\tdim as ASTNODE ptr expr = any\n",
+            "\tdim editor_query_scope as FBEDITORQUERYSCOPE\n\teditor_query_scope.enter(tk)\n\tdim as ASTNODE ptr expr = any\n"));
+
     /* LEN() and SIZEOF() share the type-or-expression parser. At a physical
        line ending after the opening parenthesis, that parser can otherwise
        consume the next editor statement while looking for an expression. An
@@ -416,19 +420,6 @@ function instrumentSemanticSourceFilter(source) {
 
     const helpers = [
         "",
-        "private function hSemanticModelSourceHex(byref value as const string) as string",
-        "\tconst HEXDIGITS = \"0123456789abcdef\"",
-        "\tif( len(value) > SEMANTIC_MODEL_MAX_MODULE_BUFFER_BYTES \\ 2 ) then return \"\"",
-        "\tdim as string result = space(len(value) * 2)",
-        "\tdim as ubyte ptr result_bytes = strptr(result)",
-        "\tfor index as integer = 1 to len(value)",
-        "\t\tdim as integer byte_value = asc(mid(value, index, 1)) and &hFF",
-        "\t\tresult_bytes[(index - 1) * 2] = asc(mid(HEXDIGITS, (byte_value \\ 16) + 1, 1))",
-        "\t\tresult_bytes[(index - 1) * 2 + 1] = asc(mid(HEXDIGITS, (byte_value mod 16) + 1, 1))",
-        "\tnext",
-        "\treturn result",
-        "end function",
-        "",
         "private sub hSemanticModelLoadSourceFilter()",
         "\teditor_semantic_source_filter_enabled = FALSE",
         "\teditor_semantic_source_filter_count = 0",
@@ -442,27 +433,21 @@ function instrumentSemanticSourceFilter(source) {
         "\tdim as integer filter_file = freefile()",
         "\topen filter_path for input as #filter_file",
         "\tdo until eof(filter_file)",
-        "\t\tdim as string encoded_path",
-        "\t\tline input #filter_file, encoded_path",
-        "\t\tif( len(encoded_path) > 0 ) then",
-        "\t\t\tif( (len(encoded_path) mod 2) or (len(encoded_path) > FB_MAXPATHLEN * 8) ) then",
+        "\t\tdim as string source_path",
+        "\t\tline input #filter_file, source_path",
+        "\t\tif( len(source_path) > 0 ) then",
+        "\t\t\tif( (len(source_path) > FB_MAXPATHLEN) or (instr(source_path, chr(0)) > 0) or _",
+        "\t\t\t\t(instr(source_path, chr(9)) > 0) or (instr(source_path, chr(13)) > 0) ) then",
         "\t\t\t\tclose #filter_file",
         "\t\t\t\tfbSemanticModelFailAt(\"invalid semantic source filter record\")",
         "\t\t\t\texit sub",
         "\t\t\tend if",
-        "\t\t\tfor index as integer = 1 to len(encoded_path)",
-        "\t\t\t\tif( instr(\"0123456789abcdef\", lcase(mid(encoded_path, index, 1))) = 0 ) then",
-        "\t\t\t\t\tclose #filter_file",
-        "\t\t\t\t\tfbSemanticModelFailAt(\"invalid semantic source filter character\")",
-        "\t\t\t\t\texit sub",
-        "\t\t\t\tend if",
-        "\t\t\tnext",
         "\t\t\tif( editor_semantic_source_filter_count >= SEMANTIC_MODEL_MAX_DEPENDENCIES ) then",
         "\t\t\t\tclose #filter_file",
         "\t\t\t\tfbSemanticModelFailAt(\"semantic source filter exceeded its file limit\")",
         "\t\t\t\texit sub",
         "\t\t\tend if",
-        "\t\t\teditor_semantic_source_filter_files(editor_semantic_source_filter_count) = encoded_path",
+        "\t\t\teditor_semantic_source_filter_files(editor_semantic_source_filter_count) = source_path",
         "\t\t\teditor_semantic_source_filter_count += 1",
         "\t\tend if",
         "\tloop",
@@ -472,9 +457,8 @@ function instrumentSemanticSourceFilter(source) {
         "",
         "private function hSemanticModelSourceAllowed(byref source_file as const string) as integer",
         "\tif( editor_semantic_source_filter_enabled = FALSE ) then return TRUE",
-        "\tdim as string encoded_path = hSemanticModelSourceHex(source_file)",
         "\tfor index as integer = 0 to editor_semantic_source_filter_count - 1",
-        "\t\tif( editor_semantic_source_filter_files(index) = encoded_path ) then return TRUE",
+        "\t\tif( editor_semantic_source_filter_files(index) = source_file ) then return TRUE",
         "\tnext",
         "\treturn FALSE",
         "end function",
@@ -484,35 +468,81 @@ function instrumentSemanticSourceFilter(source) {
         "end function"
     ].join("\n");
     source = instrumentFunction(source, "hSemanticModelEscape", (routine) => routine + "\n" + helpers);
+    source = instrumentFunction(source, "hSemanticModelRangeFitsCurrentSourceLine", (routine) => replaceOnce(routine,
+        "\tif( source_end.source_file <> env.inf.name ) then return TRUE\n",
+        [
+            "\t'' The editor model checks exported columns against the requested source snapshot.",
+            "\t'' Avoid reopening a large source file for every filtered expression fact.",
+            "\tif( semantic_model_expressions_only ) then",
+            "\t\tif( editor_semantic_source_filter_enabled ) then return TRUE",
+            "\t\tif( len(environ(\"FB_VSCODE_SEMANTIC_SOURCE_FILTER\")) > 0 ) then return TRUE",
+            "\tend if",
+            "\tif( source_end.source_file <> env.inf.name ) then return TRUE",
+            ""
+        ].join("\n")));
     source = instrumentFunction(source, "fbSemanticModelBegin", (routine) => replaceOnce(routine,
         "\tsemantic_model_dependencies_complete = TRUE\n",
         "\tsemantic_model_dependencies_complete = TRUE\n\thSemanticModelLoadSourceFilter()\n"));
-    source = instrumentSub(source, "fbSemanticModelExportExpression", (routine) => replaceOnce(routine,
+    source = instrumentSub(source, "fbSemanticModelAppendDetail", (routine) => routine + "\n" + [
+        "private sub hSemanticModelSkipFilteredExpression()",
+        "\tif( len(semantic_model_pending_expression_value) > 0 ) then",
+        "\t\tdim as string filtered_expression_value = semantic_model_pending_expression_value",
+        "\t\tsemantic_model_pending_expression_value = \"\"",
+        "\t\tfbSemanticModelAppendDetail(filtered_expression_value)",
+        "\tend if",
+        "\tif( len(semantic_model_pending_expression_type) > 0 ) then",
+        "\t\tdim as string filtered_expression_type = semantic_model_pending_expression_type",
+        "\t\tsemantic_model_pending_expression_type = \"\"",
+        "\t\tfbSemanticModelAppendDetail(filtered_expression_type)",
+        "\tend if",
+        "\tsemantic_model_last_expression_fact = \"\"",
+        "\tsemantic_model_last_expression_shape = \"\"",
+        "\tsemantic_model_last_expression_had_operator_override = FALSE",
+        "\tsemantic_model_last_expression_buffer_start = 0",
+        "\tsemantic_model_pending_operator_override = -1",
+        "end sub"
+    ].join("\n"));
+    source = instrumentSub(source, "fbSemanticModelExportExpression", (routine) => {
+        routine = replaceOnce(routine,
+            "\tdim as LEX_LOCATION observed_start = source_start\n",
+            [
+                "\tif( semantic_model_expressions_only andalso editor_semantic_source_filter_enabled ) then",
+                "\t\tif( (hSemanticModelSourceAllowed(source_start.source_file) = FALSE) and _",
+                "\t\t\t(hSemanticModelSourceAllowed(source_end.source_file) = FALSE) ) then",
+                "\t\t\tif( source_start.is_physical and source_end.is_physical and _",
+                "\t\t\t\t(nonphysical_tokens_at_start = nonphysical_tokens_at_end) and _",
+                "\t\t\t\t(source_start.source_file = source_end.source_file) ) then",
+                "\t\t\t\thSemanticModelSkipFilteredExpression()",
+                "\t\t\t\texit sub",
+                "\t\t\tend if",
+                "\t\t\tdim as LEX_LOCATION filtered_invocation",
+                "\t\t\tif( fbSemanticModelMacroExpressionLocation(source_start, source_end, _",
+                "\t\t\t\tnonphysical_tokens_at_start, nonphysical_tokens_at_end, filtered_invocation) = FALSE ) then",
+                "\t\t\t\thSemanticModelSkipFilteredExpression()",
+                "\t\t\t\texit sub",
+                "\t\t\tend if",
+                "\t\t\tif( hSemanticModelSourceAllowed(filtered_invocation.source_file) = FALSE ) then",
+                "\t\t\t\thSemanticModelSkipFilteredExpression()",
+                "\t\t\t\texit sub",
+                "\t\t\tend if",
+                "\t\tend if",
+                "\tend if",
+                "",
+                "\tdim as LEX_LOCATION observed_start = source_start"
+            ].join("\n") + "\n");
+        return replaceOnce(routine,
         "\tdim as string sourcefile = observed_start.source_file\n",
         [
             "\tdim as string sourcefile = observed_start.source_file",
             "\tif( semantic_model_expressions_only andalso editor_semantic_source_filter_enabled ) then",
             "\t\tif( (physical_range = FALSE) or (hSemanticModelSourceAllowed(sourcefile) = FALSE) ) then",
-            "\t\t\tif( len(semantic_model_pending_expression_type) > 0 ) then",
-            "\t\t\t\tdim as string filtered_expression_type = semantic_model_pending_expression_type",
-            "\t\t\t\tsemantic_model_pending_expression_type = \"\"",
-            "\t\t\t\tfbSemanticModelAppendDetail(filtered_expression_type)",
-            "\t\t\tend if",
-            "\t\t\tif( len(semantic_model_pending_expression_value) > 0 ) then",
-            "\t\t\t\tdim as string filtered_expression_value = semantic_model_pending_expression_value",
-            "\t\t\t\tsemantic_model_pending_expression_value = \"\"",
-            "\t\t\t\tfbSemanticModelAppendDetail(filtered_expression_value)",
-            "\t\t\tend if",
-            "\t\t\tsemantic_model_last_expression_fact = \"\"",
-            "\t\t\tsemantic_model_last_expression_shape = \"\"",
-            "\t\t\tsemantic_model_last_expression_had_operator_override = FALSE",
-            "\t\t\tsemantic_model_last_expression_buffer_start = 0",
-            "\t\t\tsemantic_model_pending_operator_override = -1",
+            "\t\t\thSemanticModelSkipFilteredExpression()",
             "\t\t\texit sub",
             "\t\tend if",
             "\tend if",
             ""
-        ].join("\n")));
+        ].join("\n"));
+    });
     return source;
 }
 

@@ -21,6 +21,16 @@ type FBEDITORMACROFRAME
 	target as integer
 end type
 
+'' Parser-scoped guard: local destruction records each unevaluated interval
+'' on every return path without relying on source-text matching.
+type FBEDITORQUERYSCOPE
+	active as integer
+	first as FBEDITORLOCATION
+	declare constructor()
+	declare sub enter(byval token as integer)
+	declare destructor()
+end type
+
 declare function editorMapLength( byval identity as integer ) as integer
 declare function editorFileIdentity( byref filename as const string ) as integer
 declare function editorFileName( byval identity as integer ) as string

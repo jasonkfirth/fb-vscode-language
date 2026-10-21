@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -44,8 +44,8 @@ jobs:
       - name: Test VS Code providers on Linux
         if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:integration
-      - name: Test VS Code providers on Windows
-        if: runner.os == 'Windows'
+      - name: Test VS Code providers on macOS and Windows
+        if: runner.os != 'Linux'
         run: npm run test:integration
       - run: npm run package:vsix
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

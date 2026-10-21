@@ -34,8 +34,10 @@ async function main() {
     try {
         /* Agent and CLI launchers can inherit Electron's Node-only mode. */
         delete process.env.ELECTRON_RUN_AS_NODE;
+        const workspacePath = process.env.FREEBASIC_TEST_WORKSPACE ||
+            path.join(root, "tests/integration/workspace");
         const launchArgs = [
-            path.join(root, "tests/integration/workspace"),
+            workspacePath,
             "--user-data-dir", path.join(temporaryDirectory, "user-data"),
             "--extensions-dir", path.join(temporaryDirectory, "extensions"),
             "--skip-welcome", "--skip-release-notes",

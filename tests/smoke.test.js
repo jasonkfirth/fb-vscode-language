@@ -14,6 +14,7 @@
         - validate JSON assets and UTF-8 BOM policy
         - prove the checked-in TextMate grammar matches its source data
         - run the source coverage audit through its reusable interface
+        - verify that the default test phases include every top-level test file
 
     This file intentionally does NOT contain:
 
@@ -30,6 +31,7 @@ const path = require("path");
 const { auditCoverage, resolveFreeBasicRoot } = require("../tools/audit-freebasic-coverage");
 const { generateGrammar } = require("../tools/build-freebasic-grammar");
 const { selectBuilder } = require("../tools/run-vsix-builder");
+const { UNIT_TEST_FILES } = require("../tools/run-unit-tests");
 
 const REPOSITORY_ROOT = path.resolve(__dirname, "..");
 const GRAMMAR_SOURCE_PATH = path.join(
@@ -58,6 +60,17 @@ function reviveConfigurationRegex(value) {
     }
     return new RegExp(value.pattern, value.flags || "");
 }
+
+test("default test phases include every top-level test file", () => {
+    const unitFiles = new Set(UNIT_TEST_FILES);
+    assert.equal(unitFiles.size, UNIT_TEST_FILES.length, "unit files must not run twice");
+    // Smoke and grammar checks are separate npm-test phases, not unit files.
+    const covered = [...unitFiles, "tests/smoke.test.js", "tests/textmate.test.js"].sort();
+    const actual = fs.readdirSync(path.join(REPOSITORY_ROOT, "tests"), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".test.js"))
+        .map((entry) => `tests/${entry.name}`).sort();
+    assert.deepEqual(covered, actual, "new test files must be added to the default runner");
+});
 
 test("shipped JSON assets are valid UTF-8 without a BOM", () => {
     const packageData = readJson("package.json");
@@ -129,6 +142,7 @@ test("package metadata contributes every runtime command and setting", () => {
         "freebasic.selectCompilerContext",
         "freebasic.showPreprocessed",
         "freebasic.showExpressionType",
+        "freebasic.goToBaseMethod",
         "freebasic.checkSyntax",
         "freebasic.rebuildWorkspaceIndex",
         "freebasic.showOutput"
@@ -138,6 +152,7 @@ test("package metadata contributes every runtime command and setting", () => {
     assert.equal(packageData.contributes.commands.find((command) => command.command === "freebasic.analyzeModule").icon, "$(search)");
     assert.equal(packageData.contributes.commands.find((command) => command.command === "freebasic.selectCompilerContext").icon, "$(list-filter)");
     assert.deepEqual(packageData.contributes.menus["editor/context"].map((item) => item.command), [
+        "freebasic.goToBaseMethod",
         "freebasic.showExpressionType",
         "freebasic.showPreprocessed"
     ]);

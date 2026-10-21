@@ -189,7 +189,7 @@ function countLiteralKinds(source, kinds) {
     const active = activeFreeBasicSource(source);
     return Object.fromEntries(Object.keys(kinds || {}).map((kind) => [
         kind,
-        [...active.matchAll(new RegExp(`\"${escapeRegExp(kind)}\"`, "g"))].length
+        [...active.matchAll(new RegExp(`"${escapeRegExp(kind)}"`, "g"))].length
     ]));
 }
 

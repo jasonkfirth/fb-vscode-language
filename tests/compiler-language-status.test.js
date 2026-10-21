@@ -107,10 +107,10 @@ test("compiler status reports only current running work and distinguishes comple
     assert.equal(status().severity, 1);
 });
 
-test("compiler status distinguishes missing and compiler-excluded header contexts", () => {
+for (const extension of ["bi", "inc"]) test(`compiler status distinguishes missing and compiler-excluded ${extension} header contexts`, () => {
     const { state, analysis, status } = fixture();
-    state.document.uri.fsPath = "/project/types.bi";
-    state.document.uri.toString = () => "file:///project/types.bi";
+    state.document.uri.fsPath = `/project/types.${extension}`;
+    state.document.uri.toString = () => `file:///project/types.${extension}`;
     state.contextError = "Select a translation unit for this header.";
     assert.equal(status().text, "FBC: select header context");
     assert.equal(status().command.command, "freebasic.selectCompilerContext");
@@ -119,6 +119,8 @@ test("compiler status distinguishes missing and compiler-excluded header context
     assert.equal(status().text, "FBC: header not included");
     state.rootValid = false;
     assert.equal(status().text, "FBC: on demand", "expired root facts must not label the header as excluded");
+    state.model = { partial: false };
+    assert.equal(status().text, "FBC: ready");
 });
 
 test("compiler status explains stock-sidecar dirty buffers and retryable failures", () => {
@@ -131,6 +133,17 @@ test("compiler status explains stock-sidecar dirty buffers and retryable failure
     analysis.onDemandFailures.set(state.document, { retryAfter: Date.now() + 30000 });
     assert.equal(status().text, "FBC: retry analysis");
     assert.equal(status().command.command, "freebasic.analyzeModule");
+    analysis.onDemandFailures.set(state.document, { retryAfter: Date.now() + 30000, message: "Compiler output exceeded its byte limit.\n" + "x".repeat(1000) });
+    assert.match(status().detail, /Compiler output exceeded its byte limit/);
+    assert.doesNotMatch(status().detail, /\n/);
+    assert.ok(status().detail.length < 750, "failure detail must stay bounded");
+    state.compiler.semanticModelOnly = true;
+    state.document.isDirty = false;
+    analysis.onDemandFailures.set(state.document, { retryAfter: Date.now() + 30000,
+        message: "The configured fbc semantic sidecar can only analyze saved inputs; changed buffer /project/header.bi requires the editor bridge." });
+    assert.equal(status().text, "FBC: unsaved dependency");
+    assert.match(status().detail, /header\.bi/);
+    assert.equal(status().command.command, "workbench.action.files.saveAll");
     analysis.onDemandFailures.set(state.document, { retryAfter: 0 });
     assert.equal(status().text, "FBC: on demand");
 });

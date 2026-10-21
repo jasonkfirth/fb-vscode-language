@@ -16,8 +16,9 @@ const { CompilerAnalysisWorker } = require("../lib/compiler-worker");
 const { CompilerAnalysisService } = require("../lib/compiler-analysis-service");
 const { CompilerRemoteModel } = require("../lib/compiler-remote-model");
 const { CompilerModelStore, CompilerUri } = require("../lib/compiler-model-store");
-const { CompilerSemanticModel, compilerParameterDeclarationLocation, freeBasicCallArgumentRanges } = require("../lib/compiler-semantic-model");
-const { queryCompilerModel } = require("../lib/compiler-model-queries");
+const { CompilerSemanticModel, compilerSourceDeclarations, MAX_COMPILER_SOURCE_DECLARATION_BYTES,
+    MAX_COMPILER_SOURCE_DECLARATION_DOCUMENTS, compilerParameterDeclarationLocation, freeBasicCallArgumentRanges } = require("../lib/compiler-semantic-model");
+const { procedurePointerSignature, queryCompilerModel } = require("../lib/compiler-model-queries");
 const { CompilerWorkspaceSymbols, WORKSPACE_SYMBOL_STRIDE, compactWorkspaceEntries, mapPackedWorkspaceEntries, packWorkspaceSymbols, workspaceSymbolKey, workspaceSymbolKeyFromPacked } = require("../lib/compiler-workspace-symbols");
 const { indexWorkspaceJobs } = require("../lib/compiler-workspace-service");
 const { analyzeSavedModule } = require("../lib/compiler-analysis");
@@ -49,6 +50,229 @@ function decodeSemanticTokenRecords(data) {
     }
     return records;
 }
+
+test("remote header queries validate the owning context and retain ordinary query guards", async () => {
+    for (const mode of ["current", "default", "replacement", "generation", "cancel", "outside"]) {
+        const root = CompilerUri.file("/workspace/main.bas"), header = CompilerUri.file("/workspace/api.bi");
+        const token = { isCancellationRequested: false }, messages = [];
+        let current, calls = 0;
+        const service = { generation: 1, vscode: { workspace: { textDocuments: [] } }, output: { appendLine: (value) => messages.push(value) },
+            getModel: (uri) => uri.toString() === root.toString() ? current : null,
+            analysisWorker: { models: new Map([["snapshot", {}]]), async query(_id, operation, input) {
+                calls++;
+                assert.equal(operation, "definition");
+                assert.equal(input.uri.fsPath, mode === "default" ? root.fsPath : header.fsPath);
+                if (mode === "replacement") current = {};
+                if (mode === "generation") service.generation++;
+                if (mode === "cancel") token.isCancellationRequested = true;
+                if (mode === "outside") throw new Error("This source is not part of the compiler model.");
+                return { result: [] };
+            } } };
+        const model = new CompilerRemoteModel(service, "snapshot", false, true, true);
+        current = model;
+        const result = mode === "default" ? await model.query("definition", root, {}, token)
+            : await model.query("definition", header, {}, token, root);
+        assert.deepEqual(result, ["current", "default"].includes(mode) ? [] : null, mode);
+        assert.equal(calls, 1);
+        assert.equal(messages.length, mode === "outside" ? 1 : 0);
+        assert.equal(model.available(), true, "an unavailable header must not expire the owning model");
+    }
+});
+
+test("module projection requests cannot enter project write or declaration modes", async (t) => {
+    const worker = new CompilerAnalysisWorker();
+    t.after(() => worker.dispose());
+    const options = { root: "/workspace", selectedKey: "", oldName: "main.bas", newName: "main.bas",
+        jobs: [{ name: "current", filePath: "/workspace/main.bas", compilerArguments: [] }],
+        moduleOutgoingFile: "/workspace/main.bas", referencesOnly: true, outgoingCalls: true };
+    for (const invalid of [{ referencesOnly: false }, { incomingCalls: true }, { declarationsOnly: true }, { moduleOutgoingFile: "relative.bas" }]) {
+        await assert.rejects(worker.project({ ...options, ...invalid }), /Module outgoing projection/);
+    }
+    assert.equal(worker.worker, null, "invalid mode combinations must not launch native work");
+});
+
+test("native folding caches corrected lexical ranges without source-only region guesses", () => {
+    const { tokenize } = require("../lib/semantic-model");
+    const uri = CompilerUri.file("/workspace/native-folds.bas");
+    const text = "Sub Main()\nREM = 1 /' block\n' #region fake\n' notes\n' #endregion\n'/\nPrint 1\nEnd Sub\n";
+    const document = { uri, text, ...tokenize(text) };
+    let lexicalReads = 0;
+    const model = { partial: false, getDocument: () => document,
+        semanticFoldingRanges: [{ filePath: uri.fsPath, startLine: 0, endLine: 7 }],
+        compilerBracketMaskOverrides() {
+            lexicalReads++;
+            return { remIdentifierOffsets: [], remKeywordDisabledLineOffsets: [text.indexOf("REM")], defaultEscapedStringRanges: [] };
+        } };
+    const query = () => queryCompilerModel(model, "compilerFoldingRanges", { uri }, () => {});
+    const result = query();
+    assert.deepEqual(result, [{ startLine: 0, endLine: 7 }, { startLine: 1, endLine: 5, kind: "comment" }]);
+    assert.equal(query(), result, "immutable snapshot queries reuse their folding projection");
+    assert.equal(lexicalReads, 1);
+});
+
+test("procedure pointer signatures preserve native nested types without inventing targets", () => {
+    const signature = procedurePointerSignature("callbacks.invoke",
+        "function cdecl(as long, byref as string, as function(as long, as double) as double) byref as integer");
+    assert.equal(signature.name, "callbacks.invoke");
+    assert.equal(signature.parameters.length, 3);
+    assert.equal(signature.parameters[1].label, "byref as string");
+    assert.equal(signature.parameters[2].label, "as function(as long, as double) as double");
+    for (const parameter of signature.parameters) {
+        assert.equal(signature.signature.slice(...parameter.labelOffsets), parameter.label);
+    }
+    const repeated = procedurePointerSignature("combine", "function(as long, as long) as long");
+    assert.ok(repeated.parameters[1].labelOffsets[0] > repeated.parameters[0].labelOffsets[1]);
+    assert.equal(repeated.signature.slice(...repeated.parameters[1].labelOffsets), "as long");
+    assert.equal(signature.signature,
+        "Function callbacks.invoke cdecl(as long, byref as string, as function(as long, as double) as double) byref as integer");
+    assert.equal(procedurePointerSignature("action", "sub()").parameters.length, 0);
+    const variadic = procedurePointerSignature("action", "sub cdecl((any, any) as double, ...)");
+    assert.equal(variadic.parameters.length, 2);
+    assert.equal(variadic.parameters[1].variadic, true);
+    for (const type of ["long", "typeof(function() as long) ptr", "sub() as long", "function()", "function(as long",
+        "function(unknown) as long", "sub(" + Array(257).fill("as long").join(",") + ")",
+        "sub(" + "(".repeat(65) + "as long" + ")".repeat(65) + ")", "sub()\n", "sub(" + " ".repeat(16384) + ")"]) {
+        assert.equal(procedurePointerSignature("callback", type), null, type.slice(0, 80));
+    }
+});
+
+test("physical header presentation uses a bounded per-snapshot source cache", () => {
+    let reads = 0;
+    const model = { compilerRemIdentifierOffsets() { reads++; return []; } };
+    const source = { uri: CompilerUri.file("/workspace/physical-header.bas"), text: "Declare Sub Apply(ByVal amount As Long)\n" };
+    const declarations = compilerSourceDeclarations(model, source);
+    assert.equal(declarations[0].signature, "Declare Sub Apply(ByVal amount As Long)");
+    assert.equal(compilerSourceDeclarations(model, source), declarations);
+    assert.equal(reads, 1, "repeated presentation must not rescan the same captured source");
+    assert.notEqual(compilerSourceDeclarations({}, source), declarations, "snapshots must not share parsed-source state");
+    for (let index = 0; index < MAX_COMPILER_SOURCE_DECLARATION_DOCUMENTS; index++) {
+        compilerSourceDeclarations(model, { ...source, uri: CompilerUri.file(`/workspace/header-${index}.bas`) });
+    }
+    assert.notEqual(compilerSourceDeclarations(model, source), declarations, "the oldest document is evicted at the existing cache bound");
+    const before = reads;
+    const large = { ...source, uri: CompilerUri.file("/workspace/oversized-header.bas"), text: " ".repeat(MAX_COMPILER_SOURCE_DECLARATION_BYTES + 1) };
+    assert.equal(compilerSourceDeclarations(model, large), null);
+    assert.equal(compilerSourceDeclarations(model, large), null);
+    assert.equal(reads, before, "oversized sources must be refused before parsing or consulting lexer facts");
+});
+
+test("operator expression queries retain the innermost physical range and equal-span ambiguity", () => {
+    const { tokenize } = require("../lib/semantic-model");
+    const uri = CompilerUri.file("/workspace/nested-indexers.bas");
+    const text = "' Unicode prefix: \u{1f600}\nPrint outer[ _\n    inner[CDbl(1)] _\n]\n";
+    const document = { uri, text, ...tokenize(text) };
+    const outerStart = text.indexOf("outer[");
+    const outerEnd = text.lastIndexOf("]") + 1;
+    const innerStart = text.indexOf("inner[");
+    const innerEnd = text.indexOf("]") + 1;
+    const point = (offset) => ({ line: text.slice(0, offset).split("\n").length - 1,
+        character: offset - text.lastIndexOf("\n", offset - 1) - 1 });
+    const fact = (symbol, startOffset, endOffset) => ({ operatorKind: "overloaded", operatorCode: "index",
+        compilerSidecarSymbolId: symbol, startOffset, endOffset, start: point(startOffset), end: point(endOffset) });
+    const facts = [fact(1, outerStart, outerEnd), fact(2, innerStart, innerEnd)];
+    const model = { getDocument: () => document, sources: new Map([[uri.toString(), document]]),
+        semanticProcedures: [1, 2, 3].map((symbol) => ({ symbol, symbolClass: 3,
+            filePath: uri.fsPath, startLine: symbol, endLine: symbol })),
+        compilerSidecarExpressions: new Map([[uri.toString(), facts]]) };
+    const query = (offset) => queryCompilerModel(model, "compilerSidecarOperatorExpressionAt",
+        { uri, position: point(offset), operatorCode: "index" }, () => {});
+    const inner = query(innerEnd - 1);
+    assert.equal(inner.expressions.length, 1);
+    assert.deepEqual(inner.expressions[0].targetSymbols, [2]);
+    assert.equal(inner.expressions[0].startOffset, innerStart);
+    assert.equal(inner.expressions[0].endOffset, innerEnd);
+    assert.deepEqual(query(outerEnd - 1).expressions[0].targetSymbols, [1]);
+    facts.push(fact(3, innerStart - 1, innerEnd - 1));
+    assert.equal(query(innerStart + 2).expressions.length, 2,
+        "equally narrow physical ranges must remain ambiguous");
+    facts.at(-1).provisional = true;
+    assert.deepEqual(query(innerStart + 2).expressions[0].targetSymbols, [2]);
+});
+
+test("native operator target filters exclude unrelated budgets without hiding ambiguity", () => {
+    const { tokenize } = require("../lib/semantic-model");
+    const uri = CompilerUri.file("/workspace/operator-reference-budget.bas");
+    // One more unrelated site than the existing 5,000-receipt query budget.
+    const unrelated = 5001;
+    const lines = [...Array(unrelated).fill("Print other + 1"), "Print selected + 1", "Print ambiguous + 1"];
+    const text = lines.join("\n") + "\n";
+    const document = { uri, text, ...tokenize(text) };
+    const facts = [], operations = [];
+    for (let line = 0; line < lines.length; line++) {
+        const symbol = line < unrelated ? 1 : 2;
+        const startOffset = document.lineOffsets[line] + "Print ".length;
+        const endOffset = document.lineOffsets[line] + lines[line].length;
+        facts.push({ operatorKind: "overloaded", operatorCode: "add", compilerSidecarSymbolId: symbol,
+            startOffset, endOffset, start: { line, character: "Print ".length }, end: { line, character: lines[line].length } });
+        const column = lines[line].indexOf("+");
+        operations.push({ operatorKind: "overloaded", operatorCode: "add", physical: true, target: symbol,
+            filePath: uri.fsPath, startLine: line + 1, startColumn: column, endLine: line + 1, endColumn: column + 1 });
+    }
+    facts.push({ ...facts.at(-1), compilerSidecarSymbolId: 1 });
+    operations.push({ ...operations.at(-1), target: 1 });
+    const model = { getDocument: () => document, sources: new Map([[uri.toString(), document]]),
+        semanticProcedures: [1, 2].map((symbol) => ({ symbol, symbolClass: 3, filePath: uri.fsPath, startLine: 1, endLine: 1 })),
+        compilerSidecarExpressions: new Map([[uri.toString(), facts]]), semanticOperations: operations };
+    for (const [operation, key] of [["compilerSidecarOperatorExpressionsInSnapshot", "expressions"],
+        ["compilerSidecarOperatorOperationsInSnapshot", "operations"]]) {
+        assert.equal(queryCompilerModel(model, operation, { uri }, () => {}).complete, false);
+        const result = queryCompilerModel(model, operation, { uri, targetSymbol: 2 }, () => {});
+        assert.equal(result.complete, true);
+        assert.equal(result[key].length, 2);
+        assert.deepEqual(result[key][0].targetSymbols, [2]);
+        assert.deepEqual([...result[key][1].targetSymbols].sort(), [1, 2],
+            "filtering must not turn an ambiguous physical site into a selected reference");
+        assert.deepEqual(queryCompilerModel(model, operation, { uri, targetSymbol: 3 }, () => {})[key], []);
+        assert.equal(queryCompilerModel(model, operation, { uri, targetSymbol: 1 }, () => {}).complete, false,
+            "the matching target's own reference budget remains enforced");
+        for (const invalid of [0, -1, 1.5, NaN, Infinity, "2"]) {
+            assert.throws(() => queryCompilerModel(model, operation, { uri, targetSymbol: invalid }, () => {}), /target symbol/i);
+        }
+    }
+});
+
+test("operator declaration lookup requires one physical native operator identity", () => {
+    const { tokenize } = require("../lib/semantic-model");
+    const uri = CompilerUri.file("/workspace/operator-declaration.bas");
+    const text = "Type Operand\nvalue As Long\nEnd Type\nDeclare Operator +(ByRef value As Operand, ByVal amount As Long) As Long\n";
+    const document = { uri, text, ...tokenize(text) };
+    const position = pointAt(text, "+");
+    const declaration = { symbol: 1, physical: true, kind: "procedure-prototype", filePath: uri.fsPath,
+        startLine: 4, startColumn: 8, endLine: 4, endColumn: text.split("\n")[3].length };
+    const rootUri = CompilerUri.file("/workspace/operator-root.bas");
+    const rootText = '#include "operator-declaration.bas"\n';
+    const root = { uri: rootUri, text: rootText, ...tokenize(rootText) };
+    const model = { getDocument: (requested) => requested.fsPath === uri.fsPath ? document
+        : requested.fsPath === rootUri.fsPath ? root : null, semanticDeclarations: [declaration],
+        semanticBindingsAvailable: true, compilerSemanticModelSchemaVersion: 27,
+        compilerProcedureKindsBySemanticIdentity: new Map([[1, "operator"], [2, "operator"]]) };
+    const query = (point = position, kind = "procedure-prototype") => queryCompilerModel(model,
+        "compilerSidecarOperatorDeclarationAt", { uri, position: point, kind }, () => {});
+    assert.deepEqual(query()?.targetSymbols, [1]);
+    const fromRoot = (origin) => queryCompilerModel(model, "compilerSidecarOperatorDeclarationAt", {
+        uri: rootUri, position: { line: 0, character: 0 }, kind: "procedure-prototype", declarationOrigin: origin
+    }, () => {});
+    const origin = { filePath: uri.fsPath, startLine: 4, startColumn: position.character };
+    assert.deepEqual(fromRoot(origin)?.targetSymbols, [1], "included declarations retain the root snapshot's context");
+    assert.equal(fromRoot({ ...origin, filePath: "/workspace/not-in-this-snapshot.bi" }), null);
+    assert.equal(fromRoot({ ...origin, startColumn: 9999 }), null);
+    assert.throws(() => fromRoot({ ...origin, startLine: -1 }), /Invalid compiler operator declaration origin/);
+    assert.deepEqual(query({ line: 3, character: 0 })?.targetSymbols, []);
+    assert.deepEqual(query(position, "procedure-definition")?.targetSymbols, []);
+    model.compilerProcedureKindsBySemanticIdentity.set(1, "function");
+    assert.deepEqual(query()?.targetSymbols, []);
+    model.compilerProcedureKindsBySemanticIdentity.set(1, null);
+    assert.deepEqual(query()?.targetSymbols, [], "conflicting procedure kinds cannot identify an operator");
+    model.compilerProcedureKindsBySemanticIdentity.set(1, "operator");
+    declaration.physical = false;
+    assert.deepEqual(query()?.targetSymbols, []);
+    declaration.physical = true;
+    model.semanticDeclarations.push({ ...declaration, symbol: 2 });
+    assert.deepEqual(query()?.targetSymbols, [], "overlapping operator identities remain ambiguous");
+    model.semanticDeclarations.pop();
+    model.partial = true;
+    assert.equal(query(), null);
+});
 
 test("native cursor context uses all preceding escape spans without exporting their table", () => {
     const { tokenize } = require("../lib/semantic-model");
@@ -85,6 +309,30 @@ test("native cursor context uses all preceding escape spans without exporting th
             for (const invalid of [-1, 0.5, text.length + 1, NaN]) assert.equal(model.compilerCodeContext(uri, invalid), null);
             assert.equal(model.compilerCodeContext(uri, offset, 2), null);
         }
+    }
+});
+
+test("native cursor context respects REM bindings and accepted option lines", () => {
+    const { tokenize } = require("../lib/semantic-model");
+    const uri = CompilerUri.file("/workspace/rem-context.bas");
+    const text = "#if 1\nOption NoKeyword REM\n#endif\nPrint REM.value : Work(1)\nPrint \"REM.value\"\n' REM.value\n";
+    const remOffset = text.indexOf("REM.value");
+    for (const bom of [0, 1]) for (const accepted of [false, true]) {
+        const model = Object.create(CompilerSemanticModel.prototype);
+        const document = { text, ...tokenize(text, accepted ? [remOffset] : null) };
+        model.getDocument = () => document;
+        model.compilerRemIdentifierOffsets = () => accepted ? [remOffset] : [];
+        model.compilerRemKeywordDisabledLineOffsets = () => accepted ? [text.indexOf("Option")] : [];
+        for (const offset of [remOffset + 4, text.indexOf("Work(") + 5]) {
+            const context = model.compilerCodeContext(uri, offset, bom);
+            assert.equal(context.context, accepted ? "code" : "comment");
+            if (accepted && offset > text.indexOf("Work(")) {
+                assert.equal(context.signatureCallContext.name, "Work");
+                assert.equal(context.signatureCallContext.openParenthesisOffset, text.indexOf("Work(") + 4 + bom);
+            }
+        }
+        assert.equal(model.compilerCodeContext(uri, text.indexOf('"REM.value"') + 5, bom).context, "string");
+        assert.equal(model.compilerCodeContext(uri, text.indexOf("' REM.value") + 7, bom).context, "comment");
     }
 });
 
@@ -498,6 +746,34 @@ function setup(t, real = false) {
     return { directory, filePath, worker, options, preparation, input };
 }
 
+for (const sidecar of [true, false]) test(`native folding retains physical active block boundaries (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "blocks.bi");
+    const header = "Type IncludedBlock\nnumber As Long\nEnd Type\n";
+    const text = ['#include "blocks.bi"', "Sub Kept()", "#if 0", "End Sub", "#endif", "If 1 Then", "Print 1", "End If", "End Sub ' \u{1f600}", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    fs.writeFileSync(headerPath, header);
+    const reply = await worker.analyze({ ...options, compilerPath: sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+        semanticModelOnly: sidecar, exportSemanticExpressions: true, exportSemanticBindings: false }, preparation);
+    assert.equal(reply.partial, false);
+    const folds = async (uri) => (await worker.query(reply.snapshotId, "compilerFoldingRanges", { ...input, uri })).result;
+    assert.deepEqual(await folds(input.uri), [{ startLine: 1, endLine: 8 }, { startLine: 2, endLine: 4, kind: "region" }, { startLine: 5, endLine: 7 }],
+        "the inactive END SUB must not close the real body, and header folds must not leak into the root");
+    assert.deepEqual(await folds({ scheme: "file", fsPath: headerPath }), [{ startLine: 0, endLine: 2 }]);
+    const blocks = async (uri, point) => (await worker.query(reply.snapshotId, "compilerSelectionRanges",
+        { ...input, uri, positions: [point] })).result[0].filter((range) => range.kind === "block");
+    assert.deepEqual(await blocks(input.uri, { line: 6, character: 2 }), [
+        { start: { line: 5, character: 0 }, end: { line: 7, character: 6 }, kind: "block" },
+        { start: { line: 1, character: 0 }, end: { line: 8, character: text.split("\n")[8].length }, kind: "block" }
+    ], "selection parents use the active block and UTF-16 closing-line length");
+    assert.deepEqual(await blocks(input.uri, { line: 0, character: 2 }), [], "header blocks cannot become root selection parents");
+    assert.deepEqual(await blocks({ scheme: "file", fsPath: headerPath }, { line: 1, character: 2 }), [
+        { start: { line: 0, character: 0 }, end: { line: 2, character: 8 }, kind: "block" }
+    ]);
+    assert.equal(fs.readFileSync(filePath, "utf8"), text);
+    assert.equal(fs.readFileSync(headerPath, "utf8"), header);
+});
+
 test("editor bridge retains native assistance after conditional escaped literals", native, async (t) => {
     const { worker, filePath, options, preparation, input } = setup(t, true);
     input.openFiles = [filePath];
@@ -527,6 +803,1324 @@ Print "inside \" /' still text" : Print EscapeValue
         assert.equal((await worker.query(reply.snapshotId, "signature", { ...input, position: inside })).result, null);
     } finally {
         worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("native cursor assistance survives conditional NOKEYWORD REM", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const text = ['#lang "fblite"', "#if 1", "Option NoKeyword REM", "#endif", "Type KeywordPayload",
+        "    value As Long", "End Type", "Declare Sub Work(ByVal amount As Long, ByVal scale As Long)",
+        "Dim REM As KeywordPayload", "Print REM.value", "Work(REM.value, 2)", "Work REM.value, 2",
+        'Print "REM.value Work(1, 2)"', "' REM.value Work(1, 2)", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    for (const semanticModelOnly of [true, false]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: semanticModelOnly ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly, exportSemanticExpressions: true, exportSemanticBindings: true,
+            ...(semanticModelOnly ? {} : { overlays: new Map([[filePath, text + "' unsaved overlay\n"]]) })
+        }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            const completionPosition = pointAt(text, "Print REM.value", "Print REM.v".length);
+            const offset = text.indexOf("Print REM.value") + "Print REM.v".length;
+            const context = (await worker.query(reply.snapshotId, "compilerCodeContext", { ...input, offset })).result;
+            assert.equal(context.context, "code");
+            assert.equal(context.maskedLinePrefix, "Print REM.v");
+            const completion = (await worker.query(reply.snapshotId, "completion", {
+                ...input, position: completionPosition, limit: 100
+            })).result;
+            assert.equal(completion.member, true, "stock member contexts must reach the provider's native type lookup");
+            if (!semanticModelOnly) assert.ok(completion.entries.some((entry) => entry.name === "value"));
+            for (const call of ["Work(REM.value,", "Work REM.value,"]) {
+                const position = pointAt(text, call, call.length);
+                const signature = (await worker.query(reply.snapshotId, "signature", { ...input, position })).result;
+                assert.equal(signature?.context.name, "Work");
+                assert.equal(signature.context.activeParameter, 1);
+                assert.ok(signature.entries.some((entry) => entry.name === "Work"));
+                if (semanticModelOnly) assert.ok(signature.selectedSidecarDeclarations?.length);
+            }
+            for (const spelling of ['"REM.value Work(', "' REM.value Work("]) {
+                const position = pointAt(text, spelling, spelling.length);
+                assert.equal((await worker.query(reply.snapshotId, "signature", { ...input, position })).result, null);
+            }
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+    const incomplete = text.replace("Print REM.value", "Print REM.v").replace("Work(REM.value, 2)", "Work(REM.value, )");
+    const recovered = await worker.analyze({ ...options, exportSemanticExpressions: true, exportSemanticBindings: true,
+        overlays: new Map([[filePath, incomplete]]) }, preparation);
+    try {
+        assert.equal(recovered.partial, true);
+        const completion = (await worker.query(recovered.snapshotId, "completion", {
+            ...input, position: pointAt(incomplete, "Print REM.v", "Print REM.v".length), limit: 100
+        })).result;
+        assert.ok(completion.entries.some((entry) => entry.name === "value"), "an unfinished native REM receiver must retain its members");
+        const definition = (await worker.query(recovered.snapshotId, "definition", {
+            ...input, position: pointAt(incomplete, "Print REM.v", "Print REM.".length)
+        })).result;
+        assert.deepEqual(definition, [], "completion recovery must not bind the unfinished field name");
+        const call = "Work(REM.value,";
+        const signature = (await worker.query(recovered.snapshotId, "signature", {
+            ...input, position: pointAt(incomplete, call, call.length)
+        })).result;
+        assert.equal(signature?.context.activeParameter, 1);
+        assert.ok(signature.entries.some((entry) => entry.name === "Work"));
+    } finally {
+        worker.releaseModel(recovered.snapshotId);
+    }
+});
+
+test("native disabled-keyword procedures retain bare-call and recovery signatures", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const prefix = ['#lang "fblite"', "#if 1", "Option NoKeyword IF", "#endif"];
+    for (const [semanticModelOnly, bindings] of [[true, true], [false, true], [false, false]]) {
+        const declaration = semanticModelOnly ? ["Declare Sub IF(ByVal amount As Long, ByVal scale As Double)"]
+            : ["#macro EmitProcedure(procName)", "Declare Sub procName(ByVal amount As Long, ByVal scale As Double)",
+                "#endmacro", "EmitProcedure(IF)"];
+        const text = [...prefix, ...declaration, "IF 1, 2", "IF(1, 2)", "IF 1, _", "    2", ""].join("\n");
+        fs.writeFileSync(filePath, text);
+        const settings = { ...options, compilerPath: semanticModelOnly ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly, exportSemanticExpressions: true, exportSemanticBindings: bindings };
+        const reply = await worker.analyze(settings, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            for (const spelling of ["IF 1,", "IF(1,", "IF 1, _"]) {
+                const position = pointAt(text, spelling, spelling.indexOf(",") + 1);
+                const offset = text.indexOf(spelling) + spelling.indexOf(",") + 1;
+                const context = (await worker.query(reply.snapshotId, "compilerCodeContext", { ...input, offset })).result;
+                assert.equal(context.context, "code");
+                assert.equal(context.signatureCallContext.name, "IF");
+                const result = (await worker.query(reply.snapshotId, "signature", { ...input, position })).result;
+                assert.equal(result?.entries.length, 1, spelling);
+                assert.equal(result.context.activeParameter, 1);
+                assert.equal(result.entries[0].declaration.parameters.length, 2);
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
+        if (semanticModelOnly) continue;
+        const incomplete = text.replace("IF 1, 2", "IF 1,");
+        const recovered = await worker.analyze({ ...settings, overlays: new Map([[filePath, incomplete]]) }, preparation);
+        try {
+            assert.equal(recovered.partial, true);
+            const result = (await worker.query(recovered.snapshotId, "signature", {
+                ...input, position: pointAt(incomplete, "IF 1,", "IF 1,".length)
+            })).result;
+            assert.equal(result?.entries.length, 1);
+            assert.equal(result.context.activeParameter, 1);
+        } finally { worker.releaseModel(recovered.snapshotId); }
+    }
+});
+
+test("native signatures retain builtin-shadowing array identities", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const text = ['#lang "fblite"', "Option NoKeyword Abs", "#ifdef FUNCTION_BUILD",
+        "Declare Function Abs Overload(ByVal amount As Long) As Long",
+        "Declare Function Abs Overload(ByVal amount As Double) As Double", "#else",
+        "Dim Abs(2) As Long", "#endif", "Print Abs(0)", "Print Sin(0.5)", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    for (const [semanticModelOnly, bindings] of [[true, true], [false, true], [false, false]]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: semanticModelOnly ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly, exportSemanticExpressions: true, exportSemanticBindings: bindings }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            const result = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, "Print Abs(0)", "Print Abs(".length)
+            })).result;
+            assert.match(result?.arraySignature?.signature || "", /^Array Abs\(index1(?:: 0 To 2)?\)$/i);
+            assert.equal(result?.entries.length, 0, "array help must not retain inactive procedure candidates");
+            assert.equal(result.selectedCompilerSymbolId || 0, 0, "an array identity is not a selected procedure target");
+            const builtin = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, "Print Sin(0.5)", "Print Sin(".length)
+            })).result;
+            assert.equal(builtin?.entries.length || 0, 0, "unbound intrinsic spellings may use reference signatures");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    const scalar = '#lang "fblite"\nOption NoKeyword Abs\nSub Work()\nDim Abs As Long\nPrint Abs(1)\nEnd Sub\n';
+    const recovered = await worker.analyze({ ...options, overlays: new Map([[filePath, scalar]]),
+        exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    try {
+        assert.equal(recovered.partial, true);
+        const result = (await worker.query(recovered.snapshotId, "signature", {
+            ...input, position: pointAt(scalar, "Print Abs(1)", "Print Abs(".length)
+        })).result;
+        assert.ok(result?.entries.some((entry) => entry.declaration.type === "variable" && entry.name.toLowerCase() === "abs"),
+            "a valid local declaration must still shadow builtin help in a failed call");
+    } finally { worker.releaseModel(recovered.snapshotId); }
+});
+
+test("native conditional callbacks retain callable types instead of procedure guesses", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["#ifdef PROCEDURE_BUILD",
+        "Declare Function Choose Overload(ByVal amount As Long) As Long",
+        "Declare Function Choose Overload(ByVal amount As Double) As Double", "#else",
+        "Dim Choose As Function(ByVal amount As Long) As Double", "#endif", "Print Choose(1)", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    for (const [semanticModelOnly, bindings] of [[true, true], [false, true], [false, false]]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: semanticModelOnly ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly, exportSemanticExpressions: true, exportSemanticBindings: bindings }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            const result = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, "Print Choose(1)", "Print Choose(".length)
+            })).result;
+            assert.equal(result?.procedurePointerSignature.signature, "Function Choose(as long) as double");
+            assert.equal(result.procedurePointerSignature.parameters.length, 1);
+            assert.equal(result.selectedCompilerSymbolId || 0, 0, "a callable type does not select a runtime procedure");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("stock binding hover distinguishes physical scalars from macro spellings", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["Namespace Storage", "Dim Shared amount As Long", "End Namespace", "Dim ordinary As Long",
+        "#define amount() Storage.amount", "#define forwarded Storage.amount", "Print ordinary", "Print amount()", "Print forwarded", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+        semanticModelOnly: true, allowErrors: false, exportSemanticExpressions: true, exportSemanticBindings: true,
+        exportSemanticMacroBindings: false }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        for (const name of ["ordinary", "amount", "forwarded"]) {
+            const result = (await worker.query(reply.snapshotId, "hover", {
+                ...input, position: pointAt(text, "Print " + name, "Print ".length + 1)
+            })).result;
+            const entries = result.entries || [];
+            const scalar = entries.length === 1 && ["variable", "field", "parameter"].includes(entries[0].declaration.type) &&
+                entries[0].compilerSymbolId > 0 && !entries[0].compilerPreprocessorId &&
+                entries[0].name.toLowerCase() === result.occurrence?.name.toLowerCase() &&
+                !result.macroSignature && !result.deferredMacroReference;
+            assert.equal(scalar, name === "ordinary", name + ": " + JSON.stringify(result));
+        }
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("stock native hover bindings distinguish conditional procedures from a scalar", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["#ifdef PROCEDURE_BUILD",
+        "Declare Function Chosen Overload(ByVal amount As Long) As Long",
+        "Declare Function Chosen Overload(ByVal amount As Double) As Double", "#else",
+        "Dim Chosen As Long", "#endif", "Print Chosen", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    for (const bindings of [false, true]) {
+        const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+            semanticModelOnly: true, exportSemanticExpressions: true, exportSemanticBindings: bindings }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            const result = (await worker.query(reply.snapshotId, "hover", {
+                ...input, position: pointAt(text, "Print Chosen", "Print C".length)
+            })).result;
+            assert.equal(result.expression.typeName.toLowerCase(), "long");
+            if (bindings) {
+                assert.equal(result.entries.length, 1);
+                assert.equal(result.entries[0].declaration.type, "variable");
+                assert.equal(result.entries[0].declaration.line, 4);
+            } else assert.equal(result.entries.length, 0, "expression type alone does not settle the source symbol's kind");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("stock type slots select the compiler-bound conditional declaration", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["#ifdef FIRST_TYPE", "Type BranchType", "firstValue As Long", "End Type", "#else",
+        "Type BranchType", "secondValue As Double", "End Type", "#endif", "Dim selected As BranchType", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    for (const first of [false, true]) {
+        const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE, semanticModelOnly: true,
+            compilerArguments: first ? ["-d", "FIRST_TYPE"] : [], exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            const result = (await worker.query(reply.snapshotId, "completion", { ...input,
+                position: pointAt(text, "Dim selected As BranchType", "Dim selected As Bran".length), typeCompletionContext: "type"
+            })).result;
+            const types = result.entries.filter((entry) => entry.name === "BranchType");
+            assert.equal(types.length, 1, "conditional type names need the compiler's declaration selection");
+            assert.equal(types[0].declaration.line, first ? 1 : 5);
+            assert.ok(types[0].compilerSymbolId > 0);
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("stock type cache follows include visibility when moving within one snapshot", native, async (t) => {
+    const { worker, directory, filePath, options, preparation, input } = setup(t, true);
+    fs.writeFileSync(path.join(directory, "types.bi"), "Type HeaderType\nvalue As Long\nEnd Type\n");
+    const text = ["Type RootType", "value As Long", "End Type", "Dim beforeInclude As RootType",
+        '#include "types.bi"', "Dim afterInclude As HeaderType", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE, semanticModelOnly: true,
+        exportSemanticBindings: true }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        for (const after of [true, false, true]) {
+            const spelling = after ? "Dim afterInclude As HeaderType" : "Dim beforeInclude As RootType";
+            const prefix = after ? "Dim afterInclude As " : "Dim beforeInclude As ";
+            const result = (await worker.query(reply.snapshotId, "completion", { ...input,
+                position: pointAt(text, spelling, prefix.length), typeCompletionContext: "type"
+            })).result;
+            assert.equal(result.entries.some((entry) => entry.name === "HeaderType"), after,
+                "cached source scopes must reflect the include boundary at this cursor");
+            assert.ok(result.entries.some((entry) => entry.name === "RootType"));
+        }
+    } finally { worker.releaseModel(reply.snapshotId); }
+});
+
+test("stock type completion uses native declaration bindings for disabled-keyword names", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/stock-type-completions.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    for (const sidecar of [true, false]) {
+        const reply = await worker.analyze({ ...options, compilerPath: sidecar ? process.env.FBC_EXECUTABLE : options.compilerPath,
+            semanticModelOnly: sidecar, exportSemanticBindings: true, exportSemanticExpressions: false }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            for (const [spelling, prefix, name, type] of [
+                ["Dim directValue As REM", "Dim directValue As RE", "REM", "type"],
+                ["Dim aliasValue As IF", "Dim aliasValue As IF", "IF", "type"],
+                ["Dim enumValue As WHILE", "Dim enumValue As WH", "WHILE", "enum"],
+                ["Dim qualifiedValue As PRINT.Payload", "Dim qualifiedValue As PR", "PRINT", "namespace"],
+                ["Dim qualifiedValue As PRINT.Payload", "Dim qualifiedValue As PRINT.", "Payload", "type"],
+                ["Dim qualifiedValue As PRINT.Payload", "Dim qualifiedValue As PRINT.Pay", "Payload", "type"]
+            ]) {
+                const result = (await worker.query(reply.snapshotId, "completion", { ...input,
+                    position: pointAt(text, spelling, prefix.length), typeCompletionContext: "type"
+                })).result;
+                const entry = result.entries.find((entry) => entry.name === name);
+                assert.ok(entry, `${sidecar ? "stock" : "bridge"}: ${spelling}: ${prefix}`);
+                assert.equal(entry.declaration.type, type);
+                assert.ok(Number.isSafeInteger(entry.compilerSymbolId) && entry.compilerSymbolId > 0,
+                    "type candidates must retain native declaration identity");
+                assert.equal(entry.constructorCallParameters, undefined);
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    const weak = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE, semanticModelOnly: true,
+        exportSemanticBindings: false, exportSemanticExpressions: true }, preparation);
+    try {
+        const result = (await worker.query(weak.snapshotId, "completion", { ...input,
+            position: pointAt(text, "Dim directValue As REM", "Dim directValue As RE".length), typeCompletionContext: "type"
+        })).result;
+        assert.ok(!result.entries.some((entry) => entry.name === "REM"), "source spelling alone must not create native type candidates");
+    } finally { worker.releaseModel(weak.snapshotId); }
+});
+
+test("native type completion contexts preserve expression boundaries and namespace prefixes", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/type-completions.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    for (const sidecar of [true, false]) {
+        const reply = await worker.analyze({ ...options, semanticModelOnly: sidecar,
+            compilerPath: sidecar ? process.env.FBC_EXECUTABLE : options.compilerPath,
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            for (const [spelling, prefix, expected] of [
+                ["Dim selected As SampleType", "Dim selected As S", "type"],
+                ["Dim qualified As TypeSpace.SampleAlias", "Dim qualified As TypeSpace.Sam", "type"],
+                ["Dim continued As _\n    SampleAlias", "Dim continued As _\n    Samp", "type"],
+                ["Type DerivedType Extends Object", "Type DerivedType Extends Ob", "base"],
+                ["Typeof(ordinaryValue)", "Typeof(ordinaryVa", null],
+                ["String * lengthValue", "String * lengthVa", null],
+                ["Long = BuildValue(1)", "Long = BuildVa", null]
+            ]) {
+                const result = (await worker.query(reply.snapshotId, "compilerCodeContext", {
+                    ...input, offset: text.indexOf(spelling) + prefix.length
+                })).result;
+                assert.equal(result.typeCompletionContext, expected, `${sidecar ? "stock" : "bridge"}: ${spelling}`);
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    input.openFiles = [filePath];
+    for (const [statement, suffix, expected] of [
+        ["Dim unfinished As TypeSpace.Samp", "Samp", "SampleType"],
+        ["Dim unfinished As TypeSpace.Nested.Inn", "Inn", "InnerType"],
+        ["Sub Shadow()\nDim SampleType As Long\nPrint SampleType.Samp\nEnd Sub", "Samp", null],
+        ["Print BuildValue(1).Samp", "Samp", null]
+    ]) {
+        const partial = text + "\n" + statement;
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, partial]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const offset = partial.lastIndexOf(suffix) + suffix.length;
+            const position = pointAt(partial, statement, offset - partial.indexOf(statement));
+            const result = (await worker.query(reply.snapshotId, "completion", { ...input, position })).result;
+            assert.ok(result.member);
+            if (expected) assert.ok(result.entries.some((entry) => entry.name === expected),
+                "native namespace types should survive an unfinished type name: " + statement);
+            else assert.deepEqual(result.entries, [], "failed value receivers must not become static owners: " + statement);
+            const definition = (await worker.query(reply.snapshotId, "definition", { ...input, position })).result;
+            assert.deepEqual(definition, [], "completion candidates must not bind the unfinished suffix");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("native array index signatures retain compiler bounds and dimension roles", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/array-index-signatures.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    for (const [sidecar, bindings] of [[true, true], [false, true], [false, false]]) {
+        const reply = await worker.analyze({ ...options, semanticModelOnly: sidecar,
+            compilerPath: sidecar ? process.env.FBC_EXECUTABLE : options.compilerPath,
+            exportSemanticExpressions: true, exportSemanticBindings: bindings }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            for (const [spelling, prefix, parameters, first] of [
+                ["matrix(0, 2)", "matrix(0,", 2, "index1: -1 To 4"],
+                ["holder.values(0)", "holder.values(", 1, "index1: -2 To 2"],
+                ["GetHolder().values(0)", "GetHolder().values(", 1, "index1: -2 To 2"],
+                ["holders(0).values(0)", "holders(0).values(", 1, "index1: -2 To 2"],
+                ["(*holderPointer).values(0)", "(*holderPointer).values(", 1, "index1: -2 To 2"],
+                ["GetHolder().callbacks(0)(1)", "GetHolder().callbacks(", 1, "index1: -1 To 1"],
+                ["dynamicValues(0, 2)", "dynamicValues(0,", 2, "index1"],
+                ["Print values(0, 2)", "Print values(0,", 1, "indices..."]
+            ]) {
+                const result = (await worker.query(reply.snapshotId, "signature", {
+                    ...input, position: pointAt(text, spelling, prefix.length)
+                })).result;
+                const signature = result?.arraySignature;
+                assert.ok(signature, `${sidecar ? "stock" : "bridge"}: ${spelling}`);
+                assert.equal(signature.kind, "array");
+                assert.equal(signature.parameters.length, parameters);
+                assert.equal(signature.parameters[0].label, !bindings && first.includes(":") ? "index1" : first);
+                for (const parameter of signature.parameters) assert.equal(
+                    signature.signature.slice(...parameter.labelOffsets), parameter.label);
+                assert.equal(result.selectedCompilerSymbolId, undefined, "array indexing must not select a procedure");
+                assert.equal(result.procedurePointerSignature, undefined);
+            }
+            const callback = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, "GetHolder().callbacks(0)(1)", "GetHolder().callbacks(0)(".length) })).result;
+            assert.equal(callback?.arraySignature, undefined, "the second argument list invokes the array element");
+            assert.equal(callback.procedurePointerSignature?.parameters.length, 1);
+            assert.match(callback.procedurePointerSignature.parameters[0].label, /\bas long\b/i);
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("bridge compound array field signatures survive incomplete arguments", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const prefix = fs.readFileSync(path.join(__dirname, "fixtures/array-index-signatures.bas"), "utf8");
+    fs.writeFileSync(filePath, prefix);
+    input.openFiles = [filePath];
+    for (const statement of ["Print GetHolder().values(", "Print holders(0).values(",
+        "Print (*holderPointer).values(", "Print GetHolder().callbacks(", "Print unknownHolder.values("]) {
+        const text = prefix + statement;
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: false }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const position = { line: prefix.split("\n").length - 1, character: statement.length };
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input, position })).result;
+            if (statement.includes("unknownHolder")) {
+                assert.equal(result?.arraySignature, undefined, "a matching member spelling cannot supply the receiver's type");
+            } else {
+                assert.equal(result?.arraySignature?.parameters.length, 1, statement);
+                assert.match(result.arraySignature.signature, /^Array (?:values|callbacks)\(/);
+            }
+            assert.equal(result?.procedurePointerSignature, undefined, "the first argument list indexes the array");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), prefix, "signature queries must not save unfinished buffers");
+});
+
+test("native procedure pointer signatures cover values, aliases, fields, and parameters", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/procedure-pointer-signatures.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    for (const sidecar of [true, false]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: sidecar ? process.env.FBC_EXECUTABLE || path.join(resolveFreeBasicRoot(), "bin", "fbc") : options.compilerPath,
+            semanticModelOnly: sidecar, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            for (const spelling of ["injected(1,", "callback(1,", "inferred(1,", "produced(1,", "handlersValue.invoke(1,",
+                "callbackArray(0)(1,", "callbackValues(0)(1,", "GetCallback(1)(1,", "(*callbackPointer)(1,", "(callback)(1,"]) {
+                const result = (await worker.query(reply.snapshotId, "signature", {
+                    ...input, position: pointAt(text, spelling, spelling.length)
+                })).result;
+                assert.ok(result?.procedurePointerSignature, (sidecar ? "stock " : "bridge ") + spelling);
+                assert.equal(result.arraySignature, undefined, "a callback invocation is not array indexing");
+                assert.equal(result.context.activeParameter, 1);
+                assert.equal(result.procedurePointerSignature.parameters.length, 2);
+                assert.match(result.procedurePointerSignature.parameters[0].label, /\bas long\b/i);
+                assert.match(result.procedurePointerSignature.parameters[1].label, /\bas double\b/i);
+                assert.equal(result.selectedCompilerSymbolId, undefined, "a callable type is not a runtime target");
+            }
+            const factory = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, "GetCallback(1)", "GetCallback(".length)
+            })).result;
+            assert.equal(factory.procedurePointerSignature, undefined, "a factory's return type is not its own parameter list");
+            assert.equal(factory.entries[0].declaration.parameters.length, 1);
+            for (const name of ["callbackArray", "callbackValues"]) {
+                const array = (await worker.query(reply.snapshotId, "signature", {
+                    ...input, position: pointAt(text, `Print ${name}(0)`, `Print ${name}(`.length)
+                })).result;
+                assert.equal(array?.procedurePointerSignature, undefined, "array indexing is not a callback invocation: " + name);
+            }
+            const action = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, "action(resultValue)", "action(".length)
+            })).result;
+            assert.match(action?.procedurePointerSignature?.signature || "", /^Sub action\(byref as long\)$/i);
+            assert.equal(action.context.activeParameter, 0);
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("editor bridge retains procedure pointer signatures while arguments are incomplete", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const prefix = ["Declare Function Compute(ByVal value As Long, ByVal scale As Double) As Double",
+        "Dim callback As Function(ByVal value As Long, ByVal scale As Double) As Double = @Compute", ""].join("\n");
+    for (const statement of ["Print callback(1, )", "Print callback(1,"]) {
+        const text = prefix + statement + "\n";
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: false, exportSemanticBindings: false }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const result = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, statement, statement.indexOf(",") + 1)
+            })).result;
+            assert.equal(result?.procedurePointerSignature?.parameters.length, 2, statement);
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("bridge compound callback signatures retain native declared types during incomplete calls", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const original = fs.readFileSync(path.join(__dirname, "fixtures/procedure-pointer-signatures.bas"), "utf8");
+    for (const [complete, statement] of [
+        ["Print callbackArray(0)(1, 2)", "Print callbackArray(0)(1, )"],
+        ["Print callbackArray(0)(1, 2)", "Print callbackArray(0)(1,"],
+        ["Print callbackValues(0)(1, 2)", "Print callbackValues(0)(1, )"],
+        ["Print GetCallback(1)(1, 2)", "Print GetCallback(1)(1, )"],
+        ["Print (*callbackPointer)(1, 2)", "Print (*callbackPointer)(1, )"],
+        ["Print (callback)(1, 2)", "Print (callback)(1, )"]
+    ]) {
+        const text = original.replace(complete, statement);
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, true, statement);
+            const result = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, statement, statement.lastIndexOf(",") + 1)
+            })).result;
+            assert.equal(result?.context.expressionCallee, true, statement);
+            assert.equal(result?.procedurePointerSignature?.parameters.length, 2, statement);
+            assert.equal(result.context.activeParameter, 1);
+            assert.equal(result.selectedCompilerSymbolId, undefined, "recovery must not invent an indirect runtime target");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    for (const statement of ["Print callbackArray()(1, )", "Print callbackArray(0, 1)(1, )",
+        "Print Compute(1, 2)(1, )", "Print (callbackPointer)(1, )", "Print (resultValue)(1, )"]) {
+        const text = original.replace("Print callbackArray(0)(1, 2)", statement);
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            const result = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, statement, statement.lastIndexOf(",") + 1)
+            })).result;
+            assert.equal(result?.procedurePointerSignature, undefined, "do not invent a callable element or dereference: " + statement);
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("public recovered members keep access and producer guards without a reliable caller scope", () => {
+    const { tokenize } = require("../lib/semantic-model");
+    const uri = CompilerUri.file("/workspace/unclosed-members.bas");
+    const text = ".Mea", lexical = tokenize(text);
+    const document = { ...lexical, text, uri, byLine: new Map([[0, lexical.tokens]]),
+        root: { start: 0, end: text.length, children: [], recovered: true, symbol: 1 } };
+    // These are the inspected ABI's two restricted class-member attribute bits.
+    const entries = [["PublicMethod", 0], ["PrivateMethod", 0x200000], ["ProtectedMethod", 0x400000]]
+        .map(([name, attributes]) => ({ id: name, name, provisional: false,
+            declaration: { provisional: false }, nativeSymbol: { attributes, owner: 1 } }));
+    for (const [version, provisional] of [["1.20.5", false], ["1.21.0", false], ["", false], ["1.20.5", true]]) {
+        const model = { inventory: {}, compilerSemanticModelCompilerVersion: version,
+            getDocument: () => document, inner: { getDocument: () => document },
+            projectPositions: () => [], recoveredMemberCompletion: CompilerSemanticModel.prototype.recoveredMemberCompletion,
+            recoverySourceToExpanded: new Map([[`${uri}:0`, [lexical.tokens[0]]], [`${uri}:1`, [lexical.tokens[1]]]]),
+            recoveryCompletionReceivers: new Map([[1, [{ dtype: 22, subtype: 1, typeName: "Service", start: { line: 0, character: 1 } }]]]),
+            commonProjectedEntries: (positions, query) => positions.flatMap(query),
+            nativeTypeEntries: () => [{ provisional, declaration: { provisional } }], nativeMembers: () => entries,
+            nativeAccess: CompilerSemanticModel.prototype.nativeAccess,
+            nativeSymbols: new Map([[1, { id: 1, symbolClass: 10, owner: 0 }]]), canonicalSymbolIds: new Map() };
+        const complete = (allowPublicRecovery) => CompilerSemanticModel.prototype.completeMembers.call(model, uri, 0, text.length, allowPublicRecovery);
+        assert.deepEqual(complete(false), [], "ordinary scope-dependent lookup must remain closed");
+        assert.deepEqual(complete(true).map((entry) => entry.name), version === "1.20.5" && !provisional ? ["PublicMethod"] : [],
+            "only concrete public members from the known producer can survive caller-scope uncertainty");
+    }
+});
+
+test("callback field signature recovery rejects provisional members and unknown producers", () => {
+    const { createDocumentModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const uri = CompilerUri.file("/workspace/recovered-callback-field.bas");
+    const text = "Print MakeHolder().invoke(1,";
+    const document = createDocumentModel(uri, parseFreeBasicText(text));
+    for (const mode of ["valid", "entry", "declaration", "producer", "array", "pointer"]) {
+        const entry = { key: "invoke", provisional: mode === "entry",
+            declaration: { type: "field", provisional: mode === "declaration" },
+            nativeSymbol: { id: 1, typeName: mode === "pointer" ? "typeof(function(as long, as double) as double) ptr"
+                : "function(as long, as double) as double" } };
+        const model = { partial: true, semanticSidecarOnly: false,
+            inventory: { shapes: new Map([[1, { dimensions: mode === "array" ? 1 : 0 }]]) },
+            compilerSemanticModelCompilerVersion: mode === "producer" ? "1.21.0" : "1.20.5",
+            getDocument: () => document, resolveAt: () => [], compilerSelectionRanges: () => [], completeMembers: () => [entry] };
+        const result = queryCompilerModel(model, "signature", { uri, position: { line: 0, character: text.length } }, () => {});
+        assert.equal(result.arraySignature?.parameters.length, mode === "array" ? 1 : undefined, mode);
+        assert.equal(result.procedurePointerSignature?.parameters.length, mode === "valid" ? 2 : undefined, mode);
+        assert.equal(result.selectedCompilerSymbolId, undefined);
+    }
+});
+
+test("callback recovery follows canonical types when private datatype numbers shift", () => {
+    const { createDocumentModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const uri = CompilerUri.file("/workspace/callback-datatype-layout.bas");
+    const text = "Print MakeCallback()(1,";
+    const document = createDocumentModel(uri, parseFreeBasicText(text));
+    for (const [datatype, typeName, version, expected] of [
+        [22, "function(as long, as double) as double", "1.20.5", 2],
+        [24, "function(as long, as double) as double", "1.20.5", 2],
+        [22, "Widget ptr", "1.20.5", undefined],
+        [16, "uinteger<128> ptr", "1.20.5", undefined],
+        [24, "function(as long, as double) as double", "1.21.0", undefined]
+    ]) {
+        // The inspected family retains pointer bit 5. Its FUNCTION primitive
+        // moved from 22 to 24 when the two 128-bit scalar slots were inserted.
+        const entry = { declaration: { type: "function", provisional: false }, provisional: false,
+            nativeSymbol: { id: 1, dtype: datatype | 0x20, typeName } };
+        const model = { partial: true, semanticSidecarOnly: false, compilerSemanticModelCompilerVersion: version,
+            inventory: { shapes: new Map([[1, { dimensions: 0 }]]) }, getDocument: () => document,
+            compilerSelectionRanges: () => [], resolveAt: () => [entry] };
+        const result = queryCompilerModel(model, "signature", { uri, position: { line: 0, character: text.length } }, () => {});
+        assert.equal(result.procedurePointerSignature?.parameters.length, expected, `${version}: ${datatype}: ${typeName}`);
+    }
+});
+
+test("bridge callback field signatures survive incomplete factory and array receivers", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const prefix = ["Type CallbackType As Function(ByVal amount As Long, ByVal scale As Double) As Double",
+        "Type CallbackHolder", "invoke As CallbackType", "scalar As Long", "pointer As CallbackType Ptr",
+        "Private:", "hidden As CallbackType", "End Type",
+        "Declare Function MakeHolder() As CallbackHolder", "Declare Function MakeHolderPointer() As CallbackHolder Ptr",
+        "Dim holders(0 To 1) As CallbackHolder", "Dim holderValue As CallbackHolder", ""].join("\n");
+    for (const receiver of ["MakeHolder().invoke", "MakeHolderPointer()->invoke", "holders(0).invoke", "(holderValue.invoke)"]) {
+        const statement = `Print ${receiver}(1,`;
+        const text = prefix + statement + "\n";
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, true, statement);
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, statement, statement.length) })).result;
+            assert.equal(result.procedurePointerSignature?.parameters.length, 2, statement);
+            assert.match(result.procedurePointerSignature.parameters[0].label, /as long/i);
+            assert.match(result.procedurePointerSignature.parameters[1].label, /as double/i);
+            assert.equal(result.selectedCompilerSymbolId, undefined, "a callable field's type cannot identify an indirect runtime target");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    for (const receiver of ["MakeHolder().hidden", "MakeHolder().missing", "MakeHolder().scalar", "MakeHolder().pointer",
+        "MakeHolderPointer().invoke", "UnknownHolder().invoke"]) {
+        const statement = `Print ${receiver}(1,`;
+        const text = prefix + statement + "\n";
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, statement, statement.length) })).result;
+            assert.equal(result?.procedurePointerSignature, undefined, "native access and callable field type must be proven: " + statement);
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("native Signature Help recovers scoped procedure overloads without selecting a target", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const declarations = [
+        "Declare Function Calculate Overload(ByVal amount As Long, ByVal scale As Double) As Double",
+        "Declare Function Calculate Overload(ByVal amount As Double, ByVal scale As Double) As Double"
+    ].join("\n") + "\n";
+    for (const [statement, padding] of [["Print Calculate(1, )", ""], ["Print Calculate(1,", ""],
+        ["Print Calculate(1, )", Array.from({ length: 2100 }, (_, index) => `Dim paddingValue${index} As Long\n`).join("")]]) {
+        const text = padding + declarations + statement + "\n";
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const result = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, statement, statement.indexOf(",") + 1)
+            })).result;
+            assert.equal(result.entries.length, 2, statement);
+            assert.ok(result.entries.some((entry) => /amount As Long/i.test(entry.declaration.signature)));
+            assert.ok(result.entries.some((entry) => /amount As Double/i.test(entry.declaration.signature)));
+            assert.equal(result.context.activeParameter, 1);
+            assert.equal(result.selectedCompilerSymbolId, 0, "recovery is not an overload-selection receipt");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("committed native Signature Help retains accessible overloads and the compiler-selected target", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const declarations = [
+        "Declare Function Calculate Overload(ByVal amount As Long, ByVal scale As Double) As Double",
+        "Declare Function Calculate Overload(ByVal amount As Double, ByVal scale As Double) As Double",
+        "Type Service", "    value As Long",
+        "Declare Function Measure Overload(ByVal amount As Long, ByVal scale As Double) As Double",
+        "Declare Function Measure Overload(ByVal amount As Double, ByVal scale As Double) As Double",
+        "Declare Property Item(ByVal amount As Long) As Double",
+        "Declare Property Item(ByVal amount As Double) As Double",
+        "Declare Property Item(ByVal amount As Long, ByVal assignedValue As Double)",
+        "Private:", "Declare Function Measure Overload(ByVal amount As String, ByVal scale As Double) As Double",
+        "End Type", "Dim instance As Service", ""
+    ].join("\n");
+    for (const callee of ["Calculate", "instance.Measure", "instance.Item"]) for (const [cast, expected] of [["CLng", "long"], ["CDbl", "double"]]) {
+        const statement = `Print ${callee}(${cast}(1)${callee.endsWith(".Item") ? "" : ", 2"})`;
+        const text = declarations + statement + "\n";
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            const result = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, statement, statement.length - 1)
+            })).result;
+            assert.equal(result.entries.length, 2, statement);
+            const selected = result.entries.filter((entry) => entry.compilerSymbolId === result.selectedCompilerSymbolId);
+            assert.equal(selected.length, 1, "the selected ID must identify exactly one displayed overload");
+            assert.equal(selected[0].declaration.parameters[0].typeName.toLowerCase(), expected, statement);
+            assert.ok(result.entries.every((entry) => entry.declaration.parameters[0].typeName.toLowerCase() !== "string"));
+            if (callee.endsWith(".Item")) assert.ok(result.entries.every((entry) => entry.declaration.parameters.length === 1),
+                "getter assistance must not include setter signatures");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("unevaluated source roles prefer inner native inputs and retain conflicting physical uses", () => {
+    const uri = CompilerUri.file("/workspace/query.bas");
+    const model = Object.create(CompilerSemanticModel.prototype);
+    model.getDocument = () => ({ text: "SizeOf(Factory())", lineOffsets: [0] });
+    const ranges = [{ start: 0, end: 17, unevaluated: false, maximum: 17 },
+        { start: 7, end: 16, unevaluated: true, maximum: 17 }];
+    model.compilerUnevaluatedSourceRanges = new Map([[uri.toString(), ranges]]);
+    const occurrence = { line: 0, startColumn: 7, endColumn: 14 };
+    assert.equal(model.isUnevaluatedSourceOccurrence(uri, occurrence), true);
+    ranges.push({ start: 7, end: 16, unevaluated: false, maximum: 17 });
+    assert.equal(model.isUnevaluatedSourceOccurrence(uri, occurrence), false,
+        "another evaluated expansion at the same physical span must retain its runtime edge");
+    assert.equal(model.isUnevaluatedSourceOccurrence(CompilerUri.file("/workspace/other.bas"), occurrence), false);
+});
+
+test("native macro definition names retain references but require invocation-level call projection", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    for (const [definition, call, bodyReference] of [["#define FixedCall() Factory()", "FixedCall()", true],
+        ["#define Glue(prefix, suffix) prefix##suffix()", "Glue(Fa, ctory)", false]]) {
+        const text = ["Declare Function Factory() As Long", definition, "Sub Caller()", "    Print Factory()",
+            "    Print " + call, "End Sub", ""].join("\n");
+        fs.writeFileSync(filePath, text);
+        const reply = await worker.analyze({ ...options, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            const outgoing = (await worker.query(reply.snapshotId, "callHierarchyOutgoing", { ...input,
+                position: pointAt(text, "Sub Caller", "Sub ".length) })).result;
+            assert.deepEqual(outgoing.flatMap((entry) => entry.fromRanges.map((range) => range.line)), [3]);
+            assert.ok(outgoing.every((entry) => entry.compilerRequiresImplicitProjection === true),
+                "replacement-body and pasted callee names need invocation-level projection");
+            if (bodyReference) {
+                const references = (await worker.query(reply.snapshotId, "references", { ...input,
+                    position: pointAt(text, "Function Factory", "Function ".length), includeDeclaration: true })).result;
+                assert.ok(references.some((entry) => entry.occurrence.line === 1), "the written macro body name remains a symbol reference");
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("native call hierarchy excludes unevaluated query calls without removing references", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["Declare Function Factory() As Long", "Declare Function TextFactory() As String",
+        "#define FactoryType(name) TypeOf(name())", "Sub Caller()", "    Dim first As TypeOf(Factory())",
+        "    Print SizeOf(Factory())", "    Dim nested As TypeOf(CLng(SizeOf(Factory())))",
+        "    Dim expanded As FactoryType(Factory)", "    Print Factory()", "    Print Len(TextFactory())",
+        "#define DualUse(name) Dim mixed As TypeOf(name()) : Print name()", "    DualUse(Factory)", "End Sub",
+        "#if SizeOf(Integer) > 0", "#assert TypeOf(CLng(1)) = TypeOf(Long)", "#endif", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    for (const bindings of [false, true]) {
+        const reply = await worker.analyze({ ...options, exportSemanticExpressions: true, exportSemanticBindings: bindings }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            const outgoing = (await worker.query(reply.snapshotId, "callHierarchyOutgoing", { ...input,
+                position: pointAt(text, "Sub Caller", "Sub ".length) })).result;
+            assert.deepEqual(outgoing.map((entry) => entry.fromRanges.map((range) => range.line)).flat().sort((a, b) => a - b), [8, 9, 11],
+                "TYPEOF/SIZEOF operands are not calls, but LEN's dynamic String operand is evaluated");
+            const incoming = (await worker.query(reply.snapshotId, "callHierarchyIncoming", { ...input,
+                position: pointAt(text, "Function Factory", "Function ".length) })).result;
+            assert.deepEqual(incoming.map((entry) => entry.fromRanges.map((range) => range.line)).flat(), [8, 11]);
+            const references = (await worker.query(reply.snapshotId, "references", { ...input,
+                position: pointAt(text, "Function Factory", "Function ".length), includeDeclaration: true })).result;
+            assert.deepEqual([...new Set(references.map((entry) => entry.occurrence.line))].sort((a, b) => a - b), [0, 4, 5, 6, 7, 8, 11],
+                "unevaluated uses remain actual symbol references");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("unevaluated query hierarchy excludes constructor and index-operator relationships", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["Type QueryBox", "    value As Long", "    Declare Constructor()", "    Declare Operator Cast() As Long",
+        "    Declare Operator [](ByVal index As Long) As Long", "End Type", "Sub Caller()",
+        "    Dim converted As TypeOf(CLng(Type<QueryBox>()))", "    Dim instance As QueryBox = Any",
+        "    Dim indexed As TypeOf(instance[0])", "End Sub", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    try {
+        assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+        const outgoing = (await worker.query(reply.snapshotId, "callHierarchyOutgoing", { ...input,
+            position: pointAt(text, "Sub Caller", "Sub ".length) })).result;
+        assert.deepEqual(outgoing, [], "type queries must not create implicit runtime edges");
+        const references = (await worker.query(reply.snapshotId, "references", { ...input,
+            position: pointAt(text, "Declare Constructor", "Declare ".length), includeDeclaration: true })).result;
+        assert.ok(references.some((entry) => entry.occurrence.line === 7), "the constructor remains referenced by typed syntax");
+    } finally { worker.releaseModel(reply.snapshotId); }
+});
+
+test("native compound method signatures retain accessible overloads and selections", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/compound-method-signatures.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    for (const sidecar of [true, false]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: sidecar ? process.env.FBC_EXECUTABLE : options.compilerPath,
+            semanticModelOnly: sidecar, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            for (const [call, expected, count] of [["MakeService().Measure(CLng(1), 2)", "long", 2],
+                ["MakeService().Measure(CDbl(1), 2)", "double", 2], ["services(0).Measure(CLng(1), 2)", "long", 2],
+                ["(*servicePointer).Measure(CDbl(1), 2)", "double", 2], ["MakeServicePointer()->Measure(CDbl(1), 2)", "double", 2],
+                ["MakeService().Item(CLng(1))", "long", 2], ["MakeService().Item(CDbl(1))", "double", 2],
+                ["MakeService().Apply(1, 2)", "long", 1]]) {
+                const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                    position: pointAt(text, call, call.length - 1) })).result;
+                assert.equal(result?.entries.length, count, `${sidecar ? "stock" : "bridge"}: ${call}`);
+                assert.ok(result.entries.every((entry) => !/amount As String/i.test(entry.declaration.signature)));
+                assert.equal(result.procedurePointerSignature, undefined, "a method is not a callback value");
+                assert.equal(result.arraySignature, undefined);
+                if (count > 1) {
+                    const selected = result.entries.filter((entry) => entry.compilerSymbolId === result.selectedCompilerSymbolId);
+                    assert.equal(selected.length, 1, "one displayed method must match the native target for " + call);
+                    assert.equal(selected[0].declaration.parameters[0].typeName.toLowerCase(), expected);
+                }
+                if (call.includes(".Item")) assert.ok(result.entries.every((entry) => entry.declaration.parameters.length === 1),
+                    "property getter help must not include its setter");
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("native bare compound and WITH method calls retain signatures and selections", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/compound-method-signatures.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    for (const sidecar of [true, false]) {
+        const reply = await worker.analyze({ ...options, compilerPath: sidecar ? process.env.FBC_EXECUTABLE : options.compilerPath,
+            semanticModelOnly: sidecar, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            for (const [call, type, count] of [["MakeService().Measure CLng(1), 2", "long", 2],
+                ["services(0).Measure CDbl(1), 2", "double", 2], ["(*servicePointer).Apply 1, 2", "long", 1],
+                ["MakeServicePointer()->Apply 1, 2", "long", 1], ["    .Measure CLng(1), 2", "long", 2],
+                ["    .Measure CDbl(1), 2", "double", 2], ["    .Apply 1, 2", "long", 1],
+                ["If 1 Then .Apply 1, 2", "long", 1], ["    .Apply 1, _\n        2", "long", 1]]) {
+                const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                    position: pointAt(text, call, call.length) })).result;
+                assert.equal(result?.entries.length, count, `${sidecar ? "stock" : "bridge"}: ${call}`);
+                assert.equal(result.context.bare, true);
+                assert.equal(result.context.activeParameter, 1);
+                assert.ok(result.entries.every((entry) => !/amount As String/i.test(entry.declaration.signature)));
+                if (count > 1) {
+                    const selected = result.entries.filter((entry) => entry.compilerSymbolId === result.selectedCompilerSymbolId);
+                    assert.equal(selected.length, 1);
+                    assert.equal(selected[0].declaration.parameters[0].typeName.toLowerCase(), type);
+                }
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("bridge bare receiver and WITH method recovery requires an active native receiver", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const prefix = fs.readFileSync(path.join(__dirname, "fixtures/compound-method-signatures.bas"), "utf8");
+    fs.writeFileSync(filePath, prefix);
+    input.openFiles = [filePath];
+    for (const [before, statement, count, closeWith = true] of [["", "MakeService().Measure ", 2], ["", "services(0).Measure ", 2],
+        ["", "(*servicePointer).Apply 1,", 1], ["With services(0)\n", "    .Apply 1,", 1],
+        ["With services(0)\n", "    .HiddenMethod ", 0], ["", ".Apply 1,", 0],
+        ["With services(0)\n", "    .Apply 1,", 1, false], ["With services(0)\n", "    .HiddenMethod ", 0, false]]) {
+        const text = prefix + before + statement + "\n" + (before && closeWith ? "End With\n" : "");
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: false }, preparation);
+        try {
+            assert.equal(reply.partial, true, statement);
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: { line: prefix.split("\n").length + before.split("\n").length - 2,
+                    character: statement.length } })).result;
+            assert.equal(result?.entries.length || 0, count, statement);
+            assert.equal(result?.selectedCompilerSymbolId || 0, 0, "unfinished required arguments cannot select a target");
+            assert.ok((result?.entries || []).every((entry) => !/amount As String/i.test(entry.declaration.signature)));
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), prefix);
+});
+
+test("bridge compound method signatures survive incomplete arguments without selecting a target", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const prefix = fs.readFileSync(path.join(__dirname, "fixtures/compound-method-signatures.bas"), "utf8");
+    fs.writeFileSync(filePath, prefix);
+    input.openFiles = [filePath];
+    for (const [statement, count] of [["Print MakeService().Measure(1,", 2], ["Print services(0).Measure(", 2],
+        ["Print (*servicePointer).Measure(1,", 2], ["Print MakeServicePointer()->Measure(1,", 2],
+        ["MakeService().Apply(1,", 1], ["Print MakeService().HiddenMethod(", 0], ["Print unknownService.Measure(", 0]]) {
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, prefix + statement]]),
+            exportSemanticExpressions: true, exportSemanticBindings: false }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: { line: prefix.split("\n").length - 1, character: statement.length } })).result;
+            assert.equal(result?.entries.length || 0, count, statement);
+            assert.equal(result?.selectedCompilerSymbolId || 0, 0, "unfinished arguments do not select an overload");
+            assert.ok((result?.entries || []).every((entry) => !/amount As String/i.test(entry.declaration.signature)));
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), prefix);
+});
+
+test("committed bare-call Signature Help keeps native selections across statement boundaries", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const declarations = [
+        "Declare Sub Apply Overload(ByVal amount As Long, ByVal scale As Double)",
+        "Declare Sub Apply Overload(ByVal amount As Double, ByVal scale As Double)",
+        "Namespace Helpers",
+        "Declare Sub Apply Overload(ByVal amount As Long, ByVal scale As Double)",
+        "Declare Sub Apply Overload(ByVal amount As Double, ByVal scale As Double)",
+        "End Namespace", "Type Service", "    value As Long",
+        "Declare Sub Apply Overload(ByVal amount As Long, ByVal scale As Double)",
+        "Declare Sub Apply Overload(ByVal amount As Double, ByVal scale As Double)",
+        "End Type", "Dim instance As Service", "Dim pointerValue As Service Ptr = @instance", ""
+    ].join("\n");
+    const statements = [
+        "Apply CLng(1), 2", "Apply CDbl(1), 2",
+        "Helpers.Apply CDbl(1), 2", "instance.Apply CDbl(1), 2", "pointerValue->Apply CDbl(1), 2",
+        "instance . Apply CDbl(1), 2", "Apply CDbl(1), _\n    2",
+        "If 1 Then Apply CLng(1), 2 Else Apply CDbl(1), 2",
+        "Apply CLng(1), 2: Apply CDbl(1), 2", "Apply CLng(1), 2 ' Apply CDbl(1), 2"
+    ];
+    const text = declarations + statements.join("\n") + "\n";
+    const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]) }, preparation);
+    try {
+        assert.equal(reply.partial, false, reply.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+        for (const statement of statements) {
+            for (const match of statement.matchAll(/Apply[ (](CLng|CDbl)\(1\),/g)) {
+                if (statement.slice(0, match.index).includes("'")) continue;
+                const offset = text.indexOf(statement, declarations.length) + match.index + match[0].length;
+                const position = { line: text.slice(0, offset).split("\n").length - 1,
+                    character: offset - text.lastIndexOf("\n", offset - 1) - 1 };
+                const result = (await worker.query(reply.snapshotId, "signature", { ...input, position })).result;
+                assert.equal(result.entries.length, 2, statement);
+                const selected = result.entries.filter((entry) => entry.compilerSymbolId === result.selectedCompilerSymbolId);
+                assert.equal(selected.length, 1, statement);
+                assert.equal(selected[0].declaration.parameters[0].typeName.toLowerCase(),
+                    match[1] === "CLng" ? "long" : "double", statement);
+                assert.equal(result.context.activeParameter, 1);
+            }
+        }
+    } finally { worker.releaseModel(reply.snapshotId); }
+});
+
+test("compound index signatures refuse provisional receiver types", () => {
+    const { createDocumentModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const uri = CompilerUri.file("/workspace/uncertain-compound-index.bas");
+    const text = "Print MakeValue()[";
+    const document = createDocumentModel(uri, parseFreeBasicText(text));
+    let queries = 0;
+    const model = { partial: true, inventory: {}, semanticSidecarOnly: false,
+        getDocument: () => document, compilerSelectionRanges: () => [],
+        expressionAt() { queries++; return { typeName: "UncertainType", subtype: 7, provisional: true }; },
+        nativeTypeEntries() { assert.fail("a provisional receiver cannot supply operator members"); }
+    };
+    const result = queryCompilerModel(model, "signature", { uri, position: { line: 0, character: text.length } }, () => {});
+    assert.ok(queries > 0);
+    assert.deepEqual(result.entries, []);
+    assert.equal(result.selectedCompilerSymbolId, 0);
+});
+
+test("native compound index signatures use compiler-typed expression receivers", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const prefix = ["Type ExpressionIndex", "value As Long", "Declare Operator [](ByVal index As Long) As Long",
+        "Declare Operator [](ByVal index As Double) As Long", "Private:", "Declare Operator [](ByVal index As String) As Long", "End Type",
+        "Declare Function MakeIndex() As ExpressionIndex", "Declare Function MakePointer() As ExpressionIndex Ptr",
+        "Declare Function MakeScalar() As Long", "Dim item As ExpressionIndex", "Dim pointerValue As ExpressionIndex Ptr = @item",
+        "Dim values(0 To 1) As ExpressionIndex", ""].join("\n");
+    for (const receiver of ["MakeIndex()", "values(0)", "(*pointerValue)", "(item)"]) for (const closed of [false, true]) {
+        const statement = `Print ${receiver}[${closed ? "CLng(1)]" : ""}`;
+        const text = prefix + statement + "\n";
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, !closed, statement);
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, statement, `Print ${receiver}[`.length) })).result;
+            assert.equal(result?.context.indexing, true, statement);
+            assert.equal(result.context.expressionCallee, true);
+            const operators = result.entries.filter((entry) => entry.declaration.type === "operator");
+            assert.equal(operators.length, 2, "only compiler-proven accessible index signatures should be returned: " + statement);
+            assert.ok(operators.every((entry) => !/index As String/i.test(entry.declaration.signature)));
+            if (!closed) assert.equal(result.selectedCompilerSymbolId || 0, 0);
+            else assert.equal(result.selectedCompilerSymbolId, operators.find((entry) =>
+                /\bindex As Long\b/i.test(entry.declaration.signature)).compilerSymbolId,
+            "complete compound indexing must preserve the compiler-selected overload");
+            assert.equal(result.procedurePointerSignature, undefined, "an indexed aggregate is not an indirect procedure invocation");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    for (const receiver of ["(pointerValue)", "MakePointer()", "MakeScalar()", "values()", "values(0, 1)", "(values)", "UnknownFactory()"]) {
+        const statement = `Print ${receiver}[`;
+        const text = prefix + statement + "\n";
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, statement, statement.length) })).result;
+            assert.deepEqual(result?.entries || [], [], "do not infer a scalar indexable value from invalid/pointer/array receivers: " + statement);
+            assert.equal(result?.selectedCompilerSymbolId || 0, 0);
+            assert.equal(result?.procedurePointerSignature, undefined);
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("provisional receiver types cannot recover index operator signatures", () => {
+    const { createDocumentModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const uri = CompilerUri.file("/workspace/provisional-index.bas");
+    const text = "Print This[";
+    const document = createDocumentModel(uri, parseFreeBasicText(text));
+    let typed = 0;
+    const model = { partial: true, inventory: {}, semanticSidecarOnly: false,
+        getDocument: () => document, resolveAt: () => [], completeMembers: () => null, visibleEntries: () => [],
+        expressionAt() { typed++; return { typeName: "UncertainType", subtype: 7, provisional: true }; },
+        nativeTypeEntries() { assert.fail("a provisional type must not supply members"); }
+    };
+    const result = queryCompilerModel(model, "signature", { uri, position: { line: 0, character: text.length } }, () => {});
+    assert.equal(typed, 1);
+    assert.deepEqual(result.entries, []);
+    assert.equal(result.selectedCompilerSymbolId, 0);
+});
+
+test("native index operator signatures remain available while brackets are incomplete", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const prefix = ["Type RecoveryIndex", "value As Long", "Declare Operator [](ByVal index As Long) As Long",
+        "Declare Operator [](ByVal index As Double) As Long", "Private:",
+        "Declare Operator [](ByVal index As String) As Long", "Public:", "Declare Sub Inspect()", "Declare Static Sub InspectStatic()", "End Type",
+        "Type IndexAlias As RecoveryIndex", "Type Holder", "item As RecoveryIndex", "Private:", "hidden As RecoveryIndex", "End Type",
+        "Dim item As RecoveryIndex", "Dim aliasValue As IndexAlias", "Dim holderValue As Holder", "Dim indexedValues(0 To 1) As RecoveryIndex",
+        "Dim pointerValue As RecoveryIndex Ptr", "Dim scalarValue As Long", "Namespace Values", "Dim Shared qualified As RecoveryIndex",
+        "End Namespace", ""].join("\n");
+    for (const [statement, expected, before = "", after = ""] of [
+        ["Print item[", 2], ["Print item[1 +", 2], ["Print aliasValue[", 2], ["Print holderValue.item[", 2],
+        ["Print Values.qualified[", 2], ["Print borrowed[", 2, "Sub Work(ByRef borrowed As RecoveryIndex)\n", "End Sub\n"],
+        ["Print This[", 3, "Sub RecoveryIndex.Inspect()\n", "End Sub\n"],
+        ["Print This[", 0, "Sub RecoveryIndex.InspectStatic()\n", "End Sub\n"],
+        ["Print holderValue.hidden[", 0], ["Print indexedValues[", 0], ["Print pointerValue[", 0], ["Print scalarValue[", 0],
+        ["Print RecoveryIndex[", 0], ["Print item[", 0, "Sub Shadow(ByVal item As Long)\n", "End Sub\n"]
+    ]) {
+        const text = prefix + before + statement + "\n" + after;
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: false, exportSemanticBindings: false }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const receiver = /([A-Za-z_]\w*)\[/.exec(statement)[1];
+            const receiverPosition = pointAt(text, statement, statement.indexOf(receiver + "[") + 1);
+            const bindings = (await worker.query(reply.snapshotId, "definition", { ...input, position: receiverPosition })).result;
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, statement, statement.length) })).result;
+            const operators = (result?.entries || []).filter((entry) => entry.declaration.type === "operator");
+            assert.equal(operators.length, expected, "incomplete indexing must retain only accessible scalar-value native overloads: " + before + statement);
+            assert.ok(operators.every((entry) => entry.declaration.parameters.length === 1), "native index signatures must retain their parameter");
+            assert.ok(operators.every((entry) => /Declare Operator \[\]\(ByVal index As (?:Long|Double|String)\) As Long/i.test(entry.declaration.signature)),
+                "recovery must present the full physical index signature, not a truncated trace caption");
+            if (expected !== 3) assert.ok(operators.every((entry) => !/index As String/i.test(entry.declaration.signature)), "private operators must stay hidden");
+            assert.equal(result.context.activeParameter, 0);
+            assert.equal(result.selectedCompilerSymbolId || 0, 0, "an incomplete index expression has no committed target");
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", { ...input, position: receiverPosition })).result, bindings,
+                "index signature recovery must not alter navigation bindings");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("native constructor signatures remain available while arguments are incomplete", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const prefix = ["Type RecoveryWidget", "value As Long",
+        "Declare Constructor(ByVal amount As Long, ByVal scale As Double)",
+        "Declare Constructor(ByVal amount As Double, ByVal scale As Double)",
+        "Private:", "Declare Constructor(ByVal amount As String, ByVal scale As Double)", "End Type", ""].join("\n");
+    const fixtures = [
+        { statement: "Dim result As RecoveryWidget = RecoveryWidget(1,", expected: 2 },
+        { statement: "Dim allocated As RecoveryWidget Ptr = New RecoveryWidget(1,", expected: 2 },
+        { prefix: prefix + "Type RecoveryAlias As RecoveryWidget\n", statement: "Print RecoveryAlias(1,", expected: 2 },
+        { prefix: "Namespace Widgets\n" + prefix + "End Namespace\n", statement: "Print Widgets.RecoveryWidget(1,", expected: 2 },
+        { prefix: "Namespace Hidden\n" + prefix + "End Namespace\n", statement: "Print RecoveryWidget(1,", expected: 0 },
+        { prefix: prefix + "Sub Work(ByVal RecoveryWidget As Long)\n", statement: "Print RecoveryWidget(1,", suffix: "End Sub\n", expected: 2, rejectedShadow: true },
+        { prefix: "Namespace Types\n" + prefix + "End Namespace\nUsing Types\nSub Work(ByVal RecoveryWidget As Long)\n",
+            statement: "Print RecoveryWidget(1,", suffix: "End Sub\n", expected: 0 },
+        { prefix: prefix + "Type ScalarAlias As Long\n", statement: "Print ScalarAlias(1,", expected: 0 },
+        { prefix: prefix + "Type WidgetPointer As RecoveryWidget Ptr\n", statement: "Print WidgetPointer(1,", expected: 0 },
+        { prefix: "Namespace First\n" + prefix + "End Namespace\nNamespace Second\n" + prefix +
+            "End Namespace\nUsing First\nUsing Second\n", statement: "Print RecoveryWidget(1,", expected: 0 }
+    ];
+    for (const fixture of fixtures) {
+        const { statement, expected } = fixture;
+        const text = (fixture.prefix || prefix) + statement + "\n" + (fixture.suffix || "");
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: false, exportSemanticBindings: false }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            if (fixture.rejectedShadow) assert.ok(reply.diagnostics.some((diagnostic) => /duplicated definition/i.test(diagnostic.message)),
+                "a rejected parameter cannot shadow the independently valid native type");
+            const callee = /([A-Za-z_]\w*)\([^()]*$/.exec(statement)[1];
+            const calleePosition = pointAt(text, statement, statement.lastIndexOf(callee + "(") + 1);
+            const before = (await worker.query(reply.snapshotId, "definition", { ...input, position: calleePosition })).result;
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, statement, statement.length) })).result;
+            const constructors = (result?.entries || []).filter((entry) => entry.declaration.type === "constructor");
+            assert.equal(constructors.length, expected, "incomplete construction must retain only accessible, unambiguous native overloads: " + text);
+            assert.ok(constructors.every((entry) => !/amount As String/i.test(entry.declaration.signature)),
+                "private constructors must remain inaccessible");
+            assert.equal(result.context.activeParameter, 1);
+            assert.equal(result.selectedCompilerSymbolId || 0, 0, "an incomplete call has no committed overload selection");
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", { ...input, position: calleePosition })).result, before,
+                "signature-only recovery must not alter navigation bindings");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+for (const sidecar of [true, false]) test(`native sized cast signatures retain their own context (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const unsignedWidth = process.env.FBC_INTEGER128_EXECUTABLE ? 128 : 32;
+    const source = ["Type ConvertedValue", "    value As Short", "    Declare Operator Cast() As Short", "End Type",
+        "Operator ConvertedValue.Cast() As Short", "    Return this.value", "End Operator",
+        "Declare Function Scale(ByVal amount As Short) As Long", "Dim item As ConvertedValue",
+        "Dim small As Short = CInt<16>(item)", `Dim wide As UInteger<${unsignedWidth}> = CUInt<${unsignedWidth}>(1)`,
+        "Print Scale(CInt<(8 Shl 1)>(1))", ""].join("\n");
+    fs.writeFileSync(filePath, source);
+    const reply = await worker.analyze({ ...options,
+        compilerPath: sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+        semanticModelOnly: sidecar, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    try {
+        assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+        for (const spelling of ["CInt<16>(item)", `CUInt<${unsignedWidth}>(1)`, "CInt<(8 Shl 1)>(1)"]) {
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(source, spelling, spelling.lastIndexOf(">(") + 2) })).result;
+            assert.equal(result?.context.sizedCast, true, spelling);
+            assert.equal(result.context.activeParameter, 0);
+            assert.equal(result.context.name, spelling.startsWith("CUInt") ? "CUInt" : "CInt");
+            assert.deepEqual(result.entries, [], "a conversion operator is not the cast intrinsic's signature");
+            assert.equal(result.selectedCompilerSymbolId || 0, 0);
+        }
+        assert.equal(fs.readFileSync(filePath, "utf8"), source);
+    } finally { worker.releaseModel(reply.snapshotId); }
+    if (!sidecar) {
+        const statement = "Print Scale(CInt<32>(";
+        const text = source + statement;
+        input.openFiles = [filePath];
+        const incomplete = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(incomplete.partial, true);
+            const result = (await worker.query(incomplete.snapshotId, "signature", { ...input,
+                position: pointAt(text, statement, statement.length) })).result;
+            assert.equal(result?.context.sizedCast, true);
+            assert.equal(result.context.name, "CInt");
+            assert.deepEqual(result.entries, []);
+            assert.equal(fs.readFileSync(filePath, "utf8"), source, "Signature Help must not save the unfinished buffer");
+        } finally { worker.releaseModel(incomplete.snapshotId); }
+    }
+});
+
+test("native typed constructor signatures remain available while arguments are incomplete", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const saved = fs.readFileSync(filePath, "utf8");
+    const prefix = ["Namespace RecoveryTypes", "Type RecoveryWidget", "value As Long",
+        "Declare Constructor(ByVal amount As Long, ByVal scale As Double)",
+        "Declare Constructor(ByVal amount As Double, ByVal scale As Double)",
+        "Declare Sub Inspect()", "Private:", "Declare Constructor(ByVal amount As String, ByVal scale As Double)", "End Type", "End Namespace",
+        "Type RecoveryAlias As RecoveryTypes.RecoveryWidget", "Type PointerAlias As RecoveryAlias Ptr", "Type ScalarAlias As Long",
+        "Type Holder", "item As RecoveryAlias = Any", "Private:", "hidden As RecoveryAlias = Any", "End Type",
+        "Dim item As RecoveryAlias = Any", "Dim holderValue As Holder = Any", "Dim pointerValue As RecoveryAlias Ptr",
+        "Declare Function MakeWidget() As RecoveryAlias",
+        "Declare Function OptionalWidget(ByVal amount As Long = 0) As RecoveryAlias",
+        "Declare Function NeedsArgument(ByVal amount As Long) As RecoveryAlias",
+        "Declare Function PointerFactory() As RecoveryAlias Ptr", "Declare Function ScalarFactory() As Long",
+        "Declare Function OverloadedFactory Overload() As RecoveryAlias",
+        "Declare Function OverloadedFactory Overload(ByVal amount As Long = 0) As RecoveryAlias",
+        "Namespace Factories", "Declare Function QualifiedWidget() As RecoveryAlias", "End Namespace", ""].join("\n");
+    const cases = [
+        ["RecoveryAlias", 2, ""], ["RecoveryAlias", 2, "1,"], ["RecoveryAlias", 2, "1, )"],
+        ["RecoveryTypes.RecoveryWidget", 2], ["TypeOf(RecoveryAlias)", 2], ["TypeOf(item)", 2], ["TypeOf(holderValue.item)", 2],
+        ["TypeOf(MakeWidget())", 2], ["TypeOf((item))", 2],
+        ["TypeOf(OptionalWidget())", 2], ["TypeOf(Factories.QualifiedWidget())", 2], ["TypeOf((holderValue.item))", 2],
+        ["TypeOf(NeedsArgument())", 0], ["TypeOf(PointerFactory())", 0], ["TypeOf(ScalarFactory())", 0],
+        ["TypeOf(OverloadedFactory())", 0], ["TypeOf(MakeWidget(1))", 0], ["TypeOf((RecoveryAlias))", 0],
+        ['TypeOf(OptionalWidget("1"))', 0], ["TypeOf(OptionalWidget(/' empty '/))", 2],
+        ["TypeOf((holderValue.hidden))", 0],
+        ["TypeOf(MakeWidget())", 2, "1,", "Sub Work(ByVal MakeWidget As Long)\n", "End Sub\n"],
+        ["TypeOf(QualifiedWidget())", 0, "1,", "Using Factories\nSub Work(ByVal QualifiedWidget As Long)\n", "End Sub\n"],
+        ["TypeOf(MakeWidget())", 0, "1,", "Option NoKeyword TYPEOF\nDeclare Function TYPEOF(ByVal value As RecoveryAlias) As Long\n"],
+        ["RecoveryAlias", 0, "1,", "Option NoKeyword TYPE\nDim TYPE As Long\n"],
+        ["RecoveryAlias", 0, "1,", "Option NoKeyword TYPE\n#define TYPE 1\n"],
+        ["TypeOf((pointerValue))", 0], ["TypeOf((ScalarAlias))", 0],
+        ["UnknownType", 0], ["RecoveryWidget", 0], ["item", 0], ["ScalarAlias", 0], ["PointerAlias", 0],
+        ["RecoveryAlias Ptr", 0], ["TypeOf(pointerValue)", 0], ["TypeOf(PointerAlias)", 0],
+        ["TypeOf(MakeWidget)", 0], ["TypeOf(holderValue.hidden)", 0],
+        ["RecoveryWidget", 0, "1,", "Using RecoveryTypes\nSub Work(ByVal RecoveryWidget As Long)\n", "End Sub\n"],
+        ["RecoveryWidget", 0, "1,", "Namespace Other\nType RecoveryWidget\nvalue As Long\n" +
+            "Declare Constructor(ByVal amount As Long, ByVal scale As Double)\nEnd Type\nEnd Namespace\n" +
+            "Using RecoveryTypes\nUsing Other\n"],
+        ["RecoveryAlias", 3, "1,", "Sub RecoveryTypes.RecoveryWidget.Inspect()\n", "End Sub\n"]
+    ];
+    for (const [type, expected, argumentsText = "1,", before = "", after = ""] of cases) {
+        const statement = `Dim result As RecoveryAlias = Type<${type}>(${argumentsText}`;
+        const dialect = before.startsWith("Option NoKeyword") ? '#lang "deprecated"\n' : "";
+        const text = dialect + prefix + before + statement + "\n" + after;
+        if (type === "TypeOf(MakeWidget())" && before.startsWith("Sub Work(ByVal MakeWidget As Long)")) {
+            const complete = await worker.analyze({ ...options,
+                overlays: new Map([[filePath, prefix + before + statement + "1)\n" + after]]),
+                exportSemanticExpressions: false, exportSemanticBindings: false }, preparation);
+            try {
+                assert.equal(complete.partial, true);
+                assert.ok(complete.diagnostics.some((diagnostic) => diagnostic.code === 4),
+                    "FBC rejects the duplicate formal rather than replacing its existing native factory");
+            } finally { worker.releaseModel(complete.snapshotId); }
+        }
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: false, exportSemanticBindings: false }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, statement, argumentsText.endsWith(")") ? statement.lastIndexOf(",") + 1 : statement.length) })).result;
+            assert.equal(result?.entries.length || 0, expected, "retain accessible native constructors for " + statement);
+            if (result) {
+                assert.ok(result.entries.every((entry) => entry.declaration.type === "constructor" && entry.declaration.parameters.length === 2));
+                if (expected !== 3) assert.ok(result.entries.every((entry) => !/amount As String/i.test(entry.declaration.signature)));
+                assert.equal(result.context.activeParameter, argumentsText ? 1 : 0);
+                assert.equal(result.selectedCompilerSymbolId || 0, 0, "recovery must not select an overload");
+            }
+            if (["RecoveryAlias", "TypeOf(MakeWidget())", "TypeOf((item))"].includes(type) && argumentsText === "1," &&
+                !/^Option NoKeyword TYPE\b/.test(before)) {
+                const hover = (await worker.query(reply.snapshotId, "hover", { ...input,
+                    position: pointAt(text, statement, statement.indexOf("Type<") + 1) })).result;
+                assert.ok(hover.entries.every((entry) => entry.declaration.type !== "constructor"),
+                    "an unfinished typed call has no committed constructor hover");
+                for (const operation of ["definition", "declaration", "implementation"]) assert.deepEqual(
+                    (await worker.query(reply.snapshotId, operation, { ...input,
+                        position: pointAt(text, statement, statement.indexOf("Type<") + 1) })).result, [],
+                    "an unfinished typed call must not navigate to a guessed constructor");
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), saved);
+});
+
+test("typed constructor recovery refuses provisional types and pointer operands", () => {
+    const { createDocumentModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const uri = CompilerUri.file("/workspace/uncertain-typed-constructor.bas");
+    for (const mode of ["entry", "declaration", "pointer", "value", "scalar"]) {
+        const text = `Print Type<${mode === "scalar" ? "TypeOf(operand)" : "operand"}>(1,`;
+        const document = createDocumentModel(uri, parseFreeBasicText(text));
+        const entry = { name: "operand", key: "operand", provisional: mode === "entry",
+            declaration: { type: ["value", "scalar"].includes(mode) ? "variable" : "type", provisional: mode === "declaration" },
+            nativeSymbol: { typeName: mode === "pointer" ? "Widget ptr" : mode === "scalar" ? "long" : "Widget" } };
+        const model = { partial: true, inventory: {}, semanticSidecarOnly: false, semanticBindingsAvailable: false,
+            getDocument: () => document, completeMembers: () => null, visibleEntries: () => [entry],
+            typeEntries() { assert.equal(mode, "scalar"); return []; },
+            nativeMembers() { assert.fail("unproven types cannot supply a constructor family"); } };
+        assert.equal(queryCompilerModel(model, "signature", { uri, position: { line: 0, character: text.length } }, () => {}), null, mode);
+    }
+});
+
+test("TYPEOF factory recovery rejects incomplete or ambiguous native callable metadata", () => {
+    const { createDocumentModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const uri = CompilerUri.file("/workspace/uncertain-typeof-factory.bas");
+    const text = "Print Type<Typeof(Factory())>(1,";
+    const document = createDocumentModel(uri, parseFreeBasicText(text));
+    for (const mode of ["required", "parameters", "identity", "overloads", "pointer", "entry", "declaration", "keyword", "macro"]) {
+        const entry = { name: "Factory", key: "factory", compilerSymbolId: mode === "identity" ? 0 : 1,
+            nativeSymbol: { id: mode === "identity" ? 0 : 1, typeName: mode === "pointer" ? "Widget ptr" : "Widget" },
+            provisional: mode === "entry", declaration: { type: "function", provisional: mode === "declaration",
+                parameters: mode === "parameters" ? null : mode === "required" ? [{ optional: false }] : [] } };
+        const entries = mode === "overloads" ? [entry, { ...entry, compilerSymbolId: 2, nativeSymbol: { ...entry.nativeSymbol, id: 2 } }] : [entry];
+        const model = { partial: true, inventory: {}, semanticSidecarOnly: false, canonicalSymbolIds: new Map(), getDocument: () => document,
+            completeMembers: () => entries,
+            visibleEntries: () => mode === "keyword" ? [{ key: "typeof", nativeSymbol: { id: 2 } }]
+                : mode === "macro" ? [{ key: "typeof", compilerPreprocessorId: 2 }] : [],
+            typeEntries() { assert.fail("unproven factory metadata must not supply a return-type owner"); } };
+        assert.equal(queryCompilerModel(model, "signature", { uri, position: { line: 0, character: text.length } }, () => {}), null, mode);
+    }
+});
+
+test("native Signature Help recovery preserves member access, scope, and shadowing", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const declaration = "Declare Function Calculate(ByVal amount As Long, ByVal scale As Double) As Double\n";
+    const cases = [
+        { text: "Declare Sub Apply(ByVal amount As Long, ByVal scale As Double)\nApply 1,\n",
+            statement: "Apply 1,", expected: 1 },
+        { text: '#lang "fblite"\nDeclare Function GetText$(ByVal amount As Long, ByVal scale As Double)\nPrint GetText$(1, )\n',
+            statement: "Print GetText$(1, )", expected: 1 },
+        { text: declaration + "Sub Work(ByVal Calculate As Long)\nPrint Calculate(1, )\nEnd Sub\n",
+            statement: "Print Calculate(1, )", expected: 1, duplicate: true },
+        { text: declaration + "Namespace LocalScope\n" +
+            "Declare Function Calculate(ByVal amount As String, ByVal scale As Double) As Double\n" +
+            'Print Calculate("one", )\nEnd Namespace\n',
+            statement: 'Print Calculate("one", )', expected: 1, requiredType: "String" },
+        { text: "Namespace Hidden\n" + declaration + "End Namespace\nPrint Calculate(1, )\n",
+            statement: "Print Calculate(1, )", expected: 0 },
+        { text: "Namespace FirstScope\n" + declaration + "End Namespace\nNamespace SecondScope\n" + declaration +
+            "End Namespace\nUsing FirstScope\nUsing SecondScope\nPrint Calculate(1, )\n",
+            statement: "Print Calculate(1, )", expected: 0 },
+        { text: ["Type Service", "    value As Long",
+            "Declare Function Measure Overload(ByVal amount As Long, ByVal scale As Double) As Double",
+            "Declare Function Measure Overload(ByVal amount As Double, ByVal scale As Double) As Double",
+            "Private:", "Declare Function Measure Overload(ByVal amount As String, ByVal scale As Double) As Double",
+            "End Type", "Dim instance As Service", "Print instance.Measure(1, )", ""].join("\n"),
+            statement: "Print instance.Measure(1, )", expected: 2, excludePrivate: true }
+    ];
+    for (const fixture of cases) {
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, fixture.text]]) }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            if (fixture.duplicate) assert.ok(reply.diagnostics.some((diagnostic) => /Duplicated definition/.test(diagnostic.message)),
+                "a rejected parameter cannot shadow an independently valid native procedure");
+            const result = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(fixture.text, fixture.statement, fixture.statement.indexOf(",") + 1)
+            })).result;
+            const entries = (result?.entries || []).filter((entry) => ["function", "sub"].includes(entry.declaration.type));
+            assert.equal(entries.length, fixture.expected, fixture.text + "\n" +
+                reply.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+            if (fixture.requiredType) assert.ok(entries.every((entry) =>
+                entry.declaration.parameters[0]?.typeName.toLowerCase() === fixture.requiredType.toLowerCase()));
+            if (fixture.excludePrivate) assert.ok(entries.every((entry) => !/amount As String/i.test(entry.declaration.signature)),
+                "a private overload must remain inaccessible outside its native type");
+            assert.equal(result?.selectedCompilerSymbolId || 0, 0);
+        } finally { worker.releaseModel(reply.snapshotId); }
     }
 });
 
@@ -575,6 +2169,90 @@ test("native member completion retains selected receivers in broken unsaved stat
         }
     }
     assert.equal(fs.readFileSync(filePath, "utf8"), original, "completion must leave the saved input unchanged");
+});
+
+test("current compiler keeps contextual THREAD bindings separate from THREAD LOCAL storage", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/contextual-thread.bas"), "utf8");
+    fs.writeFileSync(filePath, text);
+    for (const sidecar of [true, false]) {
+        const reply = await worker.analyze({ ...options, compilerPath: sidecar ? process.env.FBC_EXECUTABLE : options.compilerPath,
+            semanticModelOnly: sidecar, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            for (const [line, character, declarationLine] of [[11, 8, 8], [12, 14, 8], [16, 18, 14]]) {
+                const targets = (await worker.query(reply.snapshotId, "definition", { ...input, position: { line, character } })).result;
+                assert.equal(targets.length, 1, `${sidecar ? "stock" : "bridge"}: THREAD at line ${line + 1}`);
+                assert.equal(targets[0].declaration.line, declarationLine, "the field and namespace variable must keep separate native identities");
+            }
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", { ...input,
+                position: { line: 6, character: 1 } })).result, [], "the THREAD LOCAL modifier is not a variable reference");
+            const hover = (await worker.query(reply.snapshotId, "hover", { ...input,
+                position: pointAt(text, "perThread", 1) })).result;
+            const storage = hover.compilerStorageClass || hover.entries[0]?.declaration.compilerFacts?.compilerStorageClass;
+            assert.equal(storage, "thread-local", `${sidecar ? "stock" : "bridge"}: TLS storage must survive the native declaration-fact boundary`);
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), text);
+});
+
+test("rejected declarations preserve compiler diagnostics and independent unsaved analysis", native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const saved = fs.readFileSync(filePath, "utf8");
+    for (const rejected of ["Dim repeated As Long\nDim repeated As Long", "Dim kept As Long = 2",
+        "Dim repeated As Long\nDim acceptedBefore As Long, repeated As Long, acceptedAfter As Long"]) {
+        const text = "Dim kept As Long = 3\n" + rejected + "\nDim laterValue As Long = 4\nPrint kept + laterValue\n";
+        const probePath = path.join(directory, "rejected.bas");
+        fs.writeFileSync(probePath, text);
+        const arguments_ = ["-r", probePath, "-o", path.join(directory, "rejected.asm")];
+        const disabled = spawnSync(options.compilerPath, arguments_, { cwd: directory, encoding: "utf8", timeout: 30000 });
+        const enabled = spawnSync(options.compilerPath,
+            [...arguments_, "-semantic-model", path.join(directory, "rejected.fbcsem")],
+            { cwd: directory, encoding: "utf8", timeout: 30000 });
+        assert.equal(disabled.status, 1, disabled.stderr);
+        assert.equal(enabled.status, 1, enabled.stderr);
+        assert.equal(enabled.stdout, disabled.stdout, "sidecar export must not add an internal failure to source diagnostics");
+        assert.equal(enabled.stderr, disabled.stderr, "semantic failure reporting must remain reserved for actual producer faults");
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true, allowSemanticSidecarFallback: false }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            assert.ok(reply.diagnostics.some((diagnostic) => diagnostic.code === 4), "the duplicate-definition diagnostic must remain");
+            const result = (await worker.query(reply.snapshotId, "expression", { ...input,
+                position: pointAt(text, "kept + laterValue", 1) })).result;
+            assert.ok(result && /^(?:long|integer)$/i.test(result.typeName), "a rejected declaration must not erase an independent typed expression");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), saved);
+});
+
+test("native public member completion survives unclosed WITH scopes without restoring bindings", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const prefix = fs.readFileSync(path.join(__dirname, "fixtures/compound-method-signatures.bas"), "utf8");
+    fs.writeFileSync(filePath, prefix);
+    input.openFiles = [filePath];
+    // Worker replies retain public candidates; the editor filters their prefix.
+    for (const [before, statement, expected] of [["With services(0)\n", "    .Mea", "Measure"],
+        ["With services(0)\n", "    .", "value"], ["With services(0)\n", "    .Hid", "value"],
+        ["", ".Mea", null], ["With unknownService\n", "    .Mea", null]]) {
+        const text = prefix + before + statement;
+        const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+            exportSemanticExpressions: true, exportSemanticBindings: false }, preparation);
+        try {
+            assert.equal(reply.partial, true);
+            const position = { line: prefix.split("\n").length + before.split("\n").length - 2, character: statement.length };
+            const result = (await worker.query(reply.snapshotId, "completion", { ...input, position })).result;
+            assert.equal(result?.member, true, statement);
+            if (expected) assert.ok(result.entries.some((entry) => entry.name === expected), statement);
+            else assert.deepEqual(result.entries, [], "a private/missing receiver must not borrow public candidates");
+            assert.ok(result.entries.every((entry) => entry.name !== "HiddenMethod" &&
+                !/amount As String/i.test(entry.declaration.signature)));
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", { ...input, position })).result, [],
+                "a completion candidate is not a binding for an unfinished member name");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+    assert.equal(fs.readFileSync(filePath, "utf8"), prefix);
 });
 
 test("native name completion retains lexical scope in broken unsaved statements", native, async (t) => {
@@ -992,6 +2670,8 @@ test("native destructor callers expand through selected cleanup receipts", nativ
         const incoming = (await worker.query(reply.snapshotId, "callHierarchyIncoming", { ...input, position: helper })).result;
         const destructor = incoming.find((entry) => entry.declaration.type === "destructor");
         assert.ok(destructor, "the destructor body must remain the helper's caller");
+        assert.deepEqual([destructor.declaration.startColumn, destructor.declaration.endColumn], [0, 10],
+            "native lifetime hierarchy selects the callable keyword, not its type label");
         const position = { line: destructor.declaration.line, character: destructor.declaration.startColumn };
         const callers = (await worker.query(reply.snapshotId, "callHierarchyIncoming", { ...input, position })).result;
         assert.deepEqual(callers.map((entry) => entry.name).sort(), ["LeaveEarly", "LeaveScope", "ReleaseOne", "main.bas"],
@@ -1021,6 +2701,9 @@ test("native destructor callers expand through selected cleanup receipts", nativ
             const cleanup = callees.filter((entry) => entry.declaration.type === "destructor" &&
                 entry.declaration.line === destructor.declaration.line);
             assert.equal(cleanup.length, 1, `${caller.name}: outgoing calls must retain the selected cleanup routine`);
+            assert.deepEqual([cleanup[0].declaration.startColumn, cleanup[0].declaration.endColumn],
+                [destructor.declaration.startColumn, destructor.declaration.endColumn],
+                "incoming and outgoing native targets must use the same selection anchor");
             const siteKey = (site) => `${site.line}:${site.startColumn}:${site.endLine ?? site.line}:${site.endColumn}`;
             assert.deepEqual(cleanup[0].fromRanges.map(siteKey).sort(), caller.fromRanges.map(siteKey).sort(),
                 "incoming and outgoing cleanup must describe the same physical sites");
@@ -1162,6 +2845,138 @@ test("stock temporary construction observations retain selected physical constru
     }
 });
 
+for (const sidecar of [true, false]) test(`typed temporary Signature Help selects its own constructor (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const calls = [["Type<TemporaryAlias>(CLng(3))", "Long"],
+        ["Type<ConstructionScope.TemporaryValue>(CDbl(4))", "Double"],
+        ["Type<TypeOf(TemporaryAlias)>(CLng(5))", "Long"]];
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/qualified-temporary-constructor-calls.bas"), "utf8") +
+        calls.map(([call]) => `ConsumeTemporary(${call})\n`).join("") +
+        "Type PlainAggregate\nvalue As Long\nEnd Type\nDim plain As PlainAggregate = Type<PlainAggregate>(1)\n" +
+        "Type Wrapper\nvalue As Long\nDeclare Constructor(ByRef incoming As PlainAggregate)\nEnd Type\n" +
+        "Constructor Wrapper(ByRef incoming As PlainAggregate)\nThis.value = incoming.value\nEnd Constructor\n" +
+        "Sub ConsumeWrapper(ByVal item As Wrapper)\nEnd Sub\nConsumeWrapper(Type<PlainAggregate>(2))\n";
+    const saved = fs.readFileSync(filePath, "utf8");
+    if (sidecar) fs.writeFileSync(filePath, text);
+    else input.openFiles = [filePath];
+    const reply = await worker.analyze({ ...options,
+        compilerPath: sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+        semanticModelOnly: sidecar, overlays: sidecar ? undefined : new Map([[filePath, text]]),
+        exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        for (const [call, type] of calls) {
+            const result = (await worker.query(reply.snapshotId, "signature", { ...input,
+                position: pointAt(text, call, call.lastIndexOf(">(") + 2) })).result;
+            assert.equal(result?.context.typedConstructor, true, call);
+            assert.equal(result.entries.length, 1, "prototype and body are one selected constructor, not separate overloads");
+            assert.match(result.entries[0]?.declaration.signature || "", new RegExp(`initialValue As ${type}\\b`, "i"), call);
+            assert.equal(result.entries[0].declaration.type, "constructor");
+            assert.equal(result.entries[0].declaration.parameters[0].optional, type === "Long", "keep the selected prototype's default value");
+            assert.equal(result.selectedCompilerSymbolId, result.entries[0].compilerSymbolId);
+            const hover = (await worker.query(reply.snapshotId, "hover", { ...input, position: pointAt(text, call, 1) })).result;
+            const constructors = hover.entries.filter((entry) => entry.declaration.type === "constructor");
+            assert.equal(constructors.length, 1, "hover on TYPE uses its selected constructor for " + call);
+            assert.match(constructors[0].declaration.signature, new RegExp(`initialValue As ${type}\\b`, "i"));
+            assert.equal(constructors[0].declaration.parameters[0].optional, type === "Long");
+            for (const operation of ["definition", "declaration", "implementation"]) {
+                const navigation = (await worker.query(reply.snapshotId, operation, { ...input, position: pointAt(text, call, 1) })).result;
+                assert.equal(navigation.length, 1, `${operation} selects the constructor at ${call}`);
+                assert.equal(navigation[0].declaration.type, "constructor");
+                const spelling = operation === "declaration" ? `Declare Constructor(ByVal initialValue As ${type}`
+                    : `Constructor TemporaryValue(ByVal initialValue As ${type}`;
+                assert.equal(navigation[0].declaration.line, pointAt(text, spelling).line);
+                assert.equal(navigation[0].declaration.modifiers.includes("DECLARE"), operation === "declaration");
+            }
+            const typeArgument = (await worker.query(reply.snapshotId, "hover", { ...input,
+                position: pointAt(text, call, call.indexOf("Temporary") >= 0 ? call.indexOf("Temporary") : "Type<".length) })).result;
+            assert.ok(typeArgument.entries.every((entry) => entry.declaration.type !== "constructor"),
+                "type argument names do not become constructor hover sites");
+        }
+        const aggregate = (await worker.query(reply.snapshotId, "signature", { ...input,
+            position: pointAt(text, "Type<PlainAggregate>(1)", "Type<PlainAggregate>(".length) })).result;
+        assert.equal(aggregate, null, "an aggregate initializer without a selected constructor has no constructor signature");
+        const aggregateHover = (await worker.query(reply.snapshotId, "hover", { ...input,
+            position: pointAt(text, "Type<PlainAggregate>(1)", 1) })).result;
+        assert.ok(aggregateHover.entries.every((entry) => entry.declaration.type !== "constructor"),
+            "an aggregate-only initializer must not acquire a constructor hover");
+        for (const operation of ["definition", "declaration", "implementation"]) {
+            const converted = (await worker.query(reply.snapshotId, operation, { ...input,
+                position: pointAt(text, "Type<PlainAggregate>(2)", 1) })).result;
+            assert.deepEqual(converted, [], "the TYPE operation must not jump to its enclosing argument's conversion constructor");
+        }
+        const convertedHover = (await worker.query(reply.snapshotId, "hover", { ...input,
+            position: pointAt(text, "Type<PlainAggregate>(2)", 1) })).result;
+        assert.ok(convertedHover.entries.every((entry) => entry.declaration.type !== "constructor"),
+            "the TYPE hover must not borrow its enclosing argument's conversion constructor");
+        const plainPosition = pointAt(text, "Type<PlainAggregate>(2)", 1);
+        const plainTarget = (await worker.query(reply.snapshotId, "lifetimeReferenceTarget", { ...input,
+            position: plainPosition, includeDeclarations: true })).result;
+        assert.deepEqual(plainTarget.entries, [], "aggregate-only TYPE has no lifetime reference identity");
+        for (const operation of ["references", "highlights", "callHierarchyPrepare"]) assert.deepEqual(
+            (await worker.query(reply.snapshotId, operation, { ...input, position: plainPosition })).result, [],
+            "aggregate-only TYPE must not select the enclosing conversion for " + operation);
+        const conversionReferences = (await worker.query(reply.snapshotId, "references", { ...input,
+            position: pointAt(text, "Constructor Wrapper(ByRef incoming As PlainAggregate)", 1) })).result;
+        assert.ok(conversionReferences.some((entry) => entry.occurrence.line === plainPosition.line),
+            "the legitimate implicit conversion remains in its own reference family");
+        const hints = (await worker.query(reply.snapshotId, "compilerParameterInlayHints", { ...input,
+            position: { line: 0, character: 0 }, end: { line: text.split("\n").length - 1, character: 0 } })).result;
+        for (const [call, type] of calls) {
+            const point = pointAt(text, call, call.lastIndexOf(">(") + 2);
+            const matching = hints.filter((hint) => hint.position.line === point.line && hint.position.character === point.character);
+            assert.equal(matching.length, 1, "one selected constructor parameter hint for " + call);
+            assert.equal(hints.filter((hint) => hint.position.line === point.line && hint.parameterName === "initialValue").length, 1,
+                "constructor formals do not label the TYPEOF operand or duplicate trace-owned hints");
+            assert.equal(matching[0].parameterName, "initialValue");
+            const declaration = pointAt(text, `Declare Constructor(ByVal initialValue As ${type}`, "Declare Constructor(ByVal ".length);
+            const location = matching[0].declarationLocation;
+            assert.deepEqual(location && { line: location.line, character: location.startColumn }, declaration,
+                "typed hints link to the selected physical formal");
+        }
+        const combined = (await worker.query(reply.snapshotId, "compilerInlayHints", { ...input,
+            position: { line: 0, character: 0 }, end: { line: text.split("\n").length - 1, character: 0 }, parameterHints: true })).result;
+        assert.deepEqual(combined.parameters, hints, "combined and parameter-only hint requests use the same native selections");
+        assert.equal(fs.readFileSync(filePath, "utf8"), sidecar ? text : saved);
+    } finally { worker.releaseModel(reply.snapshotId); }
+});
+
+for (const sidecar of [true, false]) test(`typed construction reference identity excludes enclosing conversions (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = fs.readFileSync(path.join(__dirname, "fixtures/qualified-temporary-constructor-calls.bas"), "utf8") + [
+        "Type ConvertedWrapper", "value As Long", "Declare Constructor(ByRef incoming As TemporaryAlias)", "End Type",
+        "Constructor ConvertedWrapper(ByRef incoming As TemporaryAlias)", "This.value = incoming.number", "End Constructor",
+        "Sub ConsumeConverted(ByVal item As ConvertedWrapper)", "End Sub", "ConsumeConverted(Type<TemporaryAlias>(CLng(6)))", ""
+    ].join("\n");
+    if (sidecar) fs.writeFileSync(filePath, text);
+    else input.openFiles = [filePath];
+    const reply = await worker.analyze({ ...options,
+        compilerPath: sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+        semanticModelOnly: sidecar, overlays: sidecar ? undefined : new Map([[filePath, text]]),
+        exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        const spelling = "Type<TemporaryAlias>(CLng(6))", position = pointAt(text, spelling, 1);
+        const signature = (await worker.query(reply.snapshotId, "signature", { ...input,
+            position: pointAt(text, spelling, "Type<TemporaryAlias>(".length) })).result;
+        const target = (await worker.query(reply.snapshotId, "lifetimeReferenceTarget", { ...input, position, includeDeclarations: true })).result;
+        assert.equal(target.entries.length, 1);
+        assert.equal(target.entries[0].compilerSymbolId, signature.selectedCompilerSymbolId,
+            "the explicit TYPE constructor, not its argument conversion, supplies project identity");
+        const own = pointAt(text, "Constructor TemporaryValue(ByVal initialValue As Long)");
+        const conversion = pointAt(text, "Constructor ConvertedWrapper(ByRef incoming As TemporaryAlias)");
+        const references = (await worker.query(reply.snapshotId, "references", { ...input, position, includeDeclaration: true })).result;
+        assert.ok(references.some((entry) => entry.occurrence.line === own.line), "references retain the explicit constructor");
+        assert.equal(references.some((entry) => entry.occurrence.line === conversion.line), false, "conversion constructors have separate reference families");
+        const highlights = (await worker.query(reply.snapshotId, "highlights", { ...input, position })).result;
+        assert.ok(highlights.some((entry) => entry.occurrence.line === own.line));
+        assert.equal(highlights.some((entry) => entry.occurrence.line === conversion.line), false);
+        const prepared = (await worker.query(reply.snapshotId, "callHierarchyPrepare", { ...input, position })).result;
+        assert.equal(prepared.length, 1, "shared source spans must not make an explicit constructor ambiguous");
+        assert.equal(prepared[0].declaration.line, own.line);
+    } finally { worker.releaseModel(reply.snapshotId); }
+});
+
 for (const sidecar of [true, false]) test(`qualified and aliased temporary constructors retain exact navigation (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
     const { worker, filePath, options, preparation, input } = setup(t, true);
     const text = fs.readFileSync(path.join(__dirname, "fixtures/qualified-temporary-constructor-calls.bas"), "utf8");
@@ -1235,6 +3050,239 @@ test("stock destructor references use a header declaration without an included b
     }
 });
 
+test("native argument constructors navigate to active physical sites in guarded headers", native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "guarded.bi");
+    const header = fs.readFileSync(path.join(__dirname, "fixtures/guarded-argument-constructors.bi"), "utf8");
+    const prototypeLines = (type) => header.split("\n").flatMap((line, index) =>
+        new RegExp(`^\\s*Declare Constructor\\(ByVal initial As ${type}\\)`).test(line) ? [index] : []);
+    const bodyLines = (type) => header.split("\n").flatMap((line, index) =>
+        new RegExp(`^Constructor GuardedArgumentValue\\(ByVal initial As ${type}\\)`).test(line) ? [index] : []);
+    const text = ['#include "guarded.bi"', "Declare Sub consumeGuarded(ByVal item As GuardedArgumentValue)",
+        "consumeGuarded(17)", "Dim argumentValue As Long", "consumeGuarded(argumentValue)", "consumeGuarded 17",
+        "' consumeGuarded(17)", 'consumeGuarded("text")', "consumeGuarded(Type<GuardedArgumentValue>(17))", ""].join("\n");
+    fs.writeFileSync(headerPath, header);
+    fs.writeFileSync(filePath, text);
+    input.openFiles = [filePath];
+    for (const semanticModelOnly of [true, false]) for (const alternate of [false, true]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: semanticModelOnly ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            compilerArguments: alternate ? ["-d", "ALTERNATE"] : [],
+            semanticModelOnly, exportSemanticExpressions: true, exportSemanticBindings: true
+        }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            const selected = alternate ? 0 : 1;
+            const receipts = (await worker.query(reply.snapshotId, "compilerSidecarImplicitCallsInSnapshot", input)).result;
+            assert.ok(receipts.complete && receipts.calls.some((call) => call.kind === "argument-constructor" && call.line === 2),
+                JSON.stringify(receipts));
+            for (const [position, type] of [[pointAt(text, "consumeGuarded(17)", "consumeGuarded(".length), "Long"],
+                [pointAt(text, "consumeGuarded 17", "consumeGuarded ".length), "Long"],
+                [pointAt(text, "Type<GuardedArgumentValue>(17)", 1), "Long"],
+                [pointAt(text, 'consumeGuarded("text")', 'consumeGuarded("'.length), "String"]]) {
+                for (const operation of ["definition", "declaration", "implementation"]) {
+                    const entries = (await worker.query(reply.snapshotId, operation, { ...input, position })).result;
+                    assert.deepEqual(entries.map((entry) => [entry.uri.fsPath, entry.declaration.line]),
+                        [[headerPath, operation === "declaration" ? prototypeLines(type)[selected] : bodyLines(type)[selected]]],
+                        `${operation}, sidecar=${semanticModelOnly}, alternate=${alternate}, line=${position.line}`);
+                    for (const entry of entries) assert.equal(header.split("\n")[entry.declaration.line]
+                        .slice(entry.declaration.startColumn, entry.declaration.endColumn), entry.name);
+                }
+            }
+            const argument = pointAt(text, "consumeGuarded(argumentValue)", "consumeGuarded(".length);
+            for (const operation of ["definition", "declaration"]) {
+                const entries = (await worker.query(reply.snapshotId, operation, { ...input, position: argument })).result;
+                assert.deepEqual(entries.map((entry) => [entry.uri.fsPath, entry.declaration.line]), [[filePath, 3]],
+                    "a conversion must not replace its argument variable's own declaration");
+            }
+            assert.deepEqual((await worker.query(reply.snapshotId, "implementation", { ...input, position: argument })).result, []);
+            const comment = pointAt(text, "' consumeGuarded(17)", "' consumeGuarded(".length);
+            assert.deepEqual((await worker.query(reply.snapshotId, "definition", { ...input, position: comment })).result, []);
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+    const bodyStart = header.indexOf("\n#ifdef ALTERNATE\nConstructor");
+    assert.ok(bodyStart > 0);
+    fs.writeFileSync(headerPath, header.slice(0, bodyStart) + "\n#endif\n");
+    for (const semanticModelOnly of [true, false]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: semanticModelOnly ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly, exportSemanticExpressions: true, exportSemanticBindings: true
+        }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            for (const position of [pointAt(text, "consumeGuarded(17)", "consumeGuarded(".length), pointAt(text, "Type<GuardedArgumentValue>(17)", 1)]) {
+                for (const operation of ["definition", "declaration"]) {
+                    const entries = (await worker.query(reply.snapshotId, operation, { ...input, position })).result;
+                    assert.deepEqual(entries.map((entry) => [entry.uri.fsPath, entry.declaration.line]), [[headerPath, prototypeLines("Long")[1]]],
+                        "an external constructor can navigate to its proven prototype without a local P body");
+                }
+                assert.deepEqual((await worker.query(reply.snapshotId, "implementation", { ...input, position })).result, [],
+                    "a prototype must not manufacture a local implementation");
+            }
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
+    }
+    const weak = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+        semanticModelOnly: true, exportSemanticExpressions: true, exportSemanticBindings: false }, preparation);
+    try {
+        const position = pointAt(text, "consumeGuarded(17)", "consumeGuarded(".length);
+        for (const operation of ["definition", "declaration", "implementation"]) {
+            assert.deepEqual((await worker.query(weak.snapshotId, operation, { ...input, position })).result, [],
+                "missing native identity must not admit a guarded source guess");
+        }
+    } finally {
+        worker.releaseModel(weak.snapshotId);
+    }
+});
+
+test("constructor calls use active guarded and external declarations", native, async (t) => {
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "guarded.bi");
+    const header = fs.readFileSync(path.join(__dirname, "fixtures/guarded-argument-constructors.bi"), "utf8");
+    const bodyStart = header.indexOf("\n#ifdef ALTERNATE\nConstructor");
+    assert.ok(bodyStart > 0);
+    const text = ['#include "guarded.bi"', "Declare Sub consumeGuarded(ByVal item As GuardedArgumentValue)",
+        "consumeGuarded(17)", "Dim argumentValue As Long", "consumeGuarded(argumentValue)", "consumeGuarded 17",
+        'consumeGuarded("text")', "Dim wholePtr As GuardedArgumentValue Ptr = New GuardedArgumentValue(17)",
+        'Dim textPtr As GuardedArgumentValue Ptr = New GuardedArgumentValue("text")',
+        "Dim wholeValue As GuardedArgumentValue = GuardedArgumentValue(23)",
+        'Dim textValue As GuardedArgumentValue = GuardedArgumentValue("other")',
+        "Namespace GuardedNames", "Type ValueAlias As GuardedArgumentValue", "End Namespace",
+        "Dim aliasedPtr As GuardedNames.ValueAlias Ptr = New GuardedNames.ValueAlias(29)",
+        "Dim aliasedValue As GuardedNames.ValueAlias = GuardedNames.ValueAlias(31)",
+        "Dim sourceValue As Long", "Dim fromValue As GuardedArgumentValue = GuardedArgumentValue(sourceValue)",
+        "' GuardedArgumentValue(17)", 'Print "GuardedArgumentValue(17)"', ""].join("\n");
+    const referenceLines = {
+        Long: ["consumeGuarded(17)", "consumeGuarded(argumentValue)", "consumeGuarded 17",
+            "GuardedArgumentValue(17)", "GuardedArgumentValue(23)", "GuardedNames.ValueAlias(29)",
+            "GuardedNames.ValueAlias(31)", "GuardedArgumentValue(sourceValue)"].map((anchor) => pointAt(text, anchor).line),
+        String: ['consumeGuarded("text")', 'GuardedArgumentValue("text")',
+            'GuardedArgumentValue("other")'].map((anchor) => pointAt(text, anchor).line)
+    };
+    fs.writeFileSync(filePath, text);
+    for (const external of [false, true]) {
+        const source = external ? header.slice(0, bodyStart) + "\n#endif\n" : header;
+        fs.writeFileSync(headerPath, source);
+        for (const semanticModelOnly of [true, false]) for (const alternate of [false, true]) {
+            const reply = await worker.analyze({ ...options,
+                compilerPath: semanticModelOnly ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+                compilerArguments: alternate ? ["-d", "ALTERNATE"] : [],
+                semanticModelOnly, exportSemanticExpressions: true, exportSemanticBindings: true
+            }, preparation);
+            try {
+                assert.equal(reply.partial, false);
+                for (const [anchor, type] of [["GuardedArgumentValue(17)", "Long"],
+                    ['GuardedArgumentValue("text")', "String"], ["GuardedArgumentValue(23)", "Long"],
+                    ['GuardedArgumentValue("other")', "String"], ["GuardedNames.ValueAlias(29)", "Long"],
+                    ["GuardedNames.ValueAlias(31)", "Long"]]) {
+                    const position = pointAt(text, anchor, anchor.indexOf("(") + 1);
+                    const signature = (await worker.query(reply.snapshotId, "signature", { ...input, position })).result;
+                    const label = `${anchor}, external=${external}, sidecar=${semanticModelOnly}, alternate=${alternate}`;
+                    assert.equal(signature?.entries.length, 1, label + ": " + JSON.stringify(signature));
+                    const entry = signature.entries[0];
+                    const pattern = external ? `^\\s*Declare Constructor\\(ByVal initial As ${type}\\)`
+                        : `^Constructor GuardedArgumentValue\\(ByVal initial As ${type}\\)`;
+                    const lines = source.split("\n").flatMap((line, index) => new RegExp(pattern).test(line) ? [index] : []);
+                    assert.equal(entry.uri.fsPath, headerPath, label);
+                    assert.equal(entry.declaration.line, lines[alternate ? 0 : 1], label);
+                    assert.equal(signature.selectedCompilerSymbolId, entry.compilerSymbolId, label);
+                    assert.ok(signature.selectedCompilerSymbolId > 0, label);
+                    const hoverPosition = pointAt(text, anchor, anchor.lastIndexOf(".") + 2);
+                    const hover = (await worker.query(reply.snapshotId, "hover", { ...input, position: hoverPosition })).result;
+                    const constructors = hover.entries.filter((candidate) => candidate.declaration.type === "constructor");
+                    assert.equal(constructors.length, 1, label + ": " + JSON.stringify(hover));
+                    assert.equal(constructors[0].compilerSymbolId, entry.compilerSymbolId, label);
+                    assert.equal(constructors[0].uri.fsPath, headerPath, label);
+                    assert.equal(constructors[0].declaration.line, entry.declaration.line, label);
+                    const prototypes = source.split("\n").flatMap((line, index) =>
+                        new RegExp(`^\\s*Declare Constructor\\(ByVal initial As ${type}\\)`).test(line) ? [index] : []);
+                    for (const operation of ["definition", "declaration", "implementation"]) {
+                        const entries = (await worker.query(reply.snapshotId, operation, { ...input, position: hoverPosition })).result;
+                        if (external && operation === "implementation") {
+                            assert.deepEqual(entries, [], `${operation}: ${label}`);
+                        } else {
+                            assert.equal(entries.length, 1, `${operation}: ${label}: ${JSON.stringify(entries)}`);
+                            assert.equal(entries[0].declaration.type, "constructor", `${operation}: ${label}`);
+                            assert.equal(entries[0].uri.fsPath, headerPath, `${operation}: ${label}`);
+                            assert.equal(entries[0].declaration.line, external || operation === "declaration"
+                                ? prototypes[alternate ? 0 : 1] : entry.declaration.line, `${operation}: ${label}`);
+                        }
+                    }
+                    for (const operation of ["references", "highlights"]) {
+                        const entries = (await worker.query(reply.snapshotId, operation, {
+                            ...input, position: hoverPosition, includeDeclaration: true
+                        })).result;
+                        const root = entries.filter((entry) => entry.uri.fsPath === filePath);
+                        assert.deepEqual([...new Set(root.map((entry) => entry.occurrence.line))].sort((a, b) => a - b),
+                            referenceLines[type], `${operation}: ${label}`);
+                        assert.ok(root.some((entry) => entry.occurrence.line === hoverPosition.line &&
+                            text.split("\n")[entry.occurrence.line].slice(entry.occurrence.startColumn, entry.occurrence.endColumn) ===
+                                anchor.slice(0, anchor.indexOf("(")).split(".").at(-1)),
+                            `${operation}: ${label}: the selected callee must retain its terminal token`);
+                        const headerLines = entries.filter((entry) => entry.uri.fsPath === headerPath).map((entry) => entry.occurrence.line);
+                        assert.deepEqual([...new Set(headerLines)].sort((a, b) => a - b), operation === "highlights" ? []
+                            : external ? [prototypes[alternate ? 0 : 1]]
+                                : [prototypes[alternate ? 0 : 1], entry.declaration.line], `${operation}: ${label}: declaration sites`);
+                    }
+                }
+                const argument = pointAt(text, "GuardedArgumentValue(sourceValue)", "GuardedArgumentValue(".length);
+                const valueHover = (await worker.query(reply.snapshotId, "hover", { ...input, position: argument })).result;
+                assert.ok(valueHover.entries.some((entry) => entry.name === "sourceValue"));
+                assert.equal(valueHover.entries.some((entry) => entry.declaration.type === "constructor"), false,
+                    "hovering an argument must not substitute its enclosing constructor");
+                for (const [position, name] of [[argument, "sourceValue"],
+                    [pointAt(text, "GuardedNames.ValueAlias(29)", 1), "GuardedNames"]]) {
+                    for (const operation of ["references", "highlights"]) {
+                        const entries = (await worker.query(reply.snapshotId, operation, {
+                            ...input, position, includeDeclaration: true
+                        })).result;
+                        assert.ok(entries.length > 0, `${operation}: ${name}`);
+                        assert.ok(entries.every((entry) => entry.uri.fsPath === filePath &&
+                            text.split("\n")[entry.occurrence.line].slice(entry.occurrence.startColumn, entry.occurrence.endColumn) === name),
+                            `${operation}: constructor context must not steal ${name}'s identity`);
+                    }
+                }
+                const referencesWithoutDeclarations = (await worker.query(reply.snapshotId, "references", {
+                    ...input, position: pointAt(text, "GuardedArgumentValue(23)", 1), includeDeclaration: false
+                })).result;
+                assert.equal(referencesWithoutDeclarations.some((entry) => entry.uri.fsPath === headerPath), false);
+                for (const position of [pointAt(text, "GuardedNames.ValueAlias(29)", 1),
+                    pointAt(text, "' GuardedArgumentValue(17)", 3), pointAt(text, 'Print "GuardedArgumentValue(17)"', 8)]) {
+                    const hover = (await worker.query(reply.snapshotId, "hover", { ...input, position })).result;
+                    assert.equal(hover.entries.some((entry) => entry.declaration.type === "constructor"), false,
+                        "namespace qualifiers, comments, and string contents are not constructor callees");
+                }
+            } finally {
+                worker.releaseModel(reply.snapshotId);
+            }
+        }
+    }
+    const weak = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+        semanticModelOnly: true, exportSemanticExpressions: true, exportSemanticBindings: false }, preparation);
+    try {
+        const position = pointAt(text, "GuardedArgumentValue(17)", "GuardedArgumentValue(".length);
+        const signature = (await worker.query(weak.snapshotId, "signature", { ...input, position })).result;
+        assert.deepEqual(signature?.entries, [], "missing committed identity must not admit guarded source guesses");
+        const hover = (await worker.query(weak.snapshotId, "hover", {
+            ...input, position: pointAt(text, "GuardedArgumentValue(17)", 1)
+        })).result;
+        assert.equal(hover.entries.some((entry) => entry.declaration.type === "constructor"), false,
+            "missing committed identity must not authorize a guarded constructor hover");
+        for (const operation of ["definition", "declaration", "implementation"]) {
+            const entries = (await worker.query(weak.snapshotId, operation, {
+                ...input, position: pointAt(text, "GuardedArgumentValue(17)", 1)
+            })).result;
+            assert.equal(entries.some((entry) => entry.declaration.type === "constructor"), false,
+                "missing committed identity must not manufacture constructor navigation");
+        }
+    } finally {
+        worker.releaseModel(weak.snapshotId);
+    }
+});
+
 test("stock constructor references use selected prototypes in guarded external headers", native, async (t) => {
     const { worker, filePath, directory, options, preparation, input } = setup(t, true);
     const headerPath = path.join(directory, "external.bi");
@@ -1252,6 +3300,19 @@ test("stock constructor references use selected prototypes in guarded external h
     assert.equal(reply.partial, false);
     try {
         const headerInput = { ...input, uri: { scheme: "file", fsPath: headerPath }, position: { line: 4, character: 9 } };
+        for (const line of [4, 5]) {
+            const hierarchy = (await worker.query(reply.snapshotId, "callHierarchyPrepare", {
+                ...headerInput, position: { line, character: 9 }
+            })).result;
+            assert.equal(hierarchy.length, 1, "external constructor prototypes must prepare without a body or source family");
+            assert.equal(hierarchy[0].declaration.type, "constructor");
+            assert.equal(hierarchy[0].declaration.line, line);
+            assert.equal(hierarchy[0].declaration.startColumn, 8);
+            assert.equal(hierarchy[0].declaration.endColumn, 19);
+        }
+        assert.deepEqual((await worker.query(reply.snapshotId, "callHierarchyPrepare", {
+            ...headerInput, position: { line: 7, character: 9 }
+        })).result, [], "an inactive constructor header has no native preparation identity");
         const records = (await worker.query(reply.snapshotId, "references", { ...headerInput, includeDeclaration: true })).result;
         const rootLines = records.filter((entry) => entry.uri.fsPath === filePath).map((entry) => entry.occurrence.line);
         assert.deepEqual([...new Set(rootLines)].sort(), [1, 2, 3], "default, NEW and initializer calls must use the Long prototype only");
@@ -1377,6 +3438,63 @@ function remoteFixture(t, real = false) {
     return { ...fixture, service, document, workspace, values };
 }
 
+test("failed binding recovery preserves provisional unsaved header types without advertising identities", native, async (t) => {
+    const { service, document, worker, workspace, values, directory, filePath } = remoteFixture(t, true);
+    const headerPath = path.join(directory, "recovery.bi");
+    fs.writeFileSync(filePath, '#include "recovery.bi"\nPrint 1\n');
+    fs.writeFileSync(headerPath, "Dim headerValue As Long\n");
+    document.version = 2;
+    document.isDirty = true;
+    document.getText = () => '#include "recovery.bi"\nPrint (\n';
+    const headerText = "Dim headerValue As Double\n#if 1 + 2 = 3\n#assert 1 + 2 = 3\n#endif\n";
+    const header = { uri: CompilerUri.file(headerPath), languageId: "freebasic", version: 2, isDirty: true, getText: () => headerText };
+    workspace.textDocuments.push(header);
+    values["analysis.projectContexts"] = [{ name: "recovery", modules: ["main.bas"] }];
+    values["analysis.activeContext"] = { name: "recovery", module: "main.bas" };
+    let requests = 0;
+    const analyze = worker.analyze.bind(worker);
+    worker.analyze = (...args) => { requests++; return analyze(...args); };
+    assert.equal(await service.getModelForEditor(document, null, true, true), null,
+        "expression-only recovery cannot satisfy a native identity request");
+    const model = service.getModel(header.uri);
+    assert.ok(model?.partial);
+    assert.equal(model.semanticSidecarOnly, false, "recovery must retain the independently valid native trace too");
+    assert.equal(model.semanticBindingsAvailable, false);
+    assert.equal(model.semanticMacroBindingsAvailable, false);
+    const hover = await model.query("hover", header.uri, { position: pointAt(headerText, "1 + 2 = 3") });
+    assert.equal(hover?.expression?.typeName.toLowerCase(), "integer");
+    assert.equal(hover.expression.provisional, true);
+    assert.equal(await service.getModelForEditor(header, null, true), model);
+    assert.equal(requests, 1, "the failed identity request must retain reusable current recovery types");
+});
+
+test("manual analysis retries a changed closed source once without following edited requests", async (t) => {
+    for (const mode of ["source", "capture", "compiler", "edit", "context", "cancel"]) {
+        const { service, document, values } = remoteFixture(t);
+        document.version = 1;
+        const token = { isCancellationRequested: false };
+        const key = document.uri.toString();
+        let calls = 0;
+        service.check = () => {
+            if (++calls > 1) return Promise.resolve(true);
+            const state = {};
+            service.runningContexts.set(key, state);
+            return Promise.resolve().then(() => {
+                state.errorMessage = mode === "capture" ? "Compiler source changed while being captured: /workspace/flags.bi"
+                    : mode === "compiler" ? "Compiler timed out after 15000 ms."
+                        : "Compiler snapshot source changed: /workspace/flags.bi";
+                service.runningContexts.delete(key);
+                if (mode === "edit") document.version++;
+                if (mode === "context") values["compiler.arguments"] = ["-d", "CHANGED"];
+                if (mode === "cancel") token.isCancellationRequested = true;
+                return false;
+            });
+        };
+        assert.equal(await service.checkCurrent(document, false, token), ["source", "capture"].includes(mode), mode);
+        assert.equal(calls, ["source", "capture"].includes(mode) ? 2 : 1, mode);
+    }
+});
+
 /* Hold a completed worker reply before host publication. Lifecycle assertions
    then exercise a known scheduling window without depending on compiler speed. */
 function holdPreparedModel(t, worker) {
@@ -1395,6 +3513,59 @@ function holdPreparedModel(t, worker) {
     };
     return { prepared, release };
 }
+
+test("closing an unused deleted buffer does not cancel current background analysis", async (t) => {
+    const { service, document, worker, workspace, directory } = remoteFixture(t);
+    const unused = { uri: CompilerUri.file(path.join(directory, "unused.bi")), getText: () => "' unused named buffer\n" };
+    workspace.textDocuments.push(unused);
+    const gate = holdPreparedModel(t, worker);
+    const pending = service.checkCurrent(document, false);
+    await gate.prepared;
+    workspace.textDocuments = [document];
+    service.documentClosed(unused);
+    gate.release();
+    assert.equal(await pending, true, "worker freshness must decide whether the closed buffer was actually consumed");
+    assert.ok(service.getModel(document.uri));
+});
+
+test("binding enrichment waits for analysis across an unrelated buffer closure", async (t) => {
+    const { service, document, worker, workspace, directory } = remoteFixture(t);
+    const unused = { uri: CompilerUri.file(path.join(directory, "unused.bi")), getText: () => "' unused named buffer\n" };
+    workspace.textDocuments.push(unused);
+    const gate = holdPreparedModel(t, worker);
+    const manual = service.checkCurrent(document, false);
+    await gate.prepared;
+    workspace.textDocuments = [document];
+    service.documentClosed(unused);
+    const enriched = service.check(document, false, null, true);
+    gate.release();
+    assert.equal(await manual, true, "enrichment must not cancel a pass solely because an unused buffer closed");
+    assert.equal(await enriched, true);
+    assert.equal(service.getModel(document.uri)?.semanticBindingsAvailable, true);
+});
+
+test("closing a newly consumed dirty header cannot publish pending background analysis", native, async (t) => {
+    for (const enrich of [false, true]) {
+        const { service, document, worker, workspace, directory, filePath } = remoteFixture(t, true);
+        const headerPath = path.join(directory, "consumed.bi");
+        fs.writeFileSync(headerPath, "Type HeaderType As Long\n");
+        fs.writeFileSync(filePath, '#include "consumed.bi"\nDim value As HeaderType\n');
+        const header = { uri: CompilerUri.file(headerPath), getText: () => "Type HeaderType As Double\n" };
+        workspace.textDocuments.push(header);
+        const gate = holdPreparedModel(t, worker);
+        const pending = service.checkCurrent(document, false);
+        await gate.prepared;
+        workspace.textDocuments = [document];
+        service.documentClosed(header);
+        const enriched = enrich ? service.check(document, false, null, true) : null;
+        gate.release();
+        assert.equal(await pending, false, "the original pass must reject consumed overlay contents discarded on close");
+        if (enrich) {
+            assert.equal(await enriched, true, "a later request may compile the current disk header after validation rejects the old pass");
+            assert.equal(service.getModel(document.uri)?.semanticBindingsAvailable, true);
+        } else assert.equal(service.getModel(document.uri), null);
+    }
+});
 
 for (const sidecar of [false, true]) test(`readonly value qualifiers distinguish const pointers from const pointees (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
     const { worker, filePath, options, preparation, input } = setup(t, true);
@@ -2593,6 +4764,47 @@ test("model eviction removes matching host diagnostics and snapshot metadata", a
     assert.equal(published.size, 0);
 });
 
+test("expanded native call queries preserve physical overload targets", native, async (t) => {
+    const { worker } = setup(t, true);
+    const filePath = path.join(__dirname, "integration/workspace/compiler-overloads.bas");
+    const text = fs.readFileSync(filePath, "utf8");
+    const options = { compilerPath: process.env.FBC_EDITOR_EXECUTABLE, filePath, allowErrors: false,
+        exportSemanticExpressions: true, exportSemanticBindings: true };
+    const analysis = await analyzeSavedModule(options);
+    const reply = await worker.analyze(options, { requestedFile: filePath, expandedUri });
+    const call = "Print SelectValue(CLng(1)), SelectValue(CDbl(1))";
+    const sourcePosition = pointAt(text, call, call.lastIndexOf("SelectValue") + 1);
+    const expandedCall = analysis.text.match(/SelectValue\s*\(\s*CDbl\s*\(\s*1\s*\)\s*\)/i);
+    assert.ok(expandedCall);
+    const expandedPosition = pointAt(analysis.text, expandedCall[0], 1);
+    const query = async (operation, expanded = false) => (await worker.query(reply.snapshotId, operation, {
+        uri: expanded ? expandedUri : { scheme: "file", fsPath: filePath },
+        position: expanded ? expandedPosition : sourcePosition, openFiles: [], includeDeclaration: true
+    })).result;
+    try {
+        const expected = await query("definition");
+        assert.equal(expected.length, 1);
+        const definitions = await query("definition", true);
+        assert.deepEqual(definitions.map((entry) => [entry.uri.fsPath, entry.declaration.line]),
+            expected.map((entry) => [entry.uri.fsPath, entry.declaration.line]));
+        const hover = await query("hover", true);
+        assert.ok(hover.entries.some((entry) => /value As Double/i.test(entry.declaration.signature)));
+        const references = await query("references", true);
+        assert.ok(references.some((entry) => entry.uri.fsPath === filePath && entry.occurrence.line === sourcePosition.line));
+        const highlights = await query("highlights", true);
+        assert.ok(highlights.some((entry) => entry.occurrence.line === expandedPosition.line &&
+            entry.occurrence.startColumn <= expandedPosition.character && entry.occurrence.endColumn > expandedPosition.character));
+        const otherCall = analysis.text.match(/SelectValue\s*\(\s*CLng\s*\(\s*1\s*\)\s*\)/i);
+        assert.ok(otherCall);
+        const otherPosition = pointAt(analysis.text, otherCall[0], 1);
+        assert.equal(highlights.some((entry) => entry.occurrence.line === otherPosition.line &&
+            entry.occurrence.startColumn <= otherPosition.character && entry.occurrence.endColumn > otherPosition.character), false,
+            "expanded highlights must not mix native overload identities");
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
 test("native worker queries match direct model results across source and expanded views", native, async (t) => {
     const { worker } = setup(t, true);
     for (const name of ["compiler-symbols.bas", "compiler-types.bas", "compiler-preprocessor.bas", "compiler-dispatch.bas",
@@ -2916,6 +5128,221 @@ test("native indexer navigation follows compiler-owned operator declarations", n
     }
 });
 
+test("stock guarded indexer declaration ranges drive source navigation", native, async (t) => {
+    const { FreeBasicSemanticModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const { createSemanticFeatures } = require("../lib/semantic-features");
+    const { worker, filePath, directory, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "indexed.bi");
+    const header = ["#ifndef INDEXED_BI", "#define INDEXED_BI", "Type IndexNumber As Double", "Type Indexed", "value As Long",
+        "#ifdef INACTIVE_BUILD", "Declare Operator [](ByVal inactiveIndex As Double) As Long", "#else",
+        "Declare Operator [](ByVal activeIndex As Double) As Long", "#endif",
+        "Declare Operator [](ByVal longIndex As Long) As Long", "End Type",
+        "Operator Indexed.[](ByVal activeIndex As IndexNumber) As Long", "Return CLng(activeIndex)", "End Operator",
+        "Operator Indexed.[](ByVal longIndex As Long) As Long", "Return longIndex", "End Operator", "#endif", ""].join("\n");
+    const text = '#include "indexed.bi"\nDim item As Indexed\nPrint item[CDbl(1)]\nPrint item[CLng(2)]\nPrint item[CDbl(3)]\n' +
+        "Function InvokeIndexed(ByRef value As Indexed) As Long\nReturn value[CDbl(4)]\nEnd Function\n";
+    fs.writeFileSync(filePath, text);
+    fs.writeFileSync(headerPath, header);
+    const compiled = spawnSync(process.env.FBC_EXECUTABLE || options.compilerPath,
+        ["-r", "-o", path.join(directory, "main.asm"), filePath], { encoding: "utf8" });
+    assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+    const uri = CompilerUri.file(filePath), headerUri = CompilerUri.file(headerPath);
+    const parsed = parseFreeBasicText(text);
+    const source = new FreeBasicSemanticModel([{ uri: headerUri, parsed: parseFreeBasicText(header) },
+        { uri, parsed, includeUris: new Set([headerUri.toString()]) }]);
+    const point = pointAt(text, "item[CDbl(1)]", "item[CDbl(1)]".length - 1);
+    const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+        semanticModelOnly: true, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    const receipt = (await worker.query(reply.snapshotId, "compilerSidecarOperatorExpressionAt", {
+        ...input, position: point, operatorCode: "index"
+    })).result;
+    assert.equal(receipt.expressions.length, 1);
+    assert.equal(receipt.expressions[0].declarations?.length, 2);
+    class Range { constructor(line, column, endLine, endColumn) {
+        this.start = { line, character: column }; this.end = { line: endLine, character: endColumn };
+    } }
+    class Location { constructor(uri, range) { Object.assign(this, { uri, range }); } }
+    class DocumentHighlight { constructor(range, kind) { Object.assign(this, { range, kind }); } }
+    class CallHierarchyItem { constructor(kind, name, detail, uri, range, selectionRange) {
+        Object.assign(this, { kind, name, detail, uri, range, selectionRange });
+    } }
+    class CallHierarchyIncomingCall { constructor(from, fromRanges) { Object.assign(this, { from, fromRanges }); } }
+    const workspace = { textDocuments: [] };
+    const compiler = { remote: true, semanticSidecarOnly: true, semanticBindingsAvailable: true,
+        async query(operation, uri, query) {
+            if (["compilerSidecarOperatorExpressions", "compilerSidecarOperatorExpressionsInSnapshot"].includes(operation)) {
+                assert.equal(query.targetSymbol, receipt.expressions[0].targetSymbols[0],
+                    "operator references must send the selected snapshot's native symbol to the worker");
+            }
+            return (await worker.query(reply.snapshotId, operation, { ...input, ...query, uri })).result;
+        } };
+    const features = createSemanticFeatures({ Range, Location, DocumentHighlight, DocumentHighlightKind: { Text: 0 },
+        CallHierarchyItem, CallHierarchyIncomingCall, SymbolKind: { File: 0, Method: 5, Function: 11 }, workspace,
+        Uri: { file: CompilerUri.file }, SemanticTokensLegend: class {} }, {
+        compilerAnalysis: { analysisCompilerFor: () => ({ semanticModelOnly: true }),
+            getModelForEditor: async () => compiler, getModel: () => compiler },
+        getParsedDocument: () => parsed, ensureInitialized: async () => true, getSourceSemanticModel: () => source,
+        getSemanticModel: () => source
+    }, { keywords: [], types: [], operatorKeywords: [], constants: [] });
+    const makeDocument = (uri, content) => ({ uri, version: 1, getText: () => content,
+        lineAt: (line) => ({ text: content.split("\n")[line] }),
+        positionAt: (offset) => ({ line: content.slice(0, offset).split("\n").length - 1,
+            character: offset - content.lastIndexOf("\n", offset - 1) - 1 }),
+        offsetAt: (position) => content.split("\n").slice(0, position.line).reduce((sum, line) => sum + line.length + 1, 0) + position.character });
+    const document = makeDocument(uri, text);
+    const included = makeDocument(headerUri, header);
+    workspace.textDocuments = [document, included];
+    const declarations = await features.declaration.provideDeclaration(document, point);
+    assert.equal(declarations.length, 1, JSON.stringify(receipt));
+    assert.equal(declarations[0].range.start.line, 8);
+    source.references = () => assert.fail("a selected native operator must not seed references from source guesses");
+    const references = await features.reference.provideReferences(document, point, { includeDeclaration: true });
+    assert.deepEqual(references.filter((entry) => entry.uri.fsPath === filePath).map((entry) => entry.range.start.line).sort(), [2, 4, 6]);
+    assert.deepEqual(references.filter((entry) => entry.uri.fsPath === headerPath).map((entry) => entry.range.start.line).sort((a, b) => a - b), [8, 12]);
+    const uses = await features.reference.provideReferences(document, point, { includeDeclaration: false });
+    assert.ok(uses.every((entry) => entry.uri.fsPath === filePath));
+    assert.deepEqual(uses.map((entry) => entry.range.start.line).sort(), [2, 4, 6]);
+    const highlights = await features.documentHighlight.provideDocumentHighlights(document, point);
+    assert.deepEqual(highlights.map((entry) => entry.range.start.line).sort(), [2, 4, 6]);
+    for (const line of [8, 12]) {
+        const entry = source.getDocument(headerUri).entries.find((entry) =>
+            entry.declaration.type === "operator" && entry.declaration.line === line);
+        const origin = { line, character: entry.declaration.endColumn - 1 };
+        const references = await features.reference.provideReferences(included, origin, { includeDeclaration: false });
+        assert.deepEqual(references.filter((entry) => entry.uri.fsPath === filePath)
+            .map((entry) => entry.range.start.line).sort(), [2, 4, 6], "native references must also work from guarded declarations and bodies");
+        const highlights = await features.documentHighlight.provideDocumentHighlights(included, origin);
+        assert.deepEqual(highlights.map((entry) => entry.range.start.line).sort((a, b) => a - b), [8, 12]);
+        for (const [provider, method, expected] of [[features.declaration, "provideDeclaration", 8],
+            [features.definition, "provideDefinition", 12], [features.implementation, "provideImplementation", 12]]) {
+            const locations = await provider[method](included, origin);
+            assert.deepEqual(locations.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[headerPath, expected]],
+                "guarded prototypes and bodies must preserve the requested native navigation role");
+        }
+    }
+    const inactive = { line: 6, character: header.split("\n")[6].indexOf("]") };
+    const getDocument = source.getDocument.bind(source);
+    source.getDocument = (uri) => {
+        const document = getDocument(uri);
+        return document?.uri.fsPath === headerPath ? { ...document, entries: document.entries.filter((entry) =>
+            !(entry.declaration.type === "operator" && entry.declaration.line === 12)) } : document;
+    };
+    const bodySite = receipt.expressions[0].declarations.find((site) => site.kind === "procedure-definition");
+    const nativeOnly = await features.implementation.provideImplementation(included, { line: 8, character: header.split("\n")[8].indexOf("]") });
+    assert.deepEqual(nativeOnly.map((entry) => [entry.uri.fsPath, entry.range.start.line, entry.range.start.character]),
+        [[headerPath, bodySite.startLine - 1, bodySite.startColumn]], "an unindexed body must retain its physical compiler header target");
+    source.getDocument = getDocument;
+    for (const origin of [point, { line: 8, character: header.split("\n")[8].indexOf("]") },
+        { line: 12, character: header.split("\n")[12].indexOf("]") }]) {
+        const current = origin === point ? document : included;
+        const prepared = await features.callHierarchy.prepareCallHierarchy(current, origin);
+        assert.equal(prepared?.length, 1, "a guarded native indexer must prepare a hierarchy item");
+        const portable = { ...prepared[0] };
+        delete portable.data;
+        const incoming = await features.callHierarchy.provideCallHierarchyIncomingCalls(portable);
+        const module = incoming.find((call) => call.from.detail === "Module-level calls");
+        assert.deepEqual(module?.fromRanges.map((range) => range.start.line).sort(), [2, 4]);
+        const caller = incoming.find((call) => call.from.name === "InvokeIndexed");
+        assert.deepEqual(caller?.fromRanges.map((range) => range.start.line), [6]);
+        assert.deepEqual(await features.callHierarchy.provideCallHierarchyIncomingCalls({ ...portable,
+            detail: portable.detail + " changed" }), [], "a stale hierarchy signature must not bind to a current declaration");
+    }
+    assert.deepEqual(await features.reference.provideReferences(included, inactive, { includeDeclaration: true }), []);
+    assert.deepEqual(await features.documentHighlight.provideDocumentHighlights(included, inactive), []);
+    const query = compiler.query.bind(compiler);
+    compiler.query = async (operation, uri, input) => {
+        const result = await query(operation, uri, input);
+        if (operation === "compilerSidecarOperatorExpressionsInSnapshot") document.version++;
+        return result;
+    };
+    assert.deepEqual(await features.reference.provideReferences(document, point, { includeDeclaration: true }), [],
+        "an edit after the native reference query must discard its results without source fallback");
+});
+
+test("bridge hierarchy preserves physical operator captions and flags incomplete traces", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    for (const binary of [false, true]) {
+        const lines = ["Type ExternalValue", "value As Long", "Declare Operator [](ByVal index As Long) As Long", "End Type",
+            ...(binary ? ["Declare Operator +(ByRef value As ExternalValue, ByVal amount As Long) As Long"] : []),
+            "Dim item As ExternalValue", "Print item[1]", ...(binary ? ["Print item + 2"] : []), ""];
+        fs.writeFileSync(filePath, lines.join("\n"));
+        const reply = await worker.analyze({ ...options, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        assert.equal(reply.partial, false);
+        try {
+            const records = (await worker.query(reply.snapshotId, "callHierarchyOutgoing", { ...input, module: true })).result;
+            const indexed = records.find((entry) => entry.declaration.type === "operator" && entry.declaration.line === 2);
+            assert.ok(indexed, "a bridge trace must retain its known index call");
+            assert.equal(indexed.declaration.signature, lines[2], "display must use the complete physical prototype, not normalized trace text");
+            const column = lines[2].indexOf("[]");
+            assert.deepEqual([indexed.declaration.startColumn, indexed.declaration.endColumn], [column, column + 2]);
+            const symbols = (await worker.query(reply.snapshotId, "documentSymbols", input)).result;
+            const outline = symbols.find((entry) => entry.type === "operator" && entry.selection.start.line === 2);
+            assert.ok(outline, "native Outline must retain the external index operator");
+            assert.equal(outline.name, "Operator []");
+            assert.equal(outline.signature, lines[2], "native Outline must present the complete physical prototype");
+            assert.deepEqual([outline.selection.start.character, outline.selection.end.character], [column, column + 2]);
+            assert.equal(symbols[outline.parent].name, "ExternalValue", "presentation must retain native parent ownership");
+            assert.equal(records.some((entry) => entry.compilerRequiresImplicitProjection === true), binary,
+                "non-index operator declarations require full projection, while index-only graphs keep their fast path");
+            const pass = await worker.beginWorkspace(new Map(), "", 5000);
+            try {
+                const indexedWorkspace = await worker.indexWorkspace(options, { id: pass.workspaceId });
+                const workspace = mapPackedWorkspaceEntries(indexedWorkspace.packedEntries, indexedWorkspace.strings)
+                    .find((entry) => entry.type === "operator" && entry.selection.start.line === 2);
+                assert.ok(workspace, "workspace symbol search must retain the native operator");
+                assert.deepEqual([workspace.name, workspace.signature, workspace.selection], [outline.name, outline.signature, outline.selection],
+                    "workspace symbols and Outline must share physical operator presentation");
+                await worker.finishWorkspace(pass.workspaceId, new Map());
+            } finally { worker.discardWorkspace(pass.workspaceId); }
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("stock external operator declarations retain calls without local procedure bodies", native, async (t) => {
+    const { FreeBasicSemanticModel } = require("../lib/semantic-model");
+    const { parseFreeBasicText } = require("../lib/freebasic-parser");
+    const { sidecarSelectedOperatorTarget } = require("../lib/semantic-features");
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["Type ExternalValue", "value As Long", "Declare Operator [](ByVal index As Long) As Long", "End Type",
+        "Declare Operator +(ByRef value As ExternalValue, ByVal amount As Long) As Long",
+        "Dim item As ExternalValue", "Print item[1]", "Print item + 2", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+        semanticModelOnly: true, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    assert.equal(reply.partial, false);
+    for (const [declaration, query, key, call] of [
+        ["Declare Operator []", "compilerSidecarOperatorExpressionsInSnapshot", "expressions", "item[1]"],
+        ["Declare Operator +", "compilerSidecarOperatorOperationsInSnapshot", "operations", "item + 2"]
+    ]) {
+        const target = (await worker.query(reply.snapshotId, "compilerSidecarOperatorDeclarationAt", {
+            ...input, position: pointAt(text, declaration, declaration.length - 1), kind: "procedure-prototype"
+        })).result;
+        assert.equal(target?.targetSymbols.length, 1);
+        const result = (await worker.query(reply.snapshotId, query, input)).result;
+        assert.equal(result.complete, true);
+        const uses = result[key].filter((record) => record.targetSymbols.length === 1 && record.targetSymbols[0] === target.targetSymbols[0]);
+        assert.equal(uses.length, 1, "native call identity must not depend on a local P body");
+        assert.equal(uses[0].line, pointAt(text, call).line);
+        assert.deepEqual(uses[0].procedures, []);
+    }
+    const uri = CompilerUri.file(filePath);
+    const source = new FreeBasicSemanticModel([{ uri, parsed: parseFreeBasicText(text) }]);
+    const document = { uri, version: 1, getText: () => text,
+        lineAt: (line) => ({ text: text.split("\n")[line] }),
+        offsetAt: (position) => source.getDocument(uri).lineOffsets[position.line] + position.character };
+    const compiler = { remote: true, semanticSidecarOnly: true, semanticBindingsAvailable: true,
+        async query(operation, uri, query) {
+            return (await worker.query(reply.snapshotId, operation, { ...input, ...query, uri })).result;
+        },
+        expressionAt(uri, position, end) { return this.query("expression", uri, { position, end }); } };
+    const selected = await sidecarSelectedOperatorTarget({}, document, pointAt(text, "item + 2", "item ".length),
+        source, null, compiler);
+    assert.equal(selected?.entry?.declaration.line, pointAt(text, "Declare Operator +").line,
+        "external operator call sites must retain their native prototype without a P body");
+});
+
 test("native and stock-sidecar navigation preserve identifier bindings inside index arguments", native, async (t) => {
     const { worker, filePath, options, preparation, input } = setup(t, true);
     const text = [
@@ -3172,8 +5599,11 @@ test("stock semantic sidecar selects ordinary procedure signatures from physical
                 ...input,
                 position: pointAt(text, call, "SidecarOverload(".length)
             })).result;
-            assert.equal(result.entries.length, 0,
-                "sidecar-only results should not fabricate native symbol entries");
+            assert.equal(result.entries.length, 2, "cached binding models must retain native overload alternatives");
+            const selected = result.entries.find((entry) => entry.compilerSymbolId === result.selectedCompilerSymbolId);
+            assert.equal(selected.declaration.line, declarationLine);
+            assert.equal(selected.declaration.parameters[0].typeName.toLowerCase(),
+                declarationLine === 0 ? "integer" : "double");
             assert.ok(Array.isArray(result.selectedSidecarDeclarations));
             assert.ok(result.selectedSidecarDeclarations.some((site) => site.line === declarationLine),
                 `FBC should map ${call} to its selected physical declaration`);
@@ -3186,6 +5616,96 @@ test("stock semantic sidecar selects ordinary procedure signatures from physical
         "procedure CodeLens should retain FBC's selected overload at each call site");
     } finally {
         worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("stock overload signatures retain native families, access, roles, and declaration order", native, async (t) => {
+    const { worker, directory, filePath, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(directory, "signatures.bi");
+    const header = ["Declare Function Choose Overload(ByVal amount As Long) As Long",
+        "Declare Function Choose Overload(ByVal amount As Double) As Double",
+        "Declare Sub Apply Overload(ByVal amount As Long)", "Declare Sub Apply Overload(ByVal amount As Double)",
+        "Namespace OtherFamily", "Declare Function Choose Overload(ByVal amount As Long) As Long",
+        "Declare Function Choose Overload(ByVal amount As Double) As Double", "End Namespace",
+        "Type SignatureService", "    value As Long",
+        "Declare Function Measure Overload(ByVal amount As Long) As Long",
+        "Declare Function Measure Overload(ByVal amount As Double) As Double",
+        "Declare Property Item(ByVal index As Long) As Long",
+        "Declare Property Item(ByVal index As Double) As Double",
+        "Declare Property Item(ByVal index As Long, ByVal newValue As Long)",
+        "Private:", "Declare Function Measure Overload(ByVal amount As String) As Long",
+        "Protected:", "Declare Function Measure Overload(ByVal amount As Short) As Long", "End Type",
+        "Declare Function Early Overload(ByVal amount As Double) As Double", ""].join("\n");
+    const text = ["Declare Function Early Overload(ByVal amount As Long) As Long", "Print Early(CLng(1))",
+        '#include "signatures.bi"',
+        "Print Early(CDbl(1))", "Dim service As SignatureService", "Print Choose(CLng(1))", "Print Choose(CDbl(1))",
+        "Print OtherFamily.Choose(CDbl(1))", "Apply CDbl(1)", "Print service.Measure(CLng(1))",
+        "Print service.Measure(CDbl(1))", "Print service.Item(CLng(1))", "Print service.Item(CDbl(1))", ""].join("\n");
+    fs.writeFileSync(headerPath, header);
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options,
+        compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
+        semanticModelOnly: true, exportSemanticBindings: true }, preparation);
+    try {
+        assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+        for (const [spelling, count, selectedType] of [["Early(CLng(1))", 1, "long"], ["Early(CDbl(1))", 2, "double"],
+            ["Choose(CLng(1))", 2, "long"], ["Choose(CDbl(1))", 2, "double"],
+            ["OtherFamily.Choose(CDbl(1))", 2, "double"], ["Apply CDbl(1)", 2, "double"],
+            ["service.Measure(CLng(1))", 2, "long"], ["service.Measure(CDbl(1))", 2, "double"],
+            ["service.Item(CLng(1))", 2, "long"], ["service.Item(CDbl(1))", 2, "double"]]) {
+            const result = (await worker.query(reply.snapshotId, "signature", {
+                ...input, position: pointAt(text, spelling, spelling.length - (spelling.startsWith("Apply ") ? 0 : 1))
+            })).result;
+            assert.equal(result?.entries.length, count, spelling);
+            const selected = result.entries.find((entry) => entry.compilerSymbolId === result.selectedCompilerSymbolId);
+            assert.equal(selected?.declaration.parameters[0].typeName.toLowerCase(), selectedType, spelling);
+            assert.ok(result.entries.every((entry) => entry.declaration.parameters.length === 1), "getter/setter roles must stay separate");
+            if (spelling.startsWith("OtherFamily")) assert.ok(result.entries.every((entry) => entry.declaration.line >= 4));
+            if (spelling.startsWith("service.Measure")) assert.ok(result.entries.every((entry) =>
+                !/amount As (?:String|Short)/i.test(entry.declaration.signature)), "inaccessible overloads must stay hidden");
+        }
+    } finally {
+        worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("stock overload expansion withholds uninspected producers and invalid native chains", native, async (t) => {
+    const { filePath } = setup(t, true);
+    const text = ["Declare Function Choose Overload(ByVal amount As Long) As Long",
+        "Declare Function Choose Overload(ByVal amount As Double) As Double", "Print Choose(CLng(1))", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    const analysis = await analyzeSavedModule({ compilerPath: process.env.FBC_EXECUTABLE || process.env.FBC_EDITOR_EXECUTABLE,
+        filePath, semanticModelOnly: true, exportSemanticBindings: true, allowErrors: true });
+    assert.equal(analysis.partial, false);
+    const declaration = analysis.semanticBindings.find((binding) => binding.role === "declaration" &&
+        binding.filePath === filePath && binding.startLine === 1 && binding.startColumn === text.indexOf("Choose"));
+    assert.ok(declaration);
+    const edge = analysis.semanticRelationships.find((relation) => relation.kind === "overload-next" &&
+        (relation.source === declaration.symbol || relation.target === declaration.symbol));
+    assert.ok(edge);
+    const uri = CompilerUri.file(filePath);
+    const query = { uri, position: pointAt(text, "Choose(CLng(1))", "Choose(CLng(1)".length), openFiles: [filePath] };
+    for (const mode of ["current", "unknown", "future", "cycle", "oversized"]) {
+        const model = new CompilerSemanticModel(CompilerUri.from(expandedUri), analysis, [{ uri, text }]);
+        if (mode === "unknown") model.compilerSemanticModelCompilerVersion = "";
+        if (mode === "future") model.compilerSemanticModelCompilerVersion = "1.20.6";
+        if (mode === "cycle") model.compilerSemanticRelationships = [...analysis.semanticRelationships,
+            { ...edge, source: edge.target, target: edge.source }];
+        if (mode === "oversized") {
+            const extra = [];
+            let source = edge.target;
+            const firstUnusedSymbol = analysis.semanticBindings.reduce((maximum, binding) => Math.max(maximum, binding.symbol), 0) + 1;
+            // The query allows at most 64 linked overload identities.
+            for (let index = 0; index < 64; index++) {
+                const target = firstUnusedSymbol + index;
+                extra.push({ ...edge, source, target });
+                source = target;
+            }
+            model.compilerSemanticRelationships = [...analysis.semanticRelationships, ...extra];
+        }
+        const result = queryCompilerModel(model, "signature", query, () => {});
+        assert.equal(result.entries.length, mode === "current" ? 2 : 1, mode);
+        assert.ok(result.entries.some((entry) => entry.compilerSymbolId === result.selectedCompilerSymbolId), mode);
     }
 });
 
@@ -3359,6 +5879,16 @@ test("stock semantic sidecar maps parameter facts and selected direct-call hints
             })).result;
             assert.equal(constant?.value, "42",
                 "the sidecar should map both constant declarations and references to the exact value");
+            const hover = (await worker.query(reply.snapshotId, "hover", {
+                ...input, position, includeSymbolConstant: true
+            })).result;
+            assert.deepEqual(hover.symbolConstant, constant, "hover must return the symbol's value on the same snapshot");
+            const boundHover = (await worker.query(reply.snapshotId, "hover", {
+                ...input, position, includeBoundSymbolConstant: true
+            })).result;
+            assert.deepEqual(boundHover.symbolConstant, constant, "resolved constant hovers should fetch their values without a source-model hint");
+            const ordinaryHover = (await worker.query(reply.snapshotId, "hover", { ...input, position })).result;
+            assert.equal(Object.hasOwn(ordinaryHover, "symbolConstant"), false, "unrequested hovers must not fetch symbol values");
         }
         const constantLine = text.split("\n")[9];
         const constantStart = constantLine.indexOf("SidecarConstant");
@@ -3385,7 +5915,20 @@ test("stock semantic sidecar maps parameter facts and selected direct-call hints
             })).result;
             assert.equal(enumValue?.value, "7",
                 "compiler enum member values should be available on declarations and references");
+            const hover = (await worker.query(reply.snapshotId, "hover", {
+                ...input, position, includeSymbolConstant: true
+            })).result;
+            assert.deepEqual(hover.symbolConstant, enumValue, "enum hover values must use the selected query snapshot");
+            const boundHover = (await worker.query(reply.snapshotId, "hover", {
+                ...input, position, includeBoundSymbolConstant: true
+            })).result;
+            assert.deepEqual(boundHover.symbolConstant, enumValue, "resolved enum hovers should fetch their native values");
         }
+        const variableHover = (await worker.query(reply.snapshotId, "hover", {
+            ...input, position: pointAt(text, "Dim sidecarAccessValue", "Dim ".length + 1), includeBoundSymbolConstant: true
+        })).result;
+        assert.equal(variableHover.entries[0]?.declaration?.type, "variable");
+        assert.equal(Object.hasOwn(variableHover, "symbolConstant"), false, "ordinary cached variables must not fetch constant values");
         const enumLine = text.split("\n")[12];
         const enumStart = enumLine.indexOf("SidecarModeFast");
         const enumValueSites = (await worker.query(reply.snapshotId, "compilerSidecarConstantsAtSites", {
@@ -4187,6 +6730,33 @@ test("stock semantic sidecar type inlays retain continued initializer ranges", n
     }
 });
 
+test("native parameter facts report direct value writes without inferring indirect effects", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["Type ParameterRecord", "    fieldValue As Long", "End Type",
+        "Sub AssignIndirect(ByRef destination As Long)", "    destination = 5", "End Sub",
+        "Declare Sub ExternalWrites(ByRef externalValue As Long)",
+        "Sub ReviewWrites(ByRef changed As Long, ByVal localCopy As Long, ByRef inputOnly As Long, " +
+            "ByVal pointerValue As Long Ptr, ByRef recordValue As ParameterRecord, " +
+            "ByRef indirectOnly As Long, ByVal textValue As String)",
+        "    changed += 1", "    localCopy = 2", "    Print inputOnly", "    *pointerValue = 3",
+        "    recordValue.fieldValue = 4", "    AssignIndirect(indirectOnly)", "    Print textValue", "End Sub", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    for (const sidecar of [false, true]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly: sidecar, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            for (const name of ["changed", "localCopy", "inputOnly", "pointerValue", "recordValue", "indirectOnly", "textValue", "externalValue"]) {
+                const hover = (await worker.query(reply.snapshotId, "hover", { ...input, position: pointAt(text, name) })).result;
+                assert.equal(hover.compilerParameterFacts?.parameterDirectSourceWrite === true,
+                    ["changed", "localCopy"].includes(name),
+                    `${sidecar ? "stock" : "bridge"}: only direct parameter-value writes may be reported for ${name}`);
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
 test("stock semantic sidecar maps parameter modes, type origins, and physical ranges", native, async (t) => {
     const { worker, filePath, options, preparation, input } = setup(t, true);
     const text = [
@@ -4529,6 +7099,10 @@ test("stock semantic sidecar exposes compiler-selected procedure ABI on declarat
         assert.deepEqual(cDefaultHover.compilerProcedureFacts?.procedureAbiPolicyInputs?.map((policy) =>
             [policy.writtenConvention, policy.managedString]), [[false, false]],
         "the stock sidecar should distinguish compiler-default Cdecl from a written convention");
+        const policyStatement = cDefaultHover.compilerProcedureFacts?.procedureAbiPolicyInputs?.[0]?.statement;
+        assert.ok(Number.isSafeInteger(policyStatement) && policyStatement > 0,
+            "a uniquely selected header must retain the native ABI policy statement for refactors");
+        assert.equal(policyStatement, cDefaultHover.compilerProcedureVisibilityFacts?.procedureTypingInputs?.[0]?.statement);
 
         const refHover = (await worker.query(reply.snapshotId, "hover", {
             ...input,
@@ -4568,8 +7142,99 @@ test("stock semantic sidecar exposes compiler-selected procedure ABI on declarat
         assert.deepEqual(visibilityOutline[0]?.compilerFacts?.procedureWrittenVisibility
             ?.map((input) => input.visibility), ["default"]);
 
+        const explicitText = text.replace("SidecarCDefault(", "SidecarCDefault Cdecl(");
+        fs.writeFileSync(filePath, explicitText);
+        const explicitReply = await worker.analyze({ ...options, semanticModelOnly: true,
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        assert.equal(explicitReply.partial, false, "the offered explicit convention must compile");
+        try {
+            const explicitHover = (await worker.query(explicitReply.snapshotId, "hover", {
+                ...input, position: pointAt(explicitText, "SidecarCDefault")
+            })).result;
+            assert.equal(explicitHover.compilerProcedureFacts?.procedureCallingConvention,
+                cDefaultHover.compilerProcedureFacts.procedureCallingConvention);
+            assert.equal(explicitHover.compilerProcedureFacts?.procedureReturnsByReference,
+                cDefaultHover.compilerProcedureFacts.procedureReturnsByReference);
+            assert.deepEqual(explicitHover.compilerStorageTypeFacts?.storageType, cDefaultHover.compilerStorageTypeFacts?.storageType);
+            assert.deepEqual(explicitHover.compilerProcedureFacts?.procedureAbiPolicyInputs?.map((policy) => policy.writtenConvention), [true],
+                "only the written-convention receipt should change after making Cdecl explicit");
+        } finally { worker.releaseModel(explicitReply.snapshotId); }
     } finally {
         worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("native implementation follows override descendants without changing static navigation", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const lines = ["Type BasePicker Extends Object",
+        "    Declare Virtual Function Pick Overload(ByVal value As Long) As Long",
+        "    Declare Virtual Function Pick Overload(ByVal value As Double) As Long", "End Type",
+        "Type ChildPicker Extends BasePicker", "    Declare Virtual Function Pick(ByVal value As Long) As Long Override", "End Type",
+        "Type LeafPicker Extends ChildPicker", "    Declare Function Pick(ByVal value As Long) As Long Override", "End Type",
+        "Type UnrelatedPicker Extends Object", "    Declare Virtual Function Pick(ByVal value As Long) As Long", "End Type",
+        "Type AbstractPicker Extends Object", "    Declare Abstract Function Run() As Long", "End Type",
+        "Type ConcretePicker Extends AbstractPicker", "    Declare Function Run() As Long Override", "End Type"];
+    const aliasLine = lines.length;
+    lines.push("Type PickerAlias As BasePicker");
+    const holderLine = lines.length;
+    lines.push("Type PickerHolder", "    target As PickerAlias Ptr", "End Type",
+        "Sub InspectPicker(ByVal parameter As BasePicker Ptr)", "    Print parameter", "End Sub");
+    const externLine = lines.length;
+    lines.push("Extern externalPicker As BasePicker Ptr");
+    const bodies = new Map();
+    for (const signature of ["BasePicker.Pick(ByVal value As Long)", "BasePicker.Pick(ByVal value As Double)",
+        "ChildPicker.Pick(ByVal value As Long)", "LeafPicker.Pick(ByVal value As Long)",
+        "UnrelatedPicker.Pick(ByVal value As Long)", "ConcretePicker.Run()"]) {
+        bodies.set(signature, lines.length);
+        lines.push(`Function ${signature} As Long`, "    Return 1", "End Function");
+    }
+    lines.push("Dim selected As BasePicker Ptr", "Print selected->Pick(CLng(1))", "");
+    const text = lines.join("\n");
+    fs.writeFileSync(filePath, text);
+    for (const stock of [false, true]) {
+        const reply = await worker.analyze({ ...options, compilerPath: stock ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly: stock, exportSemanticBindings: stock }, preparation);
+        assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+        try {
+            const query = async (operation, position) => (await worker.query(reply.snapshotId, operation, { ...input, position })).result;
+            const point = { line: 1, character: lines[1].indexOf("Pick") + 1 };
+            const locations = (entries) => entries.map((entry) => entry.declaration.line).sort((a, b) => a - b);
+            const expected = [bodies.get("BasePicker.Pick(ByVal value As Long)"), bodies.get("ChildPicker.Pick(ByVal value As Long)"),
+                bodies.get("LeafPicker.Pick(ByVal value As Long)")];
+            assert.deepEqual(locations(await query("implementation", point)), expected,
+                `stock=${stock}: include only the selected overload's native descendants`);
+            assert.deepEqual(locations(await query("implementation", { line: 5, character: lines[5].indexOf("Pick") + 1 })), expected.slice(1),
+                "a derived origin must not return its base or sibling implementations");
+            assert.deepEqual(locations(await query("implementation", { line: 2, character: lines[2].indexOf("Pick") + 1 })),
+                [bodies.get("BasePicker.Pick(ByVal value As Double)")]);
+            assert.deepEqual(locations(await query("implementation", { line: 14, character: lines[14].indexOf("Run") + 1 })),
+                [bodies.get("ConcretePicker.Run()")], "abstract prototypes are not implementations");
+            const definition = await query("definition", point);
+            assert.deepEqual(locations(definition), [expected[0]], "Definition must retain the static target");
+            if (!stock) assert.equal(definition[0]?.compilerVirtualMethod, true, "bridge providers need a conceptual virtual-method hint");
+            assert.deepEqual(locations(await query("declaration", point)), [1]);
+            assert.deepEqual(locations(await query("baseDefinition", { line: 5, character: lines[5].indexOf("Pick") + 1 })),
+                [expected[0]], "a child jumps to the selected overload's base body");
+            assert.deepEqual(locations(await query("baseDefinition", { line: 8, character: lines[8].indexOf("Pick") + 1 })),
+                [expected[1]], "a leaf jumps to its immediate parent, not the root");
+            assert.deepEqual(locations(await query("baseDefinition", { line: 17, character: lines[17].indexOf("Run") + 1 })),
+                [14], "an abstract base without a body remains a valid prototype target");
+            assert.deepEqual(await query("baseDefinition", point), [], "a root has no base method");
+            assert.deepEqual(await query("baseDefinition", { line: 11, character: lines[11].indexOf("Pick") + 1 }), [],
+                "an unrelated same-name method is not a base");
+            assert.deepEqual(locations(await query("typeImplementations", { line: 0, character: 6 })), [4, 7],
+                `stock=${stock}: type implementations include descendants but not the base or unrelated types`);
+            assert.deepEqual(locations(await query("typeImplementations", { line: 4, character: 6 })), [7],
+                "a derived origin excludes its ancestors");
+            assert.deepEqual(await query("typeImplementations", { line: 7, character: 6 }), [], "a leaf has no implementations");
+            assert.deepEqual(locations(await query("typeImplementations", { line: aliasLine, character: 6 })), [4, 7],
+                "a type alias uses the actual native inheritance root");
+            for (const [line, name] of [[holderLine + 1, "target"], [holderLine + 4, "parameter"],
+                [externLine, "externalPicker"], [lines.findIndex((line) => line.startsWith("Dim selected")), "selected"]]) {
+                assert.deepEqual(locations(await query("typeImplementations", { line, character: lines[line].indexOf(name) + 1 })), [4, 7],
+                    `stock=${stock}: ${name} follows its native aggregate type, including pointer/alias storage`);
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
     }
 });
 
@@ -4615,6 +7280,11 @@ test("stock semantic sidecar maps overrides and type navigation across included 
         "FBC's semantic override edge should identify the selected base procedure in the stock sidecar");
         const overrideLine = text.split("\n").findIndex((line) => /Declare Function Choose/.test(line));
         const overridePosition = { line: overrideLine, character: text.split("\n")[overrideLine].indexOf("Choose") };
+        const baseMethod = (await worker.query(reply.snapshotId, "baseDefinition", {
+            ...input, position: overridePosition
+        })).result;
+        assert.deepEqual(baseMethod.map((entry) => [entry.uri.fsPath, entry.declaration.line]), [[headerPath, 1]],
+            "an implicit override follows the native edge to its included base prototype");
         const outlineFacts = (await worker.query(reply.snapshotId, "compilerSidecarOutlineFactsAtSites", {
             ...input,
             sites: [{
@@ -5678,6 +8348,145 @@ test("stock callable tokens follow namespace and type owners across headers", na
             const completions = (await worker.query(bridge.snapshotId, "completion", { ...input, position: completionPosition, limit: 20 })).result;
             assert.equal(completions.entries.find((entry) => entry.name === name)?.callableKind, kind);
         }
+    }
+});
+
+test("primitive type layout lookup withholds conflicting or unverified physical contexts", () => {
+    const filePath = path.join(os.tmpdir(), "primitive-layout.bas"), uri = CompilerUri.file(filePath);
+    const model = Object.create(CompilerSemanticModel.prototype);
+    const token = { kind: "identifier", startColumn: 0, endColumn: 7 };
+    model.getDocument = () => ({ byLine: new Map([[0, [token]]]) });
+    const layout = { typeName: "integer", storageKind: "value", storageBytes: "8", pointerDepth: 0 };
+    const inputs = [{ startLine: 1, endLine: 1, startColumn: 0, endColumn: 7, layout }];
+    const key = process.platform === "win32" ? filePath.toLowerCase() : filePath;
+    model.compilerPrimitiveTypesByFileLine = new Map([[key, new Map([[0, inputs]])]]);
+    const point = { line: 0, character: 1 };
+    assert.equal(model.compilerPrimitiveTypeAt(uri, point), layout);
+    inputs.push({ ...inputs[0], layout: { ...layout, storageBytes: "4" } });
+    assert.equal(model.compilerPrimitiveTypeAt(uri, point), null, "shared source cannot choose one target/context layout");
+    inputs[1] = { ...inputs[0], layout: undefined };
+    assert.equal(model.compilerPrimitiveTypeAt(uri, point), null, "a missing companion is not evidence of agreement");
+    inputs.pop();
+    token.kind = "string";
+    assert.equal(model.compilerPrimitiveTypeAt(uri, point), null, "only the exact identifier token is eligible");
+    token.kind = "identifier";
+    model.partial = true;
+    assert.equal(model.compilerPrimitiveTypeAt(uri, point), null);
+});
+
+test("native primitive hovers report the accepted type component and target storage", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["Dim longValue As Long", "Dim nativeValue As Integer", "Dim wideValue As Integer<128>",
+        "Dim pointerValue As Const Long Ptr", "Dim textValue As String", "Dim fixedValue As String * 1",
+        "Dim zeroPointer As ZString Ptr", "Dim wideText As WString * 4",
+        "Declare Function Work(ByVal amount As Double) As Single", "Declare Sub AcceptBuffer(ByRef bufferValue As Any)",
+        "#define NumericType Long", "Dim macroValue As NumericType", "Type LocalAlias As Long", "Dim aliased As LocalAlias",
+        "Print SizeOf(Long)", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    // Trace-free output from the refreshed compiler exercises the stock-model
+    // path too, without replacing the user's independently built normal fbc.
+    for (const sidecar of [false, true]) {
+        const reply = await worker.analyze({ ...options, semanticModelOnly: sidecar,
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            const hover = async (line, word) => (await worker.query(reply.snapshotId, "hover", { ...input,
+                position: { line, character: text.split("\n")[line].lastIndexOf(word) + 1 } })).result;
+            for (const [line, word, typeName, storageKind, storageBytes, pointerDepth] of [
+                [0, "Long", "long", "value", "4", 0], [2, "Integer", "integer<128>", "value", "16", 0],
+                [5, "String", "string * 1", "value", "1", 0], [8, "Double", "double", "value", "8", 0],
+                [8, "Single", "single", "value", "4", 0], [9, "Any", "any", "unsized", "0", 0]
+            ]) assert.deepEqual((await hover(line, word)).primitiveType, { typeName, storageKind, storageBytes, pointerDepth });
+            for (const [line, word, variable, typeName, kind, depth, elements = 1] of [[1, "Integer", "nativeValue", "integer", "value", 0],
+                [3, "Long", "pointerValue", "const long ptr", "pointer", 1], [4, "String", "textValue", "string", "string-descriptor", 0],
+                [6, "ZString", "zeroPointer", "zstring ptr", "pointer", 1], [7, "WString", "wideText", "wstring * 4", "value", 0, 4]]) {
+                const selected = (await hover(line, word)).primitiveType;
+                const declaration = await hover(line, variable);
+                assert.deepEqual(selected, { typeName, storageKind: kind,
+                    // NT reports a WSTRING code unit; the accepted fixed type
+                    // includes the source's four-element character storage.
+                    storageBytes: String(declaration.compilerStorageTypeFacts.storageType.storageBytes * elements), pointerDepth: depth });
+            }
+            assert.equal((await hover(11, "NumericType")).primitiveType, null);
+            assert.equal((await hover(13, "LocalAlias")).primitiveType, null);
+            const queryType = await hover(14, "Long");
+            assert.equal(queryType.primitiveType.typeName, "long");
+            assert.equal(queryType.expression, null, "the type keyword must not borrow SIZEOF's enclosing expression type");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("native semantic tokens classify accepted primitive types without borrowing alias or macro identity", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const headerPath = path.join(path.dirname(filePath), "types.bi"), header = "Type HeaderAlias As Long";
+    const additionalTypes = [["Dim booleanValue As Boolean", "Boolean"], ["Dim byteValue As Byte", "Byte"],
+        ["Dim unsignedByte As UByte", "UByte"], ["Dim shortValue As Short", "Short"], ["Dim unsignedShort As UShort", "UShort"],
+        ["Dim unsignedLong As ULong", "ULong"], ["Dim longInteger As LongInt", "LongInt"], ["Dim unsignedLongInteger As ULongInt", "ULongInt"],
+        ["Dim zeroText As ZString * 16", "ZString"], ["Dim wideText As WString * 16", "WString"], ["Dim unicodeText As UString", "UString"],
+        ["Dim fixedText As String * 8", "String"], ["Dim explicitUnsigned As Unsigned Long", "Long"],
+        ["Declare Sub AcceptBuffer(ByVal bufferValue As Any Ptr)", "Any"], ['Print "é😀" : Dim unicodeByte As Byte', "Byte"]];
+    const source = ["Type LocalAlias As Long", "Dim wide As Integer<128>", "Dim values(0 To 1) As Const UInteger Ptr",
+        "Declare Function Identity(ByVal value As Double) As Single", "Dim textValue As String", "Dim aliased As LocalAlias",
+        "#define NumericType Long", "Dim macroValue As NumericType", "#if 0", "Dim inactive As Short", "#endif",
+        "' Long in a comment", 'Print "Long in a literal"', '#include once "types.bi"',
+        ...additionalTypes.map(([text]) => text), ""].join("\n");
+    fs.writeFileSync(headerPath, header);
+    fs.writeFileSync(filePath, source);
+    for (const sidecar of [false, true]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly: sidecar, compactSemanticMacros: !sidecar,
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            const records = decodeSemanticTokenRecords((await worker.query(reply.snapshotId, "semanticTokens", input)).result);
+            for (const [line, word] of [[0, "Long"], [1, "Integer"], [2, "UInteger"], [3, "Double"], [3, "Single"], [4, "String"],
+                ...additionalTypes.map(([, word], index) => [14 + index, word])]) {
+                const column = source.split("\n")[line].lastIndexOf(word);
+                const record = records.find((entry) => entry.line === line && entry.character === column);
+                assert.equal(record?.type, TOKEN_TYPES.indexOf("type"), `${sidecar ? "stock" : "bridge"}: ${word} at ${line}`);
+                assert.ok(record.modifiers & (1 << TOKEN_MODIFIERS.indexOf("defaultLibrary")));
+                assert.equal(record.length, word.length);
+            }
+            for (const [line, word] of [[0, "LocalAlias"], [5, "LocalAlias"], [7, "NumericType"], [9, "Short"], [11, "Long"], [12, "Long"]]) {
+                const column = source.split("\n")[line].indexOf(word);
+                const record = records.find((entry) => entry.line === line && entry.character === column);
+                assert.equal(Boolean(record && record.modifiers & (1 << TOKEN_MODIFIERS.indexOf("defaultLibrary"))), false,
+                    "only an accepted primitive receipt grants built-in type classification: " + word);
+            }
+            const headerTokens = decodeSemanticTokenRecords((await worker.query(reply.snapshotId, "semanticTokens", {
+                ...input, uri: { scheme: "file", fsPath: headerPath }
+            })).result);
+            const primitive = headerTokens.find((entry) => entry.line === 0 && entry.character === header.indexOf("Long"));
+            assert.equal(primitive?.type, TOKEN_TYPES.indexOf("type"));
+            assert.ok(primitive.modifiers & (1 << TOKEN_MODIFIERS.indexOf("defaultLibrary")),
+                "included headers without a final newline retain their physical primitive occurrence");
+        } finally { worker.releaseModel(reply.snapshotId); }
+    }
+});
+
+test("native primitive highlighting keeps NOKEYWORD aliases and values separate", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const source = ['#lang "fblite"', "Option NoKeyword Integer, Double", "Type Double As Long",
+        "Dim number As Double", "Dim Integer As Long", "Print Integer", ""].join("\n");
+    fs.writeFileSync(filePath, source);
+    for (const sidecar of [false, true]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: sidecar ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly: sidecar, compactSemanticMacros: !sidecar,
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false, JSON.stringify(reply.diagnostics));
+            const records = decodeSemanticTokenRecords((await worker.query(reply.snapshotId, "semanticTokens", input)).result);
+            for (const [line, word, expected] of [[2, "Double", "type"], [3, "Double", "type"], [4, "Integer", "variable"], [5, "Integer", "variable"]]) {
+                const record = records.find((entry) => entry.line === line && entry.character === source.split("\n")[line].indexOf(word));
+                assert.equal(record?.type, TOKEN_TYPES.indexOf(expected), word);
+                assert.equal(Boolean(record.modifiers & (1 << TOKEN_MODIFIERS.indexOf("defaultLibrary"))), false, word);
+                const hover = (await worker.query(reply.snapshotId, "hover", { ...input,
+                    position: { line, character: source.split("\n")[line].indexOf(word) + 1 } })).result;
+                assert.equal(hover.primitiveType, null, "aliases and values must not borrow primitive type layout");
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
     }
 });
 
@@ -7412,6 +10221,91 @@ test("stock semantic sidecar maps compiler-accepted header linker directives to 
     }
 });
 
+test("current compiler retains normalized 128-bit scalar declarations", { skip: !process.env.FBC_INTEGER128_EXECUTABLE }, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = [
+        "Type Integer128",
+        "    memberValue As Long",
+        "End Type",
+        "Dim ordinaryValue As Integer128",
+        "Dim signedWide As Integer<128> = 1",
+        "Dim unsignedWide As UInteger<128> = 1",
+        "Var inferredWide = signedWide + 1",
+        "Var inferredUnsignedWide = unsignedWide + 1",
+        "Var inferredPointer = @signedWide",
+        "Dim pointerToConst As Const Integer<128> Ptr = @signedWide",
+        "Var inferredConstPointer = pointerToConst",
+        "Var inferredOrdinary = ordinaryValue",
+        "Print SizeOf(signedWide), SizeOf(unsignedWide), SizeOf(inferredWide), ordinaryValue.memberValue",
+        ""
+    ].join("\n");
+    fs.writeFileSync(filePath, text);
+    const reply = await worker.analyze({ ...options, compilerPath: process.env.FBC_INTEGER128_EXECUTABLE,
+        semanticModelOnly: true, requireSemanticModel: true, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        assert.equal(reply.semanticSidecarOnly, true);
+        for (const [name, primitive] of [["signedWide", "integer128"], ["unsignedWide", "uinteger128"],
+            ["inferredWide", "integer128"], ["inferredUnsignedWide", "uinteger128"]]) {
+            const hover = (await worker.query(reply.snapshotId, "hover", { ...input,
+                position: pointAt(text, name, 1) })).result;
+            assert.equal(hover.compilerStorageTypeFacts?.storageType?.primitive, primitive);
+            const facts = hover.compilerStorageTypeFacts;
+            assert.equal(facts.storageType.storageBytes, 16);
+        }
+        const ordinaryHover = (await worker.query(reply.snapshotId, "hover", { ...input,
+            position: pointAt(text, "ordinaryValue", 1) })).result;
+        assert.equal(ordinaryHover.compilerStorageTypeFacts?.storageType?.primitive, "type",
+            "the source identifier Integer128 is not the built-in Integer<128> type");
+        const hints = (await worker.query(reply.snapshotId, "compilerTypeInlayHints", { ...input,
+            position: { line: 0, character: 0 }, end: { line: text.split("\n").length - 1, character: 0 } })).result;
+        for (const [name, typeName] of [["inferredWide", "Integer<128>"], ["inferredUnsignedWide", "UInteger<128>"],
+            ["inferredPointer", "Integer<128> ptr"], ["inferredConstPointer", "const Integer<128> ptr"],
+            ["inferredOrdinary", "INTEGER128"]]) {
+            assert.equal(hints.find((hint) => hint.position.line === pointAt(text, name, 1).line)?.typeName?.toLowerCase(), typeName.toLowerCase(),
+                "only a normalized primitive fact may replace the internal 128-bit spelling");
+        }
+    } finally { worker.releaseModel(reply.snapshotId); }
+});
+
+test("current bridge presents source-valid 128-bit inferred types without changing nominal names", {
+    skip: !process.env.FBC_INTEGER128_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    input.openFiles = [filePath];
+    const text = ["Type Integer128", "    value As Long", "End Type", "Dim ordinary As Integer128",
+        "Dim signedWide As Integer<128> = 1", "Dim unsignedWide As UInteger<128> = 1",
+        "Var inferredWide = signedWide + 1", "Var inferredUnsignedWide = unsignedWide + 1",
+        "Dim pointerToConst As Const Integer<128> Ptr = @signedWide", "Var inferredPointer = pointerToConst",
+        "Var inferredOrdinary = ordinary",
+        "Dim callback As Function(ByVal As Integer<128>, ByVal As Integer128) As UInteger<128>",
+        "Var inferredCallback = callback", ""].join("\n");
+    const reply = await worker.analyze({ ...options, overlays: new Map([[filePath, text]]),
+        exportSemanticExpressions: true, exportSemanticBindings: false }, preparation);
+    try {
+        assert.equal(reply.partial, false);
+        assert.equal(reply.semanticSidecarOnly, false);
+        const hints = (await worker.query(reply.snapshotId, "compilerTypeInlayHints", { ...input,
+            position: { line: 0, character: 0 }, end: { line: text.split("\n").length - 1, character: 0 } })).result;
+        for (const [name, expected] of [["inferredWide", "Integer<128>"], ["inferredUnsignedWide", "UInteger<128>"],
+            ["inferredPointer", "const Integer<128> ptr"], ["inferredOrdinary", "INTEGER128"]]) {
+            assert.equal(hints.find((hint) => hint.position.line === pointAt(text, name).line)?.typeName?.toLowerCase(), expected.toLowerCase(),
+                "native inferred type presentation must retain valid source spellings and nominal identities");
+        }
+        const callbackHint = hints.find((hint) => hint.position.line === pointAt(text, "inferredCallback").line);
+        assert.match(callbackHint?.typeName || "", /^function\(as integer<128>, byval as integer128\) as uinteger<128>$/i,
+            "nested primitive types must use width syntax without rewriting the nominal Integer128 parameter");
+        const canonical = await worker.analyze({ ...options,
+            overlays: new Map([[filePath, `${text}Dim canonicalCallback As ${callbackHint.typeName}\n`]]),
+            exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(canonical.partial, false, "FBC must accept its own nested canonical type spelling as source");
+        } finally { worker.releaseModel(canonical.snapshotId); }
+        assert.equal(fs.readFileSync(filePath, "utf8").includes("signedWide"), false,
+            "the editor bridge must obtain these types from the unsaved buffer");
+    } finally { worker.releaseModel(reply.snapshotId); }
+});
+
 test("stock semantic sidecar exposes compiler storage and declaration-type facts", native, async (t) => {
     const { worker, filePath, options, preparation, input } = setup(t, true);
     const text = [
@@ -7610,10 +10504,13 @@ test("stock semantic sidecar validates a typed declarator within a multi-name DI
 
 test("stock semantic sidecar maps inferred Var declaration types", native, async (t) => {
     const { worker, filePath, options, preparation, input } = setup(t, true);
-    const text = "Var inferredVarValue = 42\n";
+    const text = ["Var inferredVarValue = 42", "Dim pointee As Long = 1",
+        "Dim constPointee As Const Long Ptr = @pointee", "Dim fixedPointer As Long Const Ptr = @pointee",
+        "Var inferredConstPointer = constPointee", "Var inferredNestedPointer = @fixedPointer", ""].join("\n");
     fs.writeFileSync(filePath, text);
     const reply = await worker.analyze({
         ...options,
+        compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
         semanticModelOnly: true,
         exportSemanticExpressions: true,
         exportSemanticBindings: true
@@ -7629,6 +10526,12 @@ test("stock semantic sidecar maps inferred Var declaration types", native, async
         assert.equal(hover.compilerStorageTypeFacts?.declarationInputs?.[0]?.writtenType, "inferred");
         assert.equal(hover.compilerStorageTypeFacts?.declarationInputs?.[0]?.group?.kind, "var");
         assert.equal(hover.compilerStorageTypeFacts?.declarationInputs?.[0]?.group?.count, 1);
+        for (const [name, constBits] of [["inferredConstPointer", "01"], ["inferredNestedPointer", "010"]]) {
+            const pointerHover = (await worker.query(reply.snapshotId, "hover", { ...input,
+                position: pointAt(text, name) })).result;
+            assert.equal(pointerHover.compilerStorageTypeFacts?.storageType?.constBits, constBits,
+                "inferred pointer refactors need constness at each native dereference level");
+        }
     } finally {
         worker.releaseModel(reply.snapshotId);
     }
@@ -7760,6 +10663,28 @@ test("stock semantic sidecar exposes explicit and implicit enum member values", 
             "the stock sidecar should provide the exact value to a safe explicit-value refactor");
     } finally {
         worker.releaseModel(reply.snapshotId);
+    }
+});
+
+test("native occurrence queries retain module variable access roles", native, async (t) => {
+    const { worker, filePath, options, preparation, input } = setup(t, true);
+    const text = ["#define OCCURRENCE_VALUE 42", "Dim sharedValue As Long", "sharedValue = OCCURRENCE_VALUE",
+        "sharedValue += 1", "Print sharedValue, OCCURRENCE_VALUE", ""].join("\n");
+    fs.writeFileSync(filePath, text);
+    for (const semanticModelOnly of [true, false]) {
+        const reply = await worker.analyze({ ...options,
+            compilerPath: semanticModelOnly ? process.env.FBC_EXECUTABLE || options.compilerPath : options.compilerPath,
+            semanticModelOnly, exportSemanticExpressions: true, exportSemanticBindings: true
+        }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            const position = pointAt(text, "Print sharedValue", "Print ".length + 2);
+            const highlights = (await worker.query(reply.snapshotId, "highlights", { ...input, position })).result;
+            assert.deepEqual(highlights.map((entry) => [entry.occurrence.line, entry.accessRole]),
+                [[1, undefined], [2, "write"], [3, "read-write"], [4, "read"]], `sidecar=${semanticModelOnly}`);
+        } finally {
+            worker.releaseModel(reply.snapshotId);
+        }
     }
 });
 
@@ -8713,7 +11638,7 @@ test("native control-flow inlays identify unreachable physical statements", nati
     const text = [
         "Sub FlowProbe()",
         "    Goto doneLabel",
-        "    Print \"unreachable\"",
+        "    /' \u{1f600} '/ Print \"unreachable\"",
         "doneLabel:",
         "    Print \"reachable\"",
         "End Sub",
@@ -8737,6 +11662,14 @@ test("native control-flow inlays identify unreachable physical statements", nati
         assert.deepEqual(unreachable.unreachableStatements.map((hint) => [
             hint.position.line, hint.position.character, hint.label
         ]), [[unreachablePosition.line, unreachablePosition.character + "Print".length, "unreachable"]]);
+        const sourceRanges = (await worker.query(reply.snapshotId, "compilerUnreachableSourceRanges", input)).result;
+        assert.deepEqual(sourceRanges, [{ start: text.indexOf('Print "unreachable"'), end: text.indexOf('Print "unreachable"') + "Print".length }],
+            "fading uses the native token's UTF-16 offsets, not the whole line or reachable label");
+        const batch = (await worker.query(reply.snapshotId, "compilerSourceDiagnosticRanges", input)).result;
+        assert.deepEqual(batch.unreachable, sourceRanges);
+        assert.deepEqual(batch.inactive, []);
+        assert.ok(Array.isArray(batch.lexical.remIdentifierOffsets));
+        assert.ok(Array.isArray(batch.lexical.defaultEscapedStringRanges));
 
         const reachablePosition = pointAt(text, "Print \"reachable\"");
         const reachableLine = text.split("\n")[reachablePosition.line];
@@ -8757,7 +11690,7 @@ test("stock semantic sidecar exposes compiler-confirmed unreachable statements",
     const text = [
         "Sub SidecarFlowProbe()",
         "    Goto doneLabel",
-        "    Print \"unreachable\"",
+        "    /' \u{1f600} '/ Print \"unreachable\"",
         "doneLabel:",
         "    Print \"reachable\"",
         "End Sub",
@@ -8766,6 +11699,7 @@ test("stock semantic sidecar exposes compiler-confirmed unreachable statements",
     fs.writeFileSync(filePath, text);
     const reply = await worker.analyze({
         ...options,
+        compilerPath: process.env.FBC_EXECUTABLE || options.compilerPath,
         semanticModelOnly: true,
         exportSemanticExpressions: true,
         exportSemanticBindings: true
@@ -8783,6 +11717,12 @@ test("stock semantic sidecar exposes compiler-confirmed unreachable statements",
         assert.deepEqual(result.unreachableStatements?.map((hint) => [
             hint.position.line, hint.position.character, hint.label
         ]), [[unreachablePosition.line, unreachablePosition.character + "Print".length, "unreachable"]]);
+        const sourceRanges = (await worker.query(reply.snapshotId, "compilerUnreachableSourceRanges", input)).result;
+        assert.deepEqual(sourceRanges, [{ start: text.indexOf('Print "unreachable"'), end: text.indexOf('Print "unreachable"') + "Print".length }]);
+        const batch = (await worker.query(reply.snapshotId, "compilerSourceDiagnosticRanges", input)).result;
+        assert.deepEqual(batch.unreachable, sourceRanges);
+        assert.deepEqual(batch.inactive, []);
+        assert.ok(Array.isArray(batch.lexical.remKeywordDisabledLineOffsets));
     } finally {
         worker.releaseModel(reply.snapshotId);
     }
@@ -8980,10 +11920,19 @@ test("prepared workers retain sidecar expression types when a trace exceeds the 
 test("macro-heavy upstream models use the bounded exclusive allowance", native, async (t) => {
     const { worker } = setup(t, true);
     const root = resolveFreeBasicRoot(process.env.FREEBASIC_ROOT || "");
+    // Offline resource checks may share the host with CPU-heavy jobs. Keep the
+    // editor deadline unchanged while allowing these large models to finish.
+    const analysisTimeoutMs = 5 * 60 * 1000;
     let previous;
     for (const name of ["compare-float-nan.bas", "iif.bas"]) {
         const filePath = path.join(root, "tests/expressions", name);
-        const options = { compilerPath: process.env.FBC_EDITOR_EXECUTABLE, filePath, compilerArguments: ["-i", path.join(root, "inc"), "-i", path.join(root, "tests/fbcunit/inc")], allowErrors: true };
+        const options = {
+            compilerPath: process.env.FBC_EDITOR_EXECUTABLE,
+            filePath,
+            compilerArguments: ["-i", path.join(root, "inc"), "-i", path.join(root, "tests/fbcunit/inc")],
+            allowErrors: true,
+            timeoutMs: analysisTimeoutMs
+        };
         const reply = await worker.analyze(options, { requestedFile: filePath, expandedUri });
         assert.equal(reply.partial, false);
         assert.ok(reply.modelWeight > 128 * 1024 * 1024);

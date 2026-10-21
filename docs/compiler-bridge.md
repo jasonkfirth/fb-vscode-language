@@ -1,10 +1,50 @@
 # Compiler-backed language support
 
+Primitive keyword hovers consume the optional `accepted-primitive-type-layouts`
+family. Each counted input has a same-owner/detail layout companion containing
+canonical spelling, public storage kind, decimal byte width and pointer depth.
+Both readers require complete pairing and reject orphan or inconsistent layouts.
+Byte widths remain decimal strings, avoiding host-number rounding. No dtype
+bitfield interpretation is needed. Older producers retain reference hovers.
+
+Hovers describe the complete accepted type component, not array totals or ABI
+argument slots. Pointer values and string descriptors are labelled explicitly;
+fixed string lengths retain their full width. Native primitive facts take
+precedence over enclosing expression results and source-index guesses. Conflicting
+physical contexts withhold the layout. Cold type hovers request the existing
+binding snapshot directly and reuse it on subsequent requests. Rebuild the
+editor bridge, or the normal compiler separately, to expose the new capability.
+The binary schema remains 27 and the bridge trace protocol remains 15.
+
+Primitive semantic highlighting consumes FBC's counted
+`accepted-primitive-type-inputs` observations. Both binary readers validate
+module/statement/source ownership, count/ordinal closure and physical-origin
+roles. Only verified keyword extents become `type.defaultLibrary` tokens;
+existing symbol or alias classification at a shared physical site wins. Neither
+internal keyword IDs nor dtype bit layouts are interpreted to infer a type use.
+
+The current-source bridge keeps this family available in compact full models.
+Macro provenance remains separately gated, and an absent or unverified macro
+location cannot create an editable keyword span. Stock FBC's full-macro semantic
+token snapshots already expose the family. No extra editor compiler pass is
+added. The appended standard modifier preserves the indices of existing
+modifiers, with a fallback to `storage.type.freebasic` for existing type colors.
+Rebuild an older bridge for compact-mode primitive receipts; protocol 15 is
+unchanged by this semantic-family availability extension.
+
 The bridge uses the real FreeBASIC compiler for preprocessing, committed call
 resolution, expression types, editor-buffer overlays, and validated project
 symbol rename. The extension remains version 1.20.5 to match its source
 target. These are working compiler-backed features, not a claim that every
 language-server operation has compiler-grade coverage.
+
+The current-source bridge also needs the compiler's canonical 128-bit type
+formatter correction in `src/compiler/symbols/symb.bas`: public type spellings
+must use `Integer<128>`/`UInteger<128>`, including nested callback types, while
+normalized NT primitive codes remain `integer128`/`uinteger128`. The current
+local source and `dist/fbc-editor-current` include this correction. Rebuild the
+normal compiler separately when its diagnostic/sidecar type spellings need the
+same update; building the private bridge does not replace the normal compiler.
 
 ## Implemented foundation
 
@@ -21,7 +61,7 @@ The instrumentation is inactive unless the extension supplies
 `FB_VSCODE_TRACE=1`. It adds comments to `-pp` output, not executable BASIC:
 
 ```text
-''@fb-editor-protocol 14
+''@fb-editor-protocol 15
 ''@fb-editor-file-v10 <file ID> <hex-encoded UTF-8 filename>
 ''@fb-editor-token-v11 <serial> <start byte> <end byte> <source|generated> <physical start byte> <physical end byte> <file ID> <macro map ID or 0> <macro epoch>
 ''@fb-editor-map <ID> <kind> <native length> <first input> <second input> <offset> <physical start byte> <physical end byte> <macro symbol ID or 0> <parameter ordinal> <file ID or 0>
@@ -48,6 +88,7 @@ The instrumentation is inactive unless the extension supplies
 ''@fb-editor-shape <symbol ID> <base type ID or 0> <anonymous parent ID or 0> <native type options> <parameter mode> <optional: 0 or 1> <array dimensions>
 ''@fb-editor-import <source namespace ID> <destination namespace ID or 0> <serial> <byte>
 ''@fb-editor-invalid <first output serial> <last output serial>
+''@fb-editor-unevaluated <start serial> <start byte> <end serial> <end byte>
 ''@fb-editor-error <one-based source line> <hex filename> <error code> [output serial] [error byte column]
 ''@fb-editor-end <error count> <root parser reached EOF: 0 or 1>
 ```
@@ -59,8 +100,49 @@ retains the corresponding origin instead of substituting the most recent
 scanner position. A line is marked generated when it contains expansion tokens
 or combines origins. Record lines become blank lines before building the editor
 model, so expanded coordinates do not shift when metadata is removed. Older
-bridges must be rebuilt; the runtime requires protocol 14 even for modules with
-no procedure calls.
+bridges below protocol 14 must be rebuilt even for modules with no procedure
+calls. Protocol 14 remains accepted; rebuild to protocol 15 for unevaluated-query
+classification in the local bridge Call Hierarchy.
+
+Protocol 15 records the expanded operand intervals of native `TYPEOF` and
+`SIZEOF` parser scopes. Call Hierarchy excludes runtime edges within these
+intervals, including implicit construction and index operations. The bindings,
+expression types and reference locations are retained. Expanded coordinates
+keep separate uses of one physical macro argument distinct; source spelling
+alone cannot establish whether a call is evaluated. `LEN` is not excluded,
+since a dynamic-string operand can execute at runtime.
+
+Full binary sidecars already expose `unevaluated-query-inputs` coverage and
+expression-ID interval receipts. Both readers validate the complete intervals,
+their module/global-namespace ownership and every marked input, even when the
+editor retains only a filtered expression set. Project hierarchy uses those
+roles for implicit construction/operator sites. The innermost native expression
+classifies a physical site; conflicting evaluated and unevaluated roles at one
+range retain the edge. Ordinary Find References does not apply this filter.
+
+Explicit project Call Hierarchy reads request full macro provenance instead of
+the normal compact macro export. Current FBC's `source-call-macro-references`
+capability supplies counted CALL-to-MR attachments. Both binary readers validate
+the per-module global-namespace count receipt, selected direct/virtual interface,
+native macro origin and invocation module. Dropped attachments cannot masquerade
+as a complete caller list. Indirect runtime targets are not inferred.
+
+These calls have no written B callee binding. The project projection follows
+native expansion parents to a physical invocation and reports its source range,
+including the argument list when the native closing receipt maps physically.
+The range is a reporting anchor, never a rename edit. One expansion can retain
+several distinct native callees. Incoming trees keep that complete invocation
+site instead of adding a narrower bridge argument location as another call.
+Ordinary reference ambiguity checks and non-hierarchy macro request sizes are
+unchanged. This consumes existing compiler records; no bridge rebuild is needed
+beyond the protocol-15 build described above.
+
+The bridge also retains native definition/argument origin roles during physical
+projection. Replacement-body names remain references, but are not reported as
+runtime sites on a `#define`/`#macro` body. Outgoing trees containing such calls
+or unmapped committed callees, including pasted names, use the full project
+projection, including the ordinary current-module context. Unevaluated query
+operands do not trigger this runtime-call upgrade.
 
 The invalid serial interval remains authoritative for declarations, bindings,
 and token resolution. The error record also carries the compiler error code and,
@@ -415,6 +497,73 @@ cross-record relationships before retaining them. Physical `LOC` spans whose
 parser endpoint precedes their start are omitted by the compiler; an empty
 colon-separated statement may have structural records without an editable range.
 
+Incoming constructor/destructor hierarchy in project contexts reuses the
+read-only lifetime reference families and joins their physical sites to mapped
+native statement ranges. The implicit-call owner identifies the constructed
+object or formal parameter, not the calling procedure. Caller selection uses
+the statement owner and construct chain; source parsing only presents the
+already-proven procedure header. Repeated includes are accepted only when all
+containing native ranges agree. Missing/unmapped ranges and conflicting owners
+withhold the project tree rather than publish partial callers. A bounded sorted
+range index is retained for explicit hierarchy requests needing implicit-call
+ownership, not normal editor snapshots. This does not enable lifetime
+rename.
+
+Operator incoming hierarchy now reuses that bounded ownership projection with
+the existing read-only operator reference families. A native D header reselects
+the callee in each compiler pass; O and typed-expression receipts supply the
+selected uses. The active build's mapped statement ranges supply routine or
+module callers, including closed modules and conditional caller headers. The
+source index still presents the selected operator header but does not choose
+callers for a successful native tree.
+
+Local physical receipts are captured before project analysis can evict their
+model. A complete native result, including an empty list, skips source caller
+grouping and the older project-reference scan. Unavailable ownership retains
+both the prior reference-family anchor and the captured snapshot fallback,
+without querying retired operator IDs. Existing buffer/context/cancellation
+guards and unmapped-range refusal apply.
+
+Outgoing project hierarchy also joins those native lifetime/operator families
+to statement owners. Complete results own ordinary and implicit edges together;
+the provider must not merge source-scope supplements back into that graph.
+Unmapped ownership or ambiguous operator targets withhold the projection and
+retain the prior fallback. Declarations are family anchors, not call edges.
+The collector retains one occurrence per proven callee at a shared span, while
+ordinary CALL records still must agree on their one target. This distinguishes
+construction/destruction at a temporary without accepting an ambiguous overload.
+
+Native D records begin at callable keywords. Their per-module statement ordinal
+joins a mapped statement range when retaining DECLARE/private/continued prefixes
+for header presentation. Native identities still choose targets; parsing only
+presents the proven header. Legacy bridge operator captions use a unique matching
+physical header, preserving target selection and subsequent stale-item checks.
+A nonempty legacy graph is not a completeness proof for non-index operators,
+so those declarations flag the fuller projection. Ordinary/index-only graphs
+retain their populated-snapshot fast path. Full implicit-call coverage remains
+subject to the grammar, macro-origin and corpus audit.
+
+Native Outline and workspace-symbol records also recover operator presentation
+from one matching physical header. This repairs truncated legacy names such as
+`[` and incomplete prototype strings while retaining native kind, ownership,
+visibility and parent relationships. It does not add source-only declarations
+to the native inventory. Ambiguous, macro-derived and expanded-view entries keep
+their prior native presentation.
+
+Navigation, hierarchy and symbol presentation share the same per-snapshot source
+declaration cache: at most eight documents, four MiB per source and 20,000 parsed
+declarations per document. These are the existing navigation limits, not larger
+parsing allowances. The cache is lazy, retains negative bounds results and does
+not start another compiler pass.
+
+Stock-FBC hierarchy preparation can select an external constructor prototype
+through its native D header without a source-indexed implementation. Header
+parsing supplies presentation only after that identity is proven. Native
+lifetime hierarchy records consistently select the Constructor/Destructor
+keyword; a UDT display label of a different length must not shift or truncate
+that selection. Incoming and outgoing records therefore retain the same target
+anchor through project, bridge and source-backed lifetime paths.
+
 The full schema also carries conceptual operator receipts (`O`) with the
 selected operator code and kind, target symbol, and physical source range.
 Current FBC emits these at overloaded `NEW`/`NEW[]`/`DELETE`/`DELETE[]` and
@@ -519,8 +668,8 @@ completed syntax expression for each family in an invocation, which is enough
 for the corpus inventory while keeping large compiler traces within their
 existing bounded-output limit. Protocol 12 adds multiple family records for
 one syntax node when a helper returns an already committed expression. The
-current runtime requires protocol 14; the decoder can still read older trace files for
-compatibility tests.
+current runtime accepts protocols 14 and 15; the decoder can still read older
+trace files for compatibility tests.
 
 `cTypeOrExpression()` is the shared parser route for expression-side `LEN`,
 `SIZEOF`, and `TYPEOF`. It first attempts a type layout and only then returns
@@ -733,6 +882,20 @@ Cursor coordinates are copied explicitly because VS Code positions expose
 prototype getters that structured cloning does not preserve. Semantic tokens
 use a typed-array result, not a list of declaration records.
 
+Semantic highlighting requests physical symbol bindings in both native modes,
+even without a NOKEYWORD option. The bridge's trace-only resolution lacks the
+access and qualifier facts needed for write and readonly modifiers. This reuses
+the current binding model or acquires one through the existing on-demand
+service, without requesting a separate expression pass for coloring. Stock
+sidecars also require macro bindings because compact snapshots omit macro
+definition/use facts; bridge tracing retains these without that extra request.
+Active declarations and uses retain their native symbol kinds, readonly
+qualifiers, and access roles. When no suitable native snapshot can be acquired,
+the source adapter remains available. The provider captures the document version
+before acquisition and rejects both native and source token results after edits,
+closure, or cancellation. Native token queries follow one replacement through
+the shared adapter, retaining binding, macro, and backend requirements.
+
 The host retains asynchronous process launching, output capture, cancellation,
 and reaping. This ownership matters on worker failure: terminating a thread
 that owns a live child can otherwise strand its process handle. A failed worker
@@ -917,9 +1080,9 @@ without other native context. This completion-only point does not become an
 identifier origin or navigation binding.
 
 Escaped-string context probes capture the document version and honor
-cancellation, including before scanning source. Only ambiguous quotes in default
+cancellation, including before scanning source. Ambiguous quotes in default
 strings request native option facts; explicit escaped/raw strings and comments
-stay on the local path. An uncached request can acquire the normal binding model;
+normally stay on the local path. An uncached request can acquire the normal binding model;
 a lightweight cached model can join that upgrade to obtain accepted option
 contexts. The worker then uses all preceding
 native escape spans, not just the span at the caret, and returns code/string/
@@ -932,6 +1095,504 @@ Type Hierarchy also keeps that native masked prefix for its identifier preflight
 retaining the original suffix to include the token at the caret. A second raw
 source scan must not hide an identifier following a compiler-confirmed escaped
 literal. Numeric and ordinary source-only requests retain their cheap preflight.
+
+Type Definition and Type Hierarchy acquire native bindings before applying
+source-only shortcuts to a potentially disabled keyword. This keeps a conditional
+NOKEYWORD REM identifier from being rejected as a comment. The option spelling
+only schedules acquisition; native identity and type queries decide the result.
+Literal and comment spellings do not gain an identity from this path.
+
+Type Definition and Type Hierarchy preparation follow one replaced native query
+through the shared on-demand selector, preserving its binding requirement and
+stock/bridge backend. The type-definition adapter retains the successor for
+later expression queries too. Root version, closure, and cancellation guards
+cover context acquisition, native queries, and late source-type refinement;
+backend changes and repeated replacement withhold results.
+
+Stock member completion likewise follows one already-cached binding successor
+when its receiver/base-chain or member-fact query is superseded. The entire read
+restarts so captured source checks and all member facts use that same snapshot.
+Type acquisition also follows the shared selector's current cached model. This fallback is
+needed when an enclosing scalar expression hides the receiver's own type and
+source-only inference cannot establish it; the retry adds no compiler pass.
+
+Native completion, Signature Help, final definition/declaration/implementation,
+reference, highlight, semantic-token, and primary native hover queries share
+one-replacement handling in the editor-model adapter, including direct signatures
+and source-overload refinement. The adapter retains the successor alongside its
+result, preserves binding requirements, and requests macro metadata only when
+explicitly needed. Extra macro enrichment in the
+predecessor does not become a callback's retry requirement. Edits, closure,
+cancellation, backend changes, and repeated replacement discard the request.
+
+Bridge hover also requests native bindings on first use. A trace-only model
+can resolve the declaration without its array, layout, parameter, or storage
+facts. Acquiring the existing binding capability makes those facts available
+before coloring or another provider warms the cache. Stock hover retains its
+existing fact-specific and macro acquisition paths; no extra expression or
+macro capability is requested for the bridge.
+
+The primary native hover query retains its selected successor for later reads.
+A masked stock identifier can already use a full macro snapshot, so this retry
+keeps that capability rather than dropping its macro signature or definition.
+Bridge retries retain symbol bindings without inheriting extra macro metadata.
+Saved-file source-mode hover supplements now share the same bounded retry and
+retain its selected model for later lookups. Their expression-only requests do
+not force a binding upgrade on replacement; actual delivered bindings and
+requested macro data are retained. Other adapter callers keep the existing
+default that stock native queries require bindings.
+
+Source-mode constant/enum hovers request their symbol value as an optional field
+in the same worker hover reply. The declaration, type, and value therefore come
+from one immutable model, and a replacement retries that whole read. Ordinary
+variable hovers do not request this lookup. The existing scalar/string value
+validation bounds the reply, and the separate constant query remains available to other
+consumers. This extends the internal hover result, not the FBC binary schema.
+
+Complete cached stock bindings can also answer one unambiguous variable, field,
+parameter, constant, or enum-member hover directly, without initializing the
+host source index or acquiring another model. The existing renderer reuses that query's result.
+Eligibility requires a positive native identity, matching physical name, and no
+macro identity/signature. Constants and enum members must also have a native
+value in that reply. An opt-in bound-constant request performs the value lookup
+only when the native entry has one of those two kinds; it does not add that walk
+to ordinary variable/field/parameter hovers. Dirty documents, partial models,
+ambiguous sites, and other symbol kinds retain their existing paths. The bounded
+adapter handles a replaced cache; only the internal hover request is extended,
+not the FBC binary schema.
+
+The expanded/preprocessed document exposes the same per-line token index as
+physical documents. It is derived lazily from the existing token vector, so
+ordinary physical-source queries do not initialize it. Expanded navigation and
+hover can therefore share token-based helpers without assuming a physical
+document layout. Expanded highlights use compiler-bound inner occurrences in
+that view's coordinates; navigation and references retain physical targets.
+
+Opening the view also follows one metadata replacement across the editor's
+open/language/show awaits. Each attempt uses a currently published URI; source
+edits, closure, trust changes, or a different build signature stop the command.
+If retirement leaves a pass pending, the existing explicit-check path can join
+it. This is a bounded opening retry, not a permanent alias for retired views.
+An empty expansion remains valid content rather than an expiration message.
+
+Definition, Declaration, and Implementation capture the original buffer revision
+before acquisition and native preparation. Their constructor probes use the same
+bounded query adapter as ordinary navigation, retaining the selected successor
+instead of re-querying a retired predecessor. Closed or edited requests stop
+after a binding upgrade and before constructor locations are published. When a
+probe resolves an ordinary argument symbol instead, its validated reply also
+supplies the normal navigation fallback without a duplicate native query.
+
+Native acquisition can bypass the source index. Navigation refreshes the current
+root before obtaining a source model for constructor/operator mapping, so an
+implicit argument constructor does not require Analyze or Outline first. The
+compiler still selects the target; indexed source only maps its physical
+declaration/body sites. Unrelated ordinary native lookups do not add this parse.
+
+Implicit argument-constructor navigation can also use the worker's physical
+declaration records directly. Anonymous constructors have D headers without
+named B declaration tokens, so native constructor/destructor F kinds are kept
+through those headers, as operator kinds already were. A unique committed I
+target and constructor kind select the symbol; validated D roles select its
+prototype and body. The D name field is not used as a token identity.
+
+The existing per-model declaration parser/cache recovers only name ranges inside
+those physical headers. This admits the active guarded declaration without
+joining inactive same-signature branches or requiring the header in the host
+source index. The existing 64-site, 4 MiB source, 20,000-declaration, and eight-file
+cache bounds remain. Definition prefers a body, Declaration a prototype, and
+Implementation never substitutes a prototype. Value bindings take precedence
+over conversions, and comments or missing native identities do not gain targets.
+
+Constructor Signature Help shares this declaration reader. Exact native
+constructor call records select the overload for NEW and written type/alias
+calls, including guarded headers and external prototypes without a local body.
+The worker returns the parsed signature with that committed identity, preferring
+a body when present. The editor does not replace those entries with a source-
+indexed family or require the header to be open. Missing identity metadata still
+does not authorize a guarded source guess.
+
+Constructor hover uses that same selection at the terminal type/alias token.
+It retains the selected signature for guarded and external declarations instead
+of showing every source overload. Namespace qualifiers and argument values keep
+their own declarations. Stock hover recognizes a possible type call only to
+schedule binding acquisition; the compiler still supplies the target and active
+physical declaration. A selected native constructor is not replaced by source-
+only constructor-family refinement. This works before Signature Help warms the
+model and does not require the header to be open.
+
+Definition, Declaration, and Implementation also share these physical
+constructor records for written NEW and type/alias calls. Definition prefers a
+body, Declaration a prototype, and an external prototype never becomes an
+implementation. Argument-conversion navigation keeps its existing value-binding
+precedence. The worker still requires the committed target and constructor kind.
+
+A cold bridge can resolve the callee as a type while its closed header is absent
+from the source index. The editor uses that native navigation result to request
+bindings once and repeat the query on the stronger snapshot. Ordinary procedure
+results do not trigger this upgrade or require a source-index parse. The existing
+snapshot adapter handles replacement, while document/cancellation/backend checks
+guard the added await. This does not add a compiler query type or schema field.
+
+Constructor references/highlights use the same selected identity and include
+its active prototype and body when declarations are requested. Occurrence
+collection joins lifetime receipts with physical written-construction receipts
+without adding duplicate calls to the bridge's Call Hierarchy graph. Initializer
+receipts can identify the destination variable; normalized native callee records
+also expose the written type/alias token. Qualified callees use only the terminal
+token, and repeated physical locations are deduplicated. These are read-only
+navigation sites, not permission to rename construction-context tokens.
+
+Cold explicit-call references reuse the bounded navigation upgrade before
+collecting occurrences. A proven constructor call does not fall into the
+project's type-reference lookup. With explicit project contexts it instead
+requests a read-only lifetime-procedure unit. A dedicated native target query
+selects the anonymous constructor/destructor's physical header anchor. Each
+frozen project pass reuses the existing declaration/occurrence readers, and the
+normal reference collector joins those local identities through shared physical
+prototypes or bodies. This works with stock FBC and the bridge. Implicit
+conversions and written callees remain reference sites, not rename tokens.
+
+Destructor project lookup uses native D prototypes even in a consuming module
+without its body. The requested lifetime kind stays separate throughout the
+transaction: a temporary can construct and destroy at the same physical span
+without making those two different kinds conflicting overloads. Explicit
+destructor calls have a physical B use joined to their CALL node by H, despite
+having no named B declaration or implicit cleanup receipt. The reference reader
+uses that committed link and F destructor kind to retain the exact callee token.
+Both declaration and explicit-call entry points select the same native family.
+Local references/highlights reuse this binding-backed explicit-call read too.
+
+Project lifetime references retain the existing source verification,
+cancellation, context, and publication guards. Multiline occurrence endpoints
+are preserved. Unrelated procedure families at one physical site remain
+ambiguous; builds without a shared physical anchor are not joined by spelling
+or signature. A failed/ambiguous project result falls back to the selected
+translation unit. NEW lifetime spans covering only a namespace qualifier are
+excluded; the committed explicit-call receipt supplies the terminal callee.
+These additions change internal editor/worker requests, not the FBC schema.
+
+Native operator references also use read-only project units. Their selected
+physical D header is re-resolved with the existing declaration query on the
+current model; numeric operator IDs never become cross-pass identities. The
+normal project collector joins header anchors and receives native operation
+ranges, not text-match occurrences. OP receipts retain priority over the typed
+expression fallback, and project operator passes explicitly request expression
+metadata. Other project passes keep their original compiler options. Physical
+declarations are presented from source only within their proven D headers.
+
+Explicit operator-reference passes also consume the optional native
+`source-memory-applications` family. Counted applications join a compiler-selected
+custom NEW/NEW[]/DELETE/DELETE[] target to its source context and physical LOC,
+including macro invocation reporting anchors. Both readers validate targets,
+counts, declaration contexts and macro origins before exposing those locations.
+Unavailable older/compact exports retain the existing physical operation path.
+Full macro provenance is requested only for the explicit reference pass, not
+ordinary editor snapshots or declaration-only navigation. Defaults, field
+initializers and unevaluated operands are source references, not proof of runtime
+ownership. These extra locations do not enter Call Hierarchy or rename edits.
+
+Several native memory applications can share one macro reporting location.
+The read-only operator collector accepts that location only when every competing
+family has a validated macro-memory receipt. A single proven application cannot
+make an ordinary ambiguous binding safe. Ordinary references and rename retain
+their existing editable-token checks.
+
+The operator provider gathers current local facts before starting the project
+transaction, which may evict its model. Ambiguity or failure therefore uses the
+already-collected snapshot without another query on its retired ID. Buffer or
+compiler-context changes reject both the project reply and that fallback.
+Highlights never request the project join. Cold reference requests refresh the
+root/include presentation index, while native receipts still choose identities.
+Configured bridge index references share binding-backed index selection with
+stock FBC; ordinary native navigation and non-project paths are unchanged.
+
+Operator navigation can also fill a missing native declaration/body role from
+other configured modules. It uses a declaration-only operator unit, skipping
+operation/expression collection and the reference pass's expression-export
+request. A named active build restricts the lookup to that build's jobs. With
+default module options, only contexts whose compiler argument arrays exactly
+match are eligible; the lookup does not borrow a different build's body.
+Already-proven local roles do not start another project transaction.
+
+The target header is queried inside the root snapshot using an optional
+declaration-origin input. Its file and coordinates must belong to that model;
+the query neither reads arbitrary files nor invents a standalone context for a
+closed include. D records still select the native identity, while retained
+presentation names let the existing navigation adapter distinguish prototypes
+from bodies. Index navigation first selects an identity from an available
+prototype/body, then asks for the requested role. A missing local body does not
+prevent an implementation lookup in another module. Empty/failed project
+lookups retain only the current native roles, not unverified source bodies.
+Edits, closure, cancellation, context changes, and retired selections discard
+asynchronous results. Expanded views retain their own context handling.
+
+Constructor/destructor navigation shares that active-build project boundary.
+The native lifetime target query can optionally return physical D role ranges
+with its selected identity. Ordinary reference-target queries do not request
+those ranges. A committed argument-constructor receipt can select an unbound
+literal conversion, but an argument's own binding, namespace qualifier, or
+macro identity retains precedence. NEW fallback selection stays on the callee.
+
+Missing lifetime roles use declaration-only lifetime units, without collecting
+cleanup/construction reference sites. Keyword anchors join native identities;
+the navigation adapter presents the unique constructor/destructor header at
+that proven line. Local roles keep their existing navigation path. A failed or
+empty project lookup uses only the saved native role ranges and never queries
+an evicted model. Ordinary functions do not acquire lifetime bindings or walk
+the source index just to test whether they might be constructors. Document,
+context, backend, and cancellation guards cover the added asynchronous work.
+
+The declaration-only project boundary also applies to ordinary procedures.
+All project jumps use the active named build, or exact default-argument
+matches, so inactive function bodies from another configured build are not
+returned. Reference collection and rename validation still retain all jobs.
+The ordinary navigation adapter captures the document revision and compiler
+context across its project await; edits, closure, cancellation, generation
+changes, and context changes reject both the reply and any local fallback.
+
+On-demand failures retain a bounded, single-line reason for language status.
+The initiating check passes a request-local outcome through compatibility and
+background preparation, including shared/replaced passes, so the reason does
+not depend on observing a transient running-controller entry. Existing retry,
+invalidation, cancellation, and publication rules still apply. The status menu
+shows the actual reason and identifies a compiler-consumed unsaved dependency
+when stock FBC rejects changed input. Its Save All command is an explicit user
+action; status rendering and analysis never save buffers.
+
+This does not enable overlays in stock FBC. The compiler source still lacks
+the bridge's editor-overlay input, and sidecar-only analysis still verifies
+consumed buffers against disk. Unsaved native analysis continues to require
+the editor bridge.
+
+Project navigation classifies qualified procedure headers at the terminal
+identifier already bound by the compiler. A parser span such as
+`Api.Worker.Adjust` can therefore supply the role of the exact physical `Adjust`
+binding without being mistaken for another declaration. This changes header
+presentation/role classification only; native family anchors still select the
+namespace, owner, and overload. Definition prefers the proven body, Declaration
+keeps its prototype, and Implementation no longer drops qualified bodies.
+
+Virtual Go to Implementation follows committed override edges downward within
+the current compiler snapshot. Stock FBC uses semantic override relationships;
+the bridge retains its already-validated dispatch graph. Neither path joins
+methods by name or return type. Ancestors and sibling families stay out of a
+derived-origin query, and abstract prototypes are not implementations.
+Definition and Declaration continue to resolve the statically selected method.
+
+Bridge definition replies carry a conceptual virtual-method hint so only
+virtual implementation requests need the additional native query. Ordinary
+methods retain their existing route. An unavailable additional query can keep
+a known current local body, while edited requests are discarded.
+
+With explicit project contexts, virtual Implementation also follows native
+override edges across module-local families joined by physical declarations.
+Stock units supply semantic override edges; bridge units reuse their validated
+dispatch records. The collector traverses downward only for declaration-only
+Implementation requests. It does not union resolution or rename families, and
+ordinary references remain statically bound. Active-build filtering still
+applies. A reachable child without a physical anchor makes the project result
+incomplete, preserving the existing native-snapshot fallback rather than
+inventing a source match. Known local bodies do not suppress project discovery
+of additional overrides in closed modules.
+
+The compiler's trivial by-value UDT path previously skipped its argument-
+constructor selection receipt. The semantic-only hook in `ast-node-arg.bas`
+now exports the already-selected constructor before that fast ABI path. It does
+not change lowering or require a schema/transport revision. Stock and bridge
+compilers must include that fix to supply these trivial-conversion receipts.
+
+Full binding export cannot always commit after a parser error, even when the
+compiler can still certify useful expression recovery. A bridge binding request whose
+partial result has no usable semantic expressions retries once with trace and
+expression-only export together. This preserves authoritative independent trace
+regions and provisional header/directive types from one compiler invocation;
+graph identities from the failed pass are not merged into it. The retry remains
+inside the caller-owned temporary tree and existing output/time bounds.
+
+The recovered model explicitly advertises no binding or macro capability.
+Worker and direct-model publication preserve those capability overrides rather
+than equating a request with delivered facts. Hover can use its current partial
+trace for types when declaration-layout acquisition fails, without treating it
+as an identity upgrade or bypassing masked-REM binding requirements. If optional
+type recovery is unavailable, the original partial trace/diagnostics remain;
+explicit cancellation still stops the request.
+
+Partial bridge traces can still certify lexical context and receiver/member
+types after a metadata upgrade fails. Context acquisition checks the current
+partial trace both before and after that failure, and keeps compiler-negative
+comment/string results authoritative. Completion uses that trace only as a
+lower-capability recovery path; it does not relabel it as committed public
+binding metadata. This preserves unfinished NOKEYWORD receivers and signatures
+without guessing from the option's source spelling.
+
+Explicit Analyze/Check also retries once when its captured pass is rejected
+because a closed dependency changed, not only after global invalidation. The
+retry keeps the same document revision and build context, and each compiler
+pass captures and validates its own inputs. Ordinary compiler errors and
+timeouts do not trigger it; edits, cancellation, closure, trust changes, and
+context changes still end the request.
+
+Ordinary document highlights request native bindings when a compiler is
+configured. Read/write access roles accompany those bindings; a trace-only
+bridge snapshot can resolve occurrences without identifying their access.
+Cached binding snapshots are reused, and macro data is requested only at macro
+sites. Reference/highlight requests retain the initial buffer revision through
+acquisition and descriptor preparation. Project-reference results and local
+fallbacks are also discarded after edits, closure, or cancellation.
+
+Inlay hints capture the requesting buffer revision and compiler-analysis
+generation before any lookup. Edits, document closure, cancellation, or a changed
+build context discard replies after acquisition and querying, for both type-only
+and combined hint requests. Already-ended requests do no parsing or model work.
+Existing model-change notifications schedule fresh hints; no retry or compiler
+pass is added by these guards.
+
+Signature-only call scanning also recognizes a call after a compound callee.
+It separately recognizes `TYPE<...>(...)`, including parenthesized `TYPEOF`
+operands whose comparisons are not type delimiters. This bounded 16-KiB syntax
+scan only schedules a native lookup. Counted temporary-construction selections
+identify the actual constructor, and native physical declarations supply its
+signature. The selected prototype preserves written optional defaults without
+a duplicate body entry. Both stock FBC and bridge requests acquire native
+bindings directly, without a source-index type/overload guess. Plain aggregate
+initializers without a selected constructor remain unavailable rather than
+borrowing an enclosing call's parameters.
+
+Hover on the written TYPE construction keyword uses the same committed native
+temporary target and prefers its physical prototype, retaining optional defaults.
+The type-argument and namespace tokens keep their own bindings. Incomplete calls
+and aggregate initializers without a constructor selection do not receive a
+constructor hover. First-use stock requests acquire bindings for this syntax;
+an already complete cached constructor reply can be reused without a second
+worker query or source-index lookup. Bridge requests retain their existing
+binding acquisition, and no source overload choice is introduced.
+
+Definition, Declaration and Implementation on that TYPE keyword also reuse the
+committed target and physical declaration roles. A prototype can supply a
+definition fallback when no body is present, but never becomes a fabricated
+local implementation. The editor acquires native bindings before this direct
+lookup and retains configured project lifetime navigation for missing bodies.
+Project cancellation/context changes end the typed route without re-querying
+an evicted snapshot. Real value or macro bindings keep the ordinary path; the
+syntax hint itself supplies neither type nor overload identity.
+An aggregate-only TYPE initializer can undergo a constructor conversion when
+passed to another routine. That enclosing argument conversion is not the TYPE
+operation's own target; missing explicit selections remain unavailable.
+
+The same ownership rule applies to lifetime/reference identity and hierarchy
+preparation. A committed TYPE construction selects its explicit temporary target
+even when an argument conversion shares the physical span. References and
+highlights use that constructor's family; project lookup receives its native
+identity and declaration roles. Both actual calls remain in the native graph.
+Aggregate-only and partial TYPE operations do not borrow the conversion target.
+Typed hierarchy preparation can present the selected body or an external
+prototype directly from native records on either backend. Editor requests
+acquire bindings on first use and do not initialize source indexing for this
+lookup. Value/macro bindings still control ordinary symbol reference routing.
+
+The same native selections now supply parameter-name inlays for typed
+construction on both backends. A shared bounded syntax lookup finds the actual
+constructor opener beyond TYPEOF parentheses. Existing argument segmentation,
+formal-mode/name checks and physical parameter links still apply. The bridge
+keeps its trace-owned ordinary hints and supplements typed temporaries from
+semantic identities; conflicting or duplicate positions are handled before
+publication, without mutating either cached input. Visible typed calls request
+binding facts on demand, while plain bridge calls retain expression-only reads.
+No source type inference or additional compiler pipeline is introduced.
+
+For incomplete typed construction, bridge recovery can instead project a
+constructor family from surviving native type declarations or the actual native
+type of a named TYPEOF operand. The bounded operand spelling only schedules
+exact native name/member lookup; it does not infer complex expression types.
+The existing constructor recovery applies caller access, import ambiguity,
+shadowing and provisional-type guards. Scalar/pointer operands and inaccessible
+members remain excluded. A failed binding upgrade may reuse its current bridge
+recovery snapshot without falling through to source type guesses. These hints
+do not restore navigation, certify the unfinished expression or select an
+overload. Complex TYPEOF operands and stock-sidecar recovery still need native
+support beyond this declaration-backed path.
+
+Navigation keeps its original explicit-name scanner. A compound context merely
+schedules native expression lookup; it does not establish callability. The
+worker selects a nonprovisional callable expression ending exactly before the
+outer opening parenthesis and formats that type without selecting a runtime
+procedure. Labels preserve short callee expressions, using a generic expression
+label for long or multiline spans. Scanning is bounded at 16 KiB.
+
+When outer arguments are incomplete, bridge recovery can project a callable
+type from scoped, accessible native declarations: array element types, factory
+return types, grouped callback values, and explicit pointer dereferences. Array
+rank and written indices are checked, as are pointer depth and FBC's TYPEOF
+display wrapper. This path uses the source-built bridge inventory's inspected
+dtype layout, not numeric IDs from semantic-only producers. It supplies UI
+signatures only, never a committed expression type, editable reference, or an
+indirect runtime target. More complicated incomplete callee expressions remain
+withheld without native receipts. Factories retain their own parameter list
+when the cursor is inside the inner call; array indexing alone is not invocation.
+
+For incomplete callback fields such as `MakeHolder().invoke(1,`, an accessible
+native member-completion receipt can supply the field's callable type even when
+the compiler retained no exact receiver expression. The existing native field
+shape and callable-type checks reject provisional members, arrays and extra
+pointer indirection. These recovery hints do not certify the receiver expression
+or its arguments, revive navigation bindings, or identify an indirect target.
+No additional compiler pass or source-based type inference is used.
+
+Array indexing has its own `arraySignature` reply, separate from callable values
+and selected procedure targets. Exact stock bindings join native array-bound
+facts or descriptor-parameter passing modes. The bridge uses the same facts when
+available, otherwise its native inventory can establish rank alone. Fixed bounds
+appear as `Array matrix(index1: -1 To 4, index2: 1 To 3)`; dynamic arrays expose
+dimension positions, and unknown-rank descriptor parameters show `indices...`.
+Missing bounds remain explicitly unavailable, never read from source syntax.
+Presentation is capped at 64 dimensions. This is a UI bound, not a language limit.
+Stock requests reuse available bindings; ordinary cold array indexing does not
+force a compiler pass. No expression export or new compiler interface is needed.
+
+Type Hierarchy expansion requests current binding-capable models for open
+buffers. Outline can replace a snapshot after Prepare or while a related-type
+query runs. Supertypes and subtypes retry once on the current snapshot using the
+item's physical declaration position, not a retained native symbol ID. Edits,
+closure, and cancellation discard the request; an unchanged empty result does
+not retry.
+
+Native Call Hierarchy expansion similarly reacquires expired snapshots through
+the existing on-demand model service. Incoming and outgoing queries follow one
+replacement using the loaded document and physical item position, retaining any
+binding requirement of the original native model. Ordinary methods do not gain
+an unconditional binding upgrade. Current empty results do not retry, and edits,
+closure, cancellation, or repeated replacement discard the request. Stock-sidecar
+and source-only call adapters retain their existing routes.
+
+Bridge-backed Call Hierarchy preparation uses the same bounded native-query
+retry before considering a source constructor fallback. A superseded Prepare
+reply must not become an empty item or a source guess. Preparation also captures
+the root version before cursor-context and model acquisition, rejecting edits
+at those asynchronous boundaries and after the common native query.
+
+Expand Selection captures the root version before parsing source or acquiring
+native expression facts. It follows one already-cached remote replacement without
+starting another analysis. If native spans are unavailable or replaced again,
+unchanged source still supplies structural selection ranges; edits, closure, or
+cancellation discard the request. Worker range endpoints are validated plain
+coordinate records and become real VS Code Positions before offset conversion,
+as required by TextDocument.offsetAt on the supported editor versions.
+
+Completion and Signature Help also settle ambiguous REM comment state through
+the native cursor query. A preceding NOKEYWORD REM option can schedule binding
+acquisition; a cached binding model can settle options from headers. Neither
+source spelling nor a cached type name authorizes code by itself. The source
+scan records preceding REM comments because a disabled keyword can expose a
+block-comment opener that changes later lines too. Native physical identifier
+offsets and accepted option lines settle the full lexical prefix, with BOM
+adjustment on both lists. Worker query guards use those same facts. Physical
+tokenization also applies accepted option lines in recovery snapshots, where
+failed statements have no committed reference bindings. This exposes only
+lexical tokens to the existing native recovery lookup, not new symbol bindings.
+The stock completion provider then permits its existing native receiver-type lookup even
+when source-only parsing lost the member context. Ordinary REM comments without
+an option hint or cached binding facts do not launch compiler analysis.
 
 If another upgrade releases the queried model, the probe follows one cached
 successor. A cleared or repeatedly replaced snapshot returns an unknown context
@@ -1080,6 +1741,32 @@ root, and physical edit targets. A symlink change cannot pass merely because its
 new destination has identical text. The host rechecks buffers, trust, generation,
 and all project context options after that reply. Expired, discarded, superseded,
 or cancelled tickets cannot publish edits. No project source is written.
+
+The ticket also records which files the compiler actually consumed. A captured
+buffer that closes after deletion may be ignored only when it was unrelated to
+every configured compilation. Missing consumed sources still fail, and edit
+target, existing-disk, changed-buffer, and newly opened-buffer checks remain
+strict. An unrelated temporary editor file therefore cannot veto project rename
+solely because it no longer has a disk copy.
+
+Final host publication uses the worker's consumed-buffer indices, referenced
+against the submitted map's insertion order, rather than requiring every
+unrelated editor to stay open. This bounded summary contains no source text or
+duplicated paths. The final guard permits only unconsumed removals; changed/new
+buffers and consumed removals still reject publication.
+
+Background analysis likewise does not treat every captured editor buffer as a
+consumed dependency. Root/header requests and known affected snapshots still
+cancel promptly. Other closures defer to the worker's mandatory validation of
+the compilation's actual sources before publication, so discarded consumed
+header overlays remain invalid while unrelated closed scratch buffers cannot
+cancel a current analysis.
+
+If enrichment sees only buffer removals while a pass is running, it waits for
+that pass's consumed-source validation before reusing results or requesting the
+stronger model. It does not transfer an old caller to different inputs. New
+edits, context/trust changes, cancellation, and further buffer changes reject
+the wait; any follow-up preparation is bounded to one such wait.
 
 `npm run benchmark:project` measures this path on `ast-node-call.bas` under two
 explicit build contexts, using the same `FREEBASIC_ROOT` and
@@ -1240,9 +1927,9 @@ semantic models. This provides exact expression types for saved dependencies,
 and can activate an ordinary call's selected overload in Signature Help when
 the source resolver finds multiple candidates, and can provide selected
 parameter-name inlays for direct positional calls. The full binding sidecar is
-requested only for ambiguous signatures or visible inlay ranges containing
-calls. Hovers and prefix-matched completion details can also use compiler-bound
-integer, floating-point, and string constant values. Floating-point details
+requested for ambiguous signatures, callable values, or visible inlay ranges
+containing calls. Hovers and prefix-matched completion details can also use
+compiler-bound integer, floating-point, and string constant values. Floating-point details
 retain their exact IEEE-754 bits; strings retain exact byte or wide-unit
 payloads. Byte previews are ASCII-only; wide-unit previews use valid Unicode
 scalars and escape controls. Hover can also show
@@ -1251,6 +1938,326 @@ expression identity and range. Sidecar-only analysis still has no bridge
 token-origin graph, native outline/symbol search, or project refactoring. If a dependency
 has unsaved content, sidecar-only analysis refuses the result rather than using
 stale disk text; configure the editor bridge for unsaved-buffer analysis.
+
+Signature Help also uses compiler-confirmed procedure-pointer types for named
+callable values, including fields, parameters, aliases, and inferred variables.
+The existing binary T record already carries FBC's canonical type spelling; the
+reader retains it only for source values with a procedure-pointer type. Stock
+queries join that spelling through an exact native binding. The bridge can also
+use its native inventory, and its completion scope/member recovery keeps the
+declared callable type available while arguments are incomplete. Source indexing
+only schedules an on-demand stock binding request and never supplies the final
+callback type. Requests stop after edits or cancellation during that indexing.
+
+When a stock binding model is already cached, ordinary Signature Help returns
+the selected procedure's signature directly rather than only its declaration
+locations. The existing native navigation lookup joins syntax metadata to the
+compiler-selected identity, preferring a physical prototype when present. Its
+source parser also receives native REM and escape overrides. Declaration sites
+remain in the reply for source-mode callers that display their overload list;
+no parameter-type scoring or new call-target inference is introduced.
+
+Stock hover requests native bindings whenever source resolution leaves more
+than one declaration, including mixtures of procedures and values. Expression
+types alone cannot distinguish a scalar from a procedure returning that type.
+The existing native declaration-selection path then presents the active value
+and withholds inactive procedure guesses, without depending on a prior binding
+request from another provider. Unambiguous source hovers keep their existing
+lightweight acquisition path.
+
+Cached stock signatures also expand through the compiler's explicit
+`overload-next` links, not a name-based search. The bounded chain lookup includes
+only proven-public siblings with the same native procedure kind, preserving
+getter/setter separation. The selected target remains visible even when its
+access is restricted; other private/protected siblings need additional caller
+access proof and are not expanded by this path. Native declaration/reference
+binding order excludes overloads declared later, including across headers.
+Chronological B-record order is an inspected 1.20.5 producer behavior, not a
+schema-27 guarantee. Other producer families retain their selected signature
+without this expansion. Cyclic, conflicting, or oversized chains also retain
+the selected result. The per-snapshot link index needs no additional analysis
+pass; source-mode overload lists and bridge behavior are unchanged.
+
+Bare-call keyword preflight now checks available native models before consulting
+the source index. Generated declarations can be absent from that index even when
+the compiler has a complete callable signature. Cached bridge models are reused
+without a binding upgrade; cached stock bindings can answer directly. An explicit
+source NOKEYWORD hint can acquire native bindings on first use, including when no
+preceding REM or escaped-string context triggered analysis. Hints only schedule
+lookup. Native signature queries still decide whether a callable exists; real
+comments and unavailable callees do not gain signatures. With no native model,
+the existing source-only guard remains in place for ordinary keyword triggers.
+
+Reference signatures are used only when no resolved symbol or positive native
+selection already owns the name. Arrays and other non-callable values must not
+borrow an intrinsic's signature because their spelling happens to match.
+Parenthesized source bindings can describe indexing, so stock queries retain
+the selected value declaration and do not label it as a selected procedure.
+Sparse native selections also prevent unrelated reference help. Genuine unbound
+intrinsics keep their reference signatures, including after independent errors.
+
+The source-mode stock overload probe also applies this identity decision. A
+conditional source index can contain both procedure and array declarations for
+one name. When the native probe identifies a value, its entry replaces those
+procedure guesses; an exact selected declaration-site match can do the same when
+the reply is sparse. Values absent from the source index remain usable native
+evidence. They are not rescored using procedure return types. Actual selected
+procedures retain the existing source overload alternatives and active target.
+
+The same source-mode probe consumes native callable-value and macro signatures,
+not just declaration sites. A function-pointer type replaces conditional source
+procedure guesses without claiming a runtime target. Direct native queries and
+late stock probes share one conversion path, preserving anonymous parameter
+labels and their UTF-16 offsets. These native signatures stop further procedure
+return-type rescoring; ordinary selected procedures keep their overload lists.
+
+Signature Help checks the requesting document again after asynchronous source
+refinement, not just after the native worker query. Constructor lookup can wait
+for workspace indexing, and source-mode overload selection can outlive the
+original call position even when the worker correctly rejects its stale reply.
+Edits, cancellation, and document closure stop those requests before further
+lookups or rendering. Already-cancelled requests do not copy the source text.
+
+Hover applies the same requesting-document checks after compiler acquisition,
+native fact queries, and late operator/overload refinement. An unavailable
+compiler result after an edit is not permission to display a declaration from
+the earlier source model. Changed, closed, and cancelled requests stop before
+further snapshot lookups or rendering; already-cancelled requests do not read
+source lines. Current source-only hovers remain available without a compiler.
+
+Cached stock binding models do not make square-bracket requests callable-value
+requests. Indexer Signature Help retains its existing source candidate list and
+native operator-selection receipts, including same-result overloads. This keeps
+an unrelated prior binding request from changing whether index help is available.
+
+Shared stock overload selection now checks committed call bindings first when
+they are available. An expression type at the cursor can describe an argument
+or conversion and cannot override a proven callee identity. Weak models retain
+their existing return-type fallback without forcing an upfront binding upgrade.
+Indexer candidates go directly to the typed index-receipt query; expression-type
+and ordinary-call queries cannot select an Operator [] and are no longer issued
+first. Missing index receipts remain unselected instead of being guessed.
+
+Committed call selection can also settle conditional source declarations. The
+source join retains the exact native-selected declaration sites alongside their
+ABI key. Conditional candidates are accepted only at those sites, so an inactive
+branch with the same name and signature cannot inherit the target. This enables
+guarded-header same-result overload hovers without return-type guessing. Other
+key-only source joins retain their existing conditional/provisional safeguards.
+
+Selected operator targets likewise accept conditional entries when a committed
+operation or typed-expression receipt maps to one physical operator. Procedure
+records currently identify a source line rather than a token column, so multiple
+operators on that line remain ambiguous. Provisional entries and the other
+key-only operator joins keep their existing safeguards.
+
+Typed operator-expression query records retain their physical UTF-16 offsets.
+At-position queries use those offsets to select the narrowest containing native
+receipt, including across lines and after Unicode text. Equally narrow ranges
+remain ambiguous. Dropping the offsets during compaction previously made the
+width comparison NaN and discarded all overlapping receipts, breaking nested
+indexer overload selection and navigation.
+
+For a uniquely selected operator, at-position typed-expression and operation
+queries also export its physical procedure-prototype and procedure-definition
+D ranges, bounded to 64 sites.
+These records share the selected native symbol identity; they are not joined by
+name or by a guessed ABI signature. D ranges cover whole declaration headers,
+so the editor requires exactly one non-provisional source operator inside each
+range with the corresponding prototype/body role. This admits active guarded
+prototypes without admitting identical inactive branches, and permits an alias
+spelling in the body. Physical locations remain distinct even when a prototype
+and body share a source-family ID. Go to Declaration uses the proven prototypes;
+definition and implementation navigation retain the selected body. Indexer
+navigation selects either native role without expanding a conditional source
+family. Receipts lacking usable D ranges retain their previous fallbacks.
+Snapshot-wide queries are not enlarged, and no additional compiler pass or query
+is needed.
+
+Call-site operator references and highlights retain the selected receipt and its
+own compiler model, including a replacement obtained during indexer binding
+acquisition. Symbol IDs are compared only inside that snapshot. These paths use
+native operator/typed-expression receipts and physical D declarations instead
+of seeding results from source-reference guesses. Operation receipts retain
+priority; typed-expression receipts supply the existing intrinsic fallback.
+Ambiguous target lists are excluded. Document highlights filter to the requesting
+file, and asynchronous results are discarded after edits, closure, or cancellation.
+These results cover the selected compilation snapshot. Cross-root operator-
+reference joins remain separate work.
+
+Operator declaration/body origins use `compilerSidecarOperatorDeclarationAt`.
+Source syntax limits requests to the operator name rather than its parameters
+or qualified owner. Native F kind and physical D header containment then require
+one operator identity. Anonymous operators retain their F kind even without a
+named B declaration. A null lookup denotes unavailable metadata and preserves
+the older unconditional fallback; an empty native target is authoritative and
+cannot fall back to inactive or ambiguous source guesses. Header requests use
+the explicitly selected translation unit/build context. Operator call receipts
+retain native identity without a local P body, so external library declarations
+can find their observed callers as well. No compiler changes were needed.
+
+Definition, declaration, and implementation requests at operator declarations
+reuse that lookup. Native prototypes and bodies are selected by role, without
+expanding a conditional source family. Definition falls back to a proven
+prototype when no local body exists; implementation does not invent one. A
+compiler-known body outside the source index retains its physical D header
+location. Existing unconditional source/project navigation remains available
+when another translation unit owns an already indexed implementation.
+
+Call-site operator selection uses the same physical D data, preferring a known
+body but retaining a proven prototype when no local P body exists. Operation
+and typed-expression receipts share this selection rule. Hover and references
+can therefore use declaration-only callees. Navigation shares the role adapter
+with declaration/body origins: Definition can open the native prototype, while
+Implementation requires a body. Indexers follow the same missing-body rule.
+
+Shared operator declaration probes use the entry's terminal physical name span,
+not the full written qualification. In `Operator TypeName.Cast` or
+`Operator TypeName.[]`, the owner remains a normal type reference for navigation
+and cannot be mistaken for an operator Call Hierarchy target. These probes use
+model offsets so lightweight document facades need no editor-only offset API.
+
+Operator Call Hierarchy preparation requests native bindings for declaration
+names even when a qualified `TypeName.[]` header has no call frame. Native D
+declarations and index receipts can prepare guarded/external items without the
+source-only conditional filter. Incoming requests re-resolve the item's physical
+declaration in the current compiler context and reject a changed signature;
+they do not persist snapshot-local symbol IDs in the item. Native operator
+references supply callee identity and call ranges. Existing recognized source
+procedure/module grouping labels the callers; unresolved caller scopes and
+cross-root joins are not inferred. This also works when editor command APIs
+drop opaque item data. Outgoing-call handling retains its existing behavior.
+
+Bulk operator queries optionally accept a positive safe-integer `targetSymbol`
+from that same compiler snapshot. Reference/highlight requests supply it so
+unrelated operators neither cross the worker boundary nor consume the 5,000-site
+result budget. The worker first selects physical ranges containing the requested
+identity, then collects every target at those ranges. This preserves ambiguity
+instead of making a conflicting site falsely unique. The requested target's own
+limit and unfiltered-query behavior are unchanged; missing targets return an
+empty complete result. Invalid filter identities are rejected.
+
+Canonical type spellings intentionally omit parameter names and defaults.
+Signature labels therefore show anonymous parameter types, not names borrowed
+from the routine that initialized the pointer. This supplies no runtime call
+target or navigation identity. Generated type parsing is bounded to 16 KiB,
+64 nested levels, and 256 parameters. Array indexing and extra pointer
+indirection are not treated as direct callable values. Calls whose callee is an
+expression rather than a named value, such as `callbacks(i)(...)` or
+`(*pointer)(...)`, use the separate compound-callee path described above.
+
+Ordinary bridge Signature Help uses the same recovery lookup when an incomplete
+call has no surviving reference binding. Exact-name visibility is applied before
+the completion result limit, so unrelated declarations in a large module do not
+crowd out the callee. Completion's single item can be expanded into its native
+owner's overload group; every declaration must precede the caller and pass native
+access checks in each projected caller context. Ambiguous imports and names from
+unrelated scopes are withheld. Rejected declarations do not acquire shadowing
+authority from their source spelling. Recovered candidates supply signature
+information only: they do not restore reference bindings or report a selected
+overload. Existing committed-call selection and stock-sidecar behavior remain
+separate.
+
+For committed bridge calls, an exact AST call-target receipt can
+also expand the displayed declaration into its accessible native overload family.
+That same target identity selects the active signature; parameter types are not
+scored in the extension. Getter and setter families stay separate. Native owner,
+caller access, and declaration-order checks still apply, and single-signature
+families skip the extra AST lookup. If the call-target proof is unavailable, the
+existing result stays intact instead of choosing an active overload from source.
+
+Bare calls use a native expression point at the terminal callee to obtain the
+compiler-owned end of the call. The source span retains qualified receivers,
+including arrow access and whitespace around dots, for the exact AST call-start
+check. This avoids scanning forward across a continuation, colon, comment, or
+inline IF arm to guess where a call ends. Parenthesized calls keep their existing
+exact-range path, and incomplete calls still have no selected-target claim.
+
+Completion editing preserves an existing parenthesized or square-bracketed
+argument list after the current identifier. Generated call snippets become
+name-only insertions, with a full-identifier replacement range independent of the
+editor's suggest insert mode. This includes constructors, member calls, macros,
+and offline-reference functions. Documentation, compiler facts, and additional
+import edits remain attached. Fresh call sites keep their parameter placeholders.
+Case-insensitive matching handles reference labels whose snippet spelling uses
+different casing. Immediate brackets use a cheap line check; comments and
+explicit continuations use at most 64 KiB of lookahead. An exhausted undecided
+gap withholds a call snippet. Edited/cancelled results are discarded before
+replacement ranges are published.
+
+The complete completion request also captures compiler/workspace generations,
+the selected compiler-context signature and workspace trust. Closure or changes
+to any of these retire the menu, including source supplements and asynchronous
+include-path edits. Guards run before acquisition, after asynchronous reads and
+before publishing. A missing header context still allows source-only completion;
+gaining or losing that context retires a pending request. Compatible snapshot
+enrichment within the same context retains its existing one-replacement path.
+No new compiler invocation or retry is added.
+
+The same edit guard preserves written bare-call arguments. When code already
+follows the name, the existing Signature Help parser must identify that exact
+name as the bare statement head. Qualified and pointer methods, explicit
+continuations, and single-line IF branches share that parser. Assignment targets,
+declaration names, and identifiers inside another call do not qualify. Comment
+lookahead remains bounded, and no extra compiler request is made. This is an
+editing safeguard, not a new claim about symbol or overload resolution.
+
+Procedure-address completion also keeps generated calls name-only after a
+same-line `@` prefix, including namespace/global qualification and dot/arrow
+members. Only the terminal identifier is replaced; documentation and import
+edits survive. Fresh function-like macro completions retain their argument
+templates because expansion is still required under `@`; already-written macro
+arguments follow the ordinary preservation path. Other fresh calls keep their
+placeholders. This guard adds no compiler request and does not infer a target
+or classify `ProcPtr` from source spelling.
+
+Source/inventory global qualification also starts lookup from the module scope,
+not a local shadow or an absent WITH receiver. A single leading dot selects
+globals outside WITH; two select globals inside WITH. Unresolved single-dot
+WITH receivers and declared keyword receivers do not fall back to global names.
+Global completion shares ordinary visible-name/include/access filtering, and
+stock receiver-type enrichment leaves it intact because there is no value
+receiver to type.
+
+Type-position completion reuses the existing string/comment scan to classify
+`As` and `Extends` slots, including explicit continuations and qualified names.
+Only type/alias, namespace, and macro entries are retained; enum/union entries
+and primitive names other than OBJECT are omitted from base-type menus. Type
+names never acquire constructor snippets, while type-producing macros retain
+their expansion arguments. Ordinary menus remain in callable-type calling
+conventions, TYPEOF operands, initializers, fixed-string lengths, and OPEN/NAME
+file operands. SELECT CASE AS
+CONST is not a type slot. Source NOKEYWORD AS/EXTENDS hints withhold this filter
+instead of establishing an active keyword role. Continued context is capped at
+64 KiB and oversized statements leave the restriction unavailable.
+
+Failed namespace/static-owner suffixes can use direct native token projections
+and surviving native declarations for completion. Scoped exact-name lookup,
+native member/access rules, bounded owner chains, and common projected contexts
+still apply. Value receivers and unproven global/macro prefixes do not become
+static owners. The unfinished suffix receives no binding or expression type.
+Stock constructor enrichment also keeps ordinary nonconditional source value
+candidates, with native names taking precedence, rather than erasing those
+expression choices with a type-only snapshot. Neither path adds a compiler pass.
+
+Stock type-slot requests also reuse physical declaration bindings to recover
+type/alias, enum, and namespace candidates. The editor forwards its slot hint to
+schedule this lookup; the hint never supplies an identity. Source candidates
+must match one native declaration at the exact physical site and retain its
+semantic symbol ID. Parsing uses native REM and escape overrides. Keyword-named
+qualifiers can request stock bindings even at an empty suffix after the dot;
+neither expression-type nor constructor metadata is required by this lookup.
+Constructor recovery retains its aggregate-only policy and existing bounds.
+The bridge separately accepts committed keyword-named namespace owners from
+its native inventory, preserving native access checks and value-receiver priority.
+
+Type-slot lookup retains conditional declaration siblings until exact native
+declaration-site bindings select the active one. Value names do not replace the
+type namespace, and inactive declarations cannot supply a candidate. Constructor
+recovery keeps its separate conservative conditional policy. Parsed source is
+cached within an interval of native root-include sites; crossing one invalidates
+the cached reachable-file set without rebuilding it for every typed character.
+Source type resolution also checks that a USING import precedes the lookup.
 
 Run **FreeBASIC: Analyze Module With Compiler** on a named module. Set
 `freebasic.analysis.run` to `onSave` or `onChange` for automatic analysis.
@@ -1462,6 +2469,41 @@ shared unsaved headers, both configured branches, malformed metadata, optional
 parentheses, variadics, recursive errors, and invalid parameter lists.
 
 ## Remaining stages
+
+Signature-only call-context scanning also recognizes compound bracket receivers.
+This syntax classification does not alter ordinary navigation call contexts or
+establish a callable type. Bridge index signatures require an exact independently
+valid aggregate receiver type, using the usual recovery-taint checks, then
+intersect accessible native index members across projected caller contexts.
+When recovery sidecars omit selection spans, at most 64 source token starts in
+the existing 16-KiB callee window schedule exact native type queries. Source
+spelling never supplies the type. Factories, indexed elements, grouping and
+explicit dereference therefore work without inferring invalid array ranks or
+pointer dereferences. Complete index expressions retain native target selection;
+incomplete ones do not. Indirect callable signatures keep their existing path,
+and compound indexing does not request stock procedure-pointer bindings.
+
+Incomplete named-value indexing can retain its native index-operator signature
+family without restoring the expression's target or navigation binding. Recovery
+uses surviving scalar variable/field/parameter declarations and native shape/type
+facts, then intersects overloads accessible in every projected caller context.
+For implicit `This`, an independently valid exact receiver type can supply the
+aggregate identity; surrounding class scope or spelling alone is insufficient.
+Recovered/provisional types, arrays, pointers and type names are excluded. Native
+access still controls private operators and fields. Display records reuse the
+physical prototype rather than the legacy truncated index caption. This path is
+bridge-only and signature-only; it does not certify the incomplete index result.
+
+Constructor Signature Help can now use surviving native type declarations and
+recovery token/scope coordinates while argument parsing is incomplete. It
+intersects native caller contexts, applies native member access and rejects
+ambiguous imported type owners, pointer/scalar aliases and real value shadowing.
+A compiler-rejected duplicate parameter does not hide an independently valid
+native type. This is signature-only recovery: it does not restore a navigation
+binding, expression type or committed call target. A failed identity upgrade
+may leave a reusable current bridge recovery snapshot, which Signature Help can
+query without presenting it as a successful binding upgrade. Stock-sidecar and
+complete-but-insufficient models retain their existing acquisition boundary.
 
 1. Finish native reference coverage and audit the native inventory/completion
    path against all supported declaration forms and visibility contexts.

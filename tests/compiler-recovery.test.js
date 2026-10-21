@@ -309,7 +309,6 @@ test("native recovery withholds incomplete namespace inputs in a broken unsaved 
     "the incomplete model must not claim complete namespace import coverage");
 
     const rootUri = uri(filePath);
-    const headerUri = uri(headerPath);
     const overlays = new Map([[filePath, rootText], [headerPath, headerText]]);
     const sources = analysis.dependencies.filter((file) => fs.existsSync(file)).map((file) => ({
         uri: uri(file),

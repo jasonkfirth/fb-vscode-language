@@ -19,6 +19,34 @@ dim shared as integer editor_dependency_count
 dim shared as string editor_dependency_files(1 to 5000)
 dim shared as string editor_open_source_files(0 to 5000)
 dim shared as integer editor_open_source_depth
+constructor FBEDITORQUERYSCOPE()
+	this.active = FALSE
+end constructor
+
+sub FBEDITORQUERYSCOPE.enter(byval token as integer)
+	if( this.active ) then exit sub
+	if( env.ppfile_num <= 0 ) then exit sub
+	if( environ("FB_VSCODE_TRACE") <> "1" ) then exit sub
+	if( (token <> FB_TK_TYPEOF) and (token <> FB_TK_SIZEOF) ) then exit sub
+	this.first = editorNextToken()
+	'' Preprocessor expression contexts have no expanded output token.
+	if( this.first.output_line <= 0 ) then exit sub
+	this.active = TRUE
+end sub
+
+destructor FBEDITORQUERYSCOPE()
+	if( this.active ) then
+		dim as FBEDITORLOCATION last = editorLastToken()
+		if( last.output_line < this.first.output_line ) then exit destructor
+		if( (last.output_line = this.first.output_line) and _
+		    (last.byte_end <= this.first.byte_column) ) then exit destructor
+		'' Keep all name/type facts. This range classifies runtime hierarchy
+		'' sites in expanded coordinates, including implicit calls and macros.
+		print #env.ppfile_num, "''@fb-editor-unevaluated " & _
+			this.first.output_line & " " & this.first.byte_column & " " & _
+			last.output_line & " " & last.byte_end
+	end if
+end destructor
 
 private function editorHex( byref value as const string ) as string
 
@@ -262,7 +290,7 @@ sub editorFinish()
 	end if
 	'' Declare only files successfully opened as source. #line names are logical
 	'' locations and must not become project dependencies.
-	print #env.ppfile_num, "''@fb-editor-protocol 14"
+	print #env.ppfile_num, "''@fb-editor-protocol 15"
 	for index as integer = 1 to editor_dependency_count
 		dim filename as string = editor_dependency_files(index)
 		print #env.ppfile_num, "''@fb-editor-file-v10 " & editorFileIdentity(filename) & " " & editorHex(filename)

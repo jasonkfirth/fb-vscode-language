@@ -2,6 +2,217 @@
 
 ## 1.20.5
 
+- Discover standalone Windows compilers at `C:\freebasic\fbc64.exe`, `fbc32.exe`, or `fbc.exe` for diagnostics, analysis, and bundled headers; retain Linux/macOS PATH lookup and add macOS to CI verification
+- Find custom `New`, `New[]`, `Delete` and `Delete[]` references at native macro invocation locations across configured modules, including nested expansions, source-remapped uses and several selected operators sharing one invocation
+- Validate counted source-memory applications and retain default/field initializers and unevaluated uses as read-only references, without fabricating runtime callers or editable macro spellings
+- Acquire native bindings on the first operator-reference request, avoiding an initial weak bridge snapshot and its extra upgrade
+- Show compiler-selected canonical types and target storage widths on primitive keyword hovers, including sized integers, qualifiers, pointers, fixed strings, parameters and return types
+- Distinguish pointer values and dynamic string descriptors from pointed-to or character storage, and keep primitive keyword hovers separate from surrounding expression results and same-named source aliases
+- Consume optional primitive type-layout receipts with complete input/layout pairing, preserving older-producer reference hovers without interpreting private dtype layouts
+- Classify compiler-accepted primitive type occurrences as `type.defaultLibrary`, including sized integers, pointer declarations and included headers, without treating aliases, disabled-keyword values or macro spellings as primitives
+- Retain primitive occurrence receipts in compact full models without enabling full macro provenance or adding editor analysis passes; preserve existing type-color fallback scopes and semantic-token modifier indices
+- Retain native macro-generated procedure calls in project Call Hierarchy using counted call-to-macro-origin receipts, selected interfaces and statement ownership; preserve nested expansion, token-pasted callees, overloads and distinct targets at one invocation without fabricating editable references
+- Request full macro provenance for explicit project hierarchy and operator-reference reads, and avoid duplicating hierarchy invocation anchors with narrower bridge argument locations
+- Exclude unevaluated `TypeOf` and `SizeOf` operands from local native Call Hierarchy without dropping their references or types, including nested queries, implicit construction/indexing and repeated macro arguments; rebuild the optional bridge for protocol 15
+- Use current FBC's validated unevaluated-input receipts to remove query-only constructor, cast and index edges from full-sidecar incoming/outgoing hierarchy, preserving evaluated operations and ordinary reference lookup
+- Validate compiler-side rejected-declaration bookkeeping so normal source errors do not add a false semantic-exporter failure; the fix is included in the rebuilt optional editor bridge and the local compiler source
+- Accept compiler `thread-local` storage in binary semantic models and preserve it through analysis, native hover and completion details instead of losing the entire module's analysis
+- Refresh the optional editor bridge from the current October 21 compiler sources, validating contextual THREAD identifiers, TLS modules and 128-bit type presentation
+- Reuse native public-member recovery for completion in unclosed bridge scopes, retaining access/type/producer checks without restoring navigation bindings
+- Recognize bare compound-receiver and `With` method calls for native Signature Help, preserving overload selection, continued arguments and incomplete-call access checks
+- Retain native method Signature Help on compound and arrow receivers, preserving overload selection, property getter separation and accessible candidates during incomplete bridge calls
+- Retain native array-index Signature Help for fields on compound receivers, distinguishing callback-array indexing from element invocation and recovering accessible array fields in unfinished bridge calls
+- Keep ordinary native navigation available when the optional typed-construction token-line index is absent
+- Keep Signature Help on `CInt<bits>(...)` and `CUInt<bits>(...)` instead of an enclosing call, using the documented width forms without borrowing intrinsic help for shadowed names
+- Show compiler-observed direct parameter-value assignments in hover, without inferring read-only use, purity or indirect effects from missing observations
+- Add resource-scoped `freebasic.inlayHints.parameterNames.enabled` control, preserving type/flow hints and avoiding parameter-only compiler work when disabled
+- Refresh inlay presentation after preference changes without invalidating compiler snapshots, and discard late replies from the previous preference
+- Retain constructor Signature Help for unfinished `Type<TypeOf(Factory())>(...)` and grouped named-value operands, using native return/value declarations without creating expression types or navigation bindings
+- Reject ambiguous/required-argument factories and native TYPEOF name overrides during signature-only recovery
+- Show compiler-selected inferred variable types in native hovers, including aggregates and callback types, without labelling explicit AS declarations as inferred
+- Validate the current-source editor bridge with 128-bit unsaved buffers and signed/unsigned project-rename configurations
+- Preserve compiler-selected pointee and nested pointer `Const` qualifiers in explicit-Var refactors instead of silently weakening the inferred type
+- Keep inferred declaration, procedure, parameter and enum refactors available across one compatible native snapshot upgrade while retaining document/context/trust guards
+- Fetch enum declaration receipts and exact values in one native reply so edits cannot combine data from replaced snapshots
+- Accept current FBC's normalized 128-bit integer types and retain native layout facts instead of rejecting their semantic models
+- Present inferred 128-bit primitive expressions with valid `Integer<128>`/`UInteger<128>` spellings, preserving pointer/const qualifiers and unrelated user-type names
+- Remove the fixed FUNCTION datatype number from guarded callback recovery, retaining canonical callable-type and pointer-shape checks as current FBC adds two primitive slots
+- Refresh grammar/reference coverage from the current FBC checkout, adding `Gfx3ScreenCapture` and `Gfx3SurfaceCopyFromScreen` with signatures, call snippets and required imports
+- Track modified/untracked reference inputs and label their excerpts as working-copy snapshots, preserving committed source links for unchanged files
+- Align typed-construction references, highlights, project lifetime identity and hierarchy with the explicit native constructor, without confusing an enclosing argument conversion at the same physical span
+- Prepare typed constructor bodies/prototypes directly from native records on stock FBC and the bridge, acquiring bindings on first use and withholding aggregate-only or partial targets
+- Navigate from `Type<...>(...)` to its selected constructor definition, declaration or implementation using native role records, with header-only fallback and no fabricated local body
+- Keep typed-construction navigation separate from a different constructor selected by an enclosing argument conversion
+- Acquire typed-construction navigation bindings on first use, defer source indexing, and keep project fallback from re-querying evicted snapshots after a context change
+- Show the native selected constructor prototype on `Type<...>(...)` keyword hover, preserving optional defaults and keeping type arguments and uncommitted/aggregate-only initializers separate
+- Acquire typed-construction hover bindings on first use and reuse a complete cached stock-FBC constructor reply without a repeated worker query
+- Add linked parameter-name hints for `Type<...>(...)` constructors on stock FBC and the bridge, using native temporary selections and physical prototype formals without labelling inner `TYPEOF` operands
+- Acquire constructor binding facts on demand for visible typed-construction hints while leaving ordinary bridge calls on their existing smaller request
+- Retain bridge Signature Help for unfinished `Type<...>(` calls, including aliases, qualified types and named `TYPEOF` operands, with native access/ambiguity/provisional guards and no selected-overload claim
+- Reuse current bridge recovery snapshots after typed-constructor binding upgrades fail, without source-index inference or revived navigation bindings
+- Add compiler-selected Signature Help for `Type<UDT>(...)` construction, including qualified aliases and `TYPEOF` arguments, retaining prototype defaults without duplicate body entries or enclosing-call signatures
+- Discard completion menus and include-path replacement edits after compiler/build-context, workspace, trust or document-lifetime changes, while retaining compatible native snapshot upgrades
+- Recover incomplete callback field Signature Help on factory results and array elements from surviving native member-completion types, preserving access checks without inventing expression validity or indirect call targets
+- Add native index Signature Help for factory results, array elements, parenthesized values and explicit pointer dereferences, including incomplete brackets
+- Require exact non-provisional compiler receiver types and native caller access; preserve committed index selections and keep compound indexing distinct from indirect procedure calls
+- Keep native index-operator Signature Help available while brackets/arguments are incomplete, using surviving scalar receiver declarations or independently valid receiver types
+- Preserve native access and caller-context checks during index recovery, reject arrays/pointers/type names/provisional receivers, and display complete physical operator prototypes
+- Retain native constructor Signature Help while ordinary and NEW arguments are incomplete, including aliases and qualified types, with native access/shadowing/import-ambiguity checks
+- Use retained bridge recovery declarations after a failed constructor binding upgrade without reviving navigation, expression types or a selected overload
+- Repair native operator labels, complete prototypes and bracket selections in Outline and workspace symbols without changing native identities, scope ownership or expanded/macro presentation
+- Share the existing bounded physical-source declaration cache across navigation, hierarchy and symbol presentation without additional compiler passes
+- Project outgoing construction, cleanup and operator calls from native statement ownership, fixing conditional callers whose source scopes cannot represent the active body
+- Keep distinct native callees at shared construction/cleanup spans, deduplicate repeated receipts, and refuse ambiguous operator targets without merging source-scope supplements into complete trees
+- Preserve physical prototype captions and DECLARE/modifier prefixes through hierarchy round-trips; route legacy graphs with non-index operators through full projection while retaining ordinary/index-only fast paths
+- Add native incoming operator Call Hierarchy across active-build modules, using physical overload families and mapped statement ownership for routine and module callers
+- Preserve physical operator receipts before project eviction and defer the legacy project-reference/source-caller fallback until native ownership is unavailable
+- Extend native incoming Call Hierarchy to constructor/destructor callers across configured modules in the active build, including implicit argument construction, DELETE and scope/temporary cleanup
+- Join lifetime sites to mapped native statement ownership, reject conflicting or missing caller ranges, and defer source fallback when the project graph is complete
+- Prepare stock-FBC constructor prototypes without an open implementation, and use consistent constructor/destructor keyword selections across native incoming and outgoing trees
+- Project stock-FBC module-level outgoing calls from native module ownership without inventing procedure IDs, keeping root/include file ranges separate and excluding routine-owned, inactive and indirect/address references
+- Preserve native implicit construction, cleanup and operator supplements in file-level trees; keep valid empty results distinct from unavailable projections and reject module modes for project writes
+- Carry known module contexts through included-header Call Hierarchy nodes, preserving each root's defines and reloading closed roots without changing editor focus or project settings
+- Validate contextual header queries against the current root snapshot and native source membership; preserve ordinary query guards and keep context overrides out of project rename
+- Reuse bounded native call projection for module-local hierarchy without project settings, including standalone modules; keep project references and rename explicitly configured, analysis-off behavior and invalid-context refusal
+- Make configured incoming Call Hierarchy native-first, deferring source-model lookup and fallback call-binding queries until project results are unavailable
+- Keep inactive source-only calls out of complete native incoming Call Hierarchy results, preserving independently proven native sites and the unavailable-analysis fallback
+- Extend compiler-owned outgoing Call Hierarchy to constructor, destructor and operator bodies in the active build, including conditional headers and owner-type selections
+- Keep source-only ordinary-call guesses out of complete native outgoing trees while retaining compiler-backed implicit calls and the existing unavailable-analysis fallback
+- Retain THREAD LOCAL declarations in the source index for Outline, completion, navigation and references, preserving external/private modifiers, continued headers and local-variable shadowing
+- Refresh source-backed syntax coverage for THREAD and EVENT_DROP, 128-bit integer reference descriptions and graphics-header source links
+- Follow current compiler snapshots during operator receipt selection after concurrent binding/macro upgrades, retaining target identity ownership and rejecting stale buffers or backend switches
+- Complete all 132 packaged-editor checks on both VS Code 1.85 and 1.141 against the same repaired runtime
+- Batch inactive, lexical-mask and unreachable diagnostic facts into one cached worker read, preventing background header refreshes from starving constructor hierarchy/navigation in the bounded query queue
+- Compute compiler-aware comment/region folding in the worker, combine it with native block spans and cache the projection per snapshot; prevent source-only guesses from being merged back into corrected folding results
+- Reuse cached compiler string-escape and REM policies in formatting, including options originating in headers; keep code and comment scanning consistent and preserve BOM-relative offsets
+- Reject formatting against out-of-order language scopes when missing lexical facts would otherwise undo a native-aware format
+- Use cached compiler-inactive regions for document and selection indentation, preserving disabled text and rejecting stale formatting replies without starting FBC
+- Leave ambiguous scopes crossing preprocessor boundaries unchanged, so formatting without current branch facts cannot undo a previous native-aware format
+- Expire only the affected translation-unit snapshot when a query discovers stale source, preserving independent native models, diagnostics and expanded views instead of globally cancelling compiler state
+- Honor FreeBASIC language mode for custom-extension headers in compiler overlays, context selection, checks and lifecycle invalidation; keep unrelated text buffers out and retain stock-FBC saved-input restrictions
+- Restrict native workspace symbol search to all modules in the active build when selected; preserve labelled all-build discovery without a selection and reject results if the selection changes during indexing
+- Show quiet unnecessary-code hints on compiler-proven unreachable statement tokens even with inlay hints disabled; reuse cached reachability, retain opaque-flow suppression, and clear hints after edits
+- Reject source-diagnostic replies from replaced snapshots or a closed/reopened document lifetime instead of combining asynchronous results across generations
+- Reuse native block spans for Expand Selection parents and suppress conflicting source scopes closed by inactive terminators, preserving expression selections, Unicode closing comments and source fallback
+- Correct active block folding with cached native construct spans, ignoring inactive terminators without starting another compiler analysis; preserve source comment, region, import and unsupported-block folds
+- Reuse populated outgoing Call Hierarchy from a complete, current bridge snapshot without recompiling the translation unit; retain project fallback for empty, failed, partial, or replaced results
+- Use native ownership for outgoing Call Hierarchy from configured named routine bodies, including conditional callers and separate property getter/setter targets
+- Restrict outgoing analysis to the selected translation unit, retain local implicit sites, and refuse mismatched-file or ambiguous callee ranges
+- Verify project incoming Call Hierarchy for namespace functions and separate property getter/setter identities on both compiler backends and supported Linux editor versions
+- Add project-wide incoming Call Hierarchy for named procedures/properties using native call nodes, statement ownership, and physical caller headers in the active build
+- Include closed module and constructor callers without treating address references or other overloads as calls; preserve local native sites and fallback for unprojectable origins
+- Extend Go to Base Method to the immediate parent's body in configured modules using the active build, while keeping local bodies, abstract prototypes, and native fallback fast paths
+- Preserve native ABI policy statement provenance for uniquely selected procedure hovers, enabling compiler-confirmed calling-convention refactors without changing common overload summaries
+- Reject calling-convention edits when statement identities are absent or unmatched; verify real Cdecl edits and existing Override actions in packaged editors
+- Restore parameter, inferred Var, and enum refactors when sidecar hover includes navigable entries; retain native range/identity checks, existing facts, and continued-parameter support
+- Discard late refactor and Quick Fix replies after document closure, edits, cancellation, trust changes, or compiler-context changes while preserving source-only fixes in untrusted workspaces
+- Retain separately supplied native procedure facts when hover also returns a navigable entry, enabling real sidecar return-type and visibility refactors after confirming the physical procedure name
+- Discard stale reference CodeLens after edits, closure, cancellation, trust/build changes, or snapshot retirement; follow one compatible cached successor without starting analysis and reject invalid declaration ranges
+- Find derived implementations from compiler-typed variables, parameters, fields, and extern storage, including pointer and alias types; primitive values do not trigger a descendant scan
+- Add compiler-backed Go to Implementation for user-defined types and aliases, listing descendant types in the current snapshot or across configured modules in the active build
+- Preserve direct Type Hierarchy levels, static navigation, and method override behavior; alias origins use the compiler-selected underlying type for project discovery
+- Discover direct Type Hierarchy subtypes across configured modules in the active build using native inheritance and shared physical declarations, including aliases and closed modules
+- Keep subtype levels distinct from transitive virtual implementations and rename families; retain local native fallback for incomplete projects and discard stale project replies
+- Reacquire compiler-backed Type Hierarchy through unloaded files after snapshot invalidation, sharing the existing background document-loading path without showing or saving editors
+- Add FreeBASIC: Go to Base Method to the Command Palette and editor context menu, following the immediate compiler-confirmed override edge without name-based inference
+- Prefer a base method's body in the current snapshot, otherwise its prototype; retain overload identity and reject stale, partial, ambiguous, or untrusted navigation
+- Discover native virtual override implementations across configured modules in the active build, even when a base body is already local; keep descendant lookup directional and overload-specific
+- Keep Definition, Declaration, ordinary references, and rename-family behavior separate from the read-only implementation expansion; fail closed for reachable overrides without physical anchors
+- Classify qualified function/method project bodies using the exact native terminal-name token, so Definition prefers the body and Implementation no longer drops qualified definitions
+- Include native override descendants in Go to Implementation within the current compiler snapshot, retaining overload identity and excluding unrelated same-name methods and abstract prototypes
+- Preserve static Definition/Declaration and ordinary bridge navigation; virtual bridge methods use a conceptual dispatch hint and retain a known local body if the added implementation query is unavailable
+- Retain bounded compiler failure reasons for on-demand language status, including failures that occur after compatibility preparation or a shared background pass
+- Identify stock-FBC unsaved dependencies with the consumed file's name and an explicit Save All action; keep the saved-input safety restriction and never save buffers automatically
+- Restrict all project declaration/navigation lookups to the active build, including ordinary procedures; keep references and rename validation on every configured build
+- Reject ordinary project-navigation replies and local fallbacks after edits, closure, cancellation, generation changes, or build-context changes
+- Follow selected constructors, implicit argument conversions, and destructor prototypes to missing declarations/bodies in other configured modules using the active build
+- Add opt-in native lifetime declaration roles and declaration-only project units; retain native fallback after model eviction and preserve ordinary-symbol fast paths, namespace ownership, and local roles
+- Navigate selected binary/index operators to compiler-proven declarations and implementations in other configured modules, using only the active build and retaining local-role fast paths
+- Use declaration-only operator project units for jumps, retain presentation names for role classification, and resolve included-header anchors within their root snapshot without requiring an unrelated standalone header context
+- Join compiler-selected operator references across configured modules/builds through physical declaration headers, preserving overloads and multiline operation ranges without enabling operator rename
+- Refresh cold operator-reference presentation through closed includes and use binding-backed index selection for bridge project references; retain local highlights and snapshot-safe local fallback after project eviction
+- Extend read-only project references to destructors, joining native prototypes/bodies across modules and retaining DELETE, scope cleanup, early returns, and explicitly written destructor calls
+- Resolve explicit destructor references through compiler CALL-to-binding links even without a named declaration or an implicit cleanup receipt; keep constructor and destructor families separate at overlapping temporary sites
+- Join selected constructor references across configured project modules and builds through native physical declarations; retain implicit uses, reject conflicting families, and keep these read-only sites out of rename
+- Exclude namespace-only NEW lifetime spans from constructor references and preserve multiline project occurrence ranges
+- Extend cached native data hovers to constants and enum members with compiler-provided values, avoiding host source-index work while leaving ordinary variable hovers free of the extra value lookup
+- Return requested constant/enum hover values with the same native reply as their declaration/type facts, removing the separate snapshot-sensitive value query
+- Follow one current snapshot when metadata enrichment retires a preprocessed view while it opens; reject ended requests and keep legitimate empty output distinct from expiration
+- Restore preprocessed-view overload navigation with a lazy per-line token index, highlight compiler-bound occurrences in that view's own coordinates, and include constant-value tests in the default runner
+- Reuse complete cached stock-FBC data-symbol hovers without rebuilding the host source index or acquiring another model; retain macro, ambiguous, dirty, and recovery paths
+- Preserve saved-file supplemental hover facts across one native snapshot replacement without forcing expression-only reads to acquire unrelated binding metadata
+- Retain selected constructor references/highlights through guarded and external headers, include proven prototypes, expose written callees alongside implicit uses, and keep namespace qualifiers out of constructor ranges
+- Navigate written constructor calls to their selected guarded prototypes/bodies, including qualified aliases and external declarations, with a bounded cold-bridge binding upgrade independent of the source index
+- Show compiler-selected constructor overloads on hover through guarded/external headers and qualified aliases, acquiring stock metadata on first use and preserving qualifier/argument hovers
+- Use compiler-selected physical declarations for constructor Signature Help in guarded and closed headers, including external prototypes, without a source-indexed body
+- Resolve implicit argument constructors through compiler-selected physical declaration records, separating active guarded prototypes and bodies without requiring an open header
+- Retain anonymous constructor/destructor procedure kinds from native declaration records, share bounded declaration parsing, and preserve ordinary argument bindings and prototype-only implementation boundaries
+- Preserve current trace and provisional header types when full binding export cannot commit a broken buffer; retry once in expression mode and report unavailable binding/macro capabilities accurately
+- Retain compiler-proven lexical context and member completion from current partial traces without advertising unavailable binding metadata
+- Retry explicit Analyze once when a closed dependency changes during its captured pass, retaining document, build-context, cancellation, and trust guards
+- Refresh the current source index before mapping native constructor targets, restoring first-use argument-conversion navigation without Analyze or Outline
+- Keep constructor definition/declaration/implementation probes on the current bounded query snapshot and reject requests ended during binding upgrades or native queries
+- Reuse validated constructor-probe replies for ordinary argument navigation instead of repeating the same native query
+- Follow one replaced primary native hover snapshot, retaining compiler facts and masked stock macro bindings while rejecting ended requests, backend changes, and repeated replacement
+- Acquire native declaration bindings on first bridge hover so array bounds, storage widths, field offsets, aggregate layouts, and parameter facts do not depend on another provider warming the cache
+- Request native bindings for ordinary bridge semantic coloring so write and readonly modifiers survive first use, retaining stock-only macro enrichment and cached facts
+- Follow one replaced semantic-token snapshot without changing backend or macro requirements; discard stale, cancelled, closed, and repeatedly replaced results
+- Request native binding-backed access roles for ordinary occurrence highlighting, restoring read/write distinctions when the bridge previously supplied only trace-based name resolution
+- Keep native references and highlights on one current query snapshot, preserve required macro bindings, and discard ended project-reference results or local fallbacks after source edits or closure
+- Keep unrelated closed/deleted editor buffers from vetoing compiler-validated project rename, while retaining strict checks for consumed sources, edit targets, and new dirty buffers
+- Preserve pending background analysis when an unrelated deleted buffer closes; validate newly discovered closed dependencies in the worker before publishing results
+- Share bounded snapshot-replacement handling between native completion, Signature Help, and definition/declaration/implementation queries so enrichment cannot erase current candidates or navigation targets; retain binding/backend requirements and reject ended requests
+- Let enrichment wait for an in-flight pass when only editor closures changed its overlay list, preserving manual callers while worker validation still rejects discarded consumed inputs
+- Preserve the worker's consumed-buffer boundary through final host publication, allowing unrelated closures without admitting edits, new buffers, or consumed closures
+- Keep compiler-selected guarded types in binding-backed type completion without folding inactive same-name declarations into the result
+- Refresh cached source visibility when crossing a native include boundary and keep later USING directives from affecting earlier type lookups
+- Retain compiler-bound type, alias, enum, and namespace completions in stock-FBC type slots, including disabled-keyword qualifiers; keep native identities and name-only insertion
+- Resolve committed keyword-named namespace receivers through native declarations in the bridge without changing value-receiver or source-only keyword rules
+- Focus `As` and `Extends` completion on types, namespaces, and type-producing macros; retain expression completion and avoid constructor snippets in type names
+- Recover unfinished namespace/static-owner completion from surviving native declarations without inventing bindings; preserve ordinary source values during stock constructor enrichment
+- Keep procedure-address completions after `@` name-only, including namespace/global-qualified names; preserve declaration details, import edits, and fresh macro argument templates
+- Resolve explicit global qualifiers from module scope rather than local shadows, retain double-dot global lookup inside WITH, and keep native value-receiver enrichment from erasing global completion
+- Discard stale compiler inlay hints after buffer edits, document closure, cancellation, or build-context changes; stop ended requests before parsing or acquiring another model
+- Add compiler-backed array index Signature Help with dimension highlighting and fixed bounds when available; distinguish indexing from callback invocation and keep stock cold-start analysis unchanged
+- Add native Signature Help for callback array elements, factory results, grouped callbacks, and explicit pointer dereferences; retain declaration-backed bridge help for incomplete outer arguments without inventing runtime call targets
+- Follow one replaced native Signature Help snapshot for direct calls and source-overload refinement, retaining callback/overload information without requiring unrelated macro enrichment or publishing stale results
+- Follow one native snapshot replacement during Type Definition and Type Hierarchy preparation, preserve the selected successor for later expression lookups, and discard stale type results after edits, closure, cancellation, or backend changes
+- Keep stock-FBC member base-chain and member-fact reads on one current snapshot across analysis upgrades, and reuse valid cached type facts after superseded acquisition without another compiler pass
+- Keep Expand Selection on one buffer revision, follow one cached compiler-model replacement, and revive native expression coordinates as VS Code Positions before offset conversion
+- Use native symbol/macro binding-backed semantic highlighting for ordinary saved stock-FBC files, not only NOKEYWORD files, preserving active declaration kinds, macro definitions/uses, readonly qualifiers, and write roles while rejecting stale token results
+- Reacquire expired native Call Hierarchy models and retry preparation/incoming/outgoing queries once after replacement, retaining compiler-selected targets and physical call ranges without weakening binding requirements
+- Keep Type Hierarchy expansion on the current binding model and retry once after a concurrent snapshot replacement, preserving edit, closure, and cancellation guards
+- Prepare compiler-proven guarded and external operators for Call Hierarchy and derive incoming callers from native references, re-resolving current declarations without retaining model-local IDs in items
+- Keep qualified operator owner names bound to their types instead of treating the whole header name as an operator declaration, correcting navigation and Call Hierarchy in source, stock, and bridge modes
+- Filter native operator reference queries by the selected snapshot symbol before applying the receipt budget, avoiding unrelated payloads while retaining ambiguous physical sites and the 5,000 matching-site limit
+- Use native prototypes for declaration-only operator call sites, restoring hover, navigation, references, and highlighting without fabricating a local implementation
+- Complete guarded operator prototype/body navigation using native declaration roles; retain physical compiler targets for unindexed bodies and distinguish declaration-only definitions from unavailable implementations
+- Resolve operator references and highlights from guarded prototypes and bodies using native F kinds and physical D ranges; retain external-operator calls even when no local P body exists
+- Use compiler-selected operator identities for call-site references and highlighting through guarded headers, keeping native declarations and overload siblings separate and retaining the upgraded indexer snapshot
+- Navigate overloaded operators to their compiler-proven guarded prototypes, retaining separate physical prototype/body sites even when the source model assigns them one family ID
+- Use physical compiler declaration records for guarded indexer signatures, hover, and declaration/body navigation, preserving native identity through type aliases without selecting inactive same-signature prototypes
+- Preserve native operator-expression offsets during query compaction so nested indexers select the innermost overload for Signature Help and navigation while equal-span ambiguity remains explicit
+- Accept uniquely mapped conditional operator declarations for committed native operation and typed-expression targets, restoring guarded-header hover and navigation without admitting inactive or ambiguous declarations
+- Accept compiler-selected conditional call declarations through exact physical sites, enabling guarded-header hover selection without admitting inactive branches with identical signatures
+- Prefer available committed stock call bindings over expression return-type matching, and query typed index receipts directly instead of probing unrelated call and expression paths
+- Discard stale hover declarations and compiler facts after edits, cancellation, or closure during asynchronous refinement; stop before subsequent snapshot lookups and skip source reads for already-cancelled requests
+- Request stock-FBC binding identity for ambiguous hover declarations of mixed kinds, so inactive source procedures cannot replace an active scalar through return-type matching
+- Keep stock-FBC square-bracket Signature Help on its native-selected indexer path when a full binding snapshot is cached, instead of diverting it into procedure-pointer lookup
+- Prefer native callable-value and macro signatures during source-mode stock probing instead of rescoring inactive source procedure candidates; share native signature conversion and preserve anonymous parameter label offsets
+- Discard conditional source procedure guesses when stock FBC selects a value, using native entries or exact declaration-site matches without rescoring the value as an overload; retain real procedure alternatives and active selection
+- Keep resolved non-callable names from borrowing unrelated builtin signatures; preserve stock array bindings as values rather than procedure targets, including sparse native results, while retaining genuine builtin help
+- Use cached native signatures before source-only keyword guards, and acquire bindings on first use for explicit NOKEYWORD hints; generated disabled-keyword procedures retain bare-call help and recovery without a source declaration
+- Discard Signature Help after edits, cancellation, or document closure during source refinement, including constructor lookup and stock overload selection; avoid follow-up probes for stale requests
+- Retain compiler-linked public overload alternatives in cached stock-FBC Signature Help while activating the native selected target, excluding later declarations and separate property accessor roles; bound native chain traversal and withhold expansion for uninspected producers
+- Preserve completion and Signature Help after conditional OPTION NOKEYWORD REM identifiers, using accepted compiler options and bindings to retain real string and comment boundaries, including later block comments
+- Render stock-FBC selected procedure signatures directly from cached binding models, retaining exact native declaration identities and source-mode overload selection
+- Preserve written bare-call arguments when accepting callable completions, reusing statement-head call detection so assignment targets, declarations, and nested argument names keep their normal snippets
+- Preserve written bracketed arguments when accepting callable completions, replacing the whole identifier without duplicating calls; retain fresh-call snippets, documentation, and import edits, including case-insensitive built-in labels
+- Keep FBC's selected overload active for bare calls across qualified names, pointer/spaced methods, continuations, inline IF arms, and statement boundaries using native call-expression bounds
+- Keep accessible overload alternatives visible for committed bridge calls while activating FBC's AST-selected target, with native access/order checks and separate property getter/setter families
+- Retain accessible native procedure and method overload signatures while arguments are incomplete, using exact-name recovery lookup, caller scope/access checks, and no fabricated selected target
+- Add compiler-backed Signature Help for named function/Sub pointer values, aliases, inferred variables, parameters, and callback fields, with bridge recovery for incomplete arguments and no guessed runtime call target
+- Use committed compiler bindings before source-only type-navigation and Type Hierarchy guards for identifiers enabled by OPTION NOKEYWORD, including conditional REM declarations
 - Acquire compiler option facts on the first ambiguous-string request without requiring Analyze first, and preserve native Type Hierarchy identifiers after escaped literals
 - Keep failed compiler-binding and macro upgrades on a genuine source-only fallback instead of reselecting the rejected weak bridge snapshot through the workspace cache
 - Preserve completion and Signature Help after conditionally escaped literals using complete native option spans and worker-owned call contexts; acquire missing option facts on demand without treating explicit escaped/raw strings as ambiguous

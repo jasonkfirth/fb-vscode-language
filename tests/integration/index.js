@@ -13,6 +13,7 @@
         - activate the extension in an isolated workspace
         - exercise completions, navigation, references, and safe rename
         - verify documentation, signatures, symbols, and semantic tokens
+        - allow focused provider checks against an external FreeBASIC corpus
 
     This file intentionally does NOT contain:
 
@@ -100,7 +101,11 @@ async function run() {
         assert.equal(path.resolve(extension.extensionPath), path.resolve(process.env.FREEBASIC_EXPECTED_EXTENSION_PATH), "The active extension must come from the installed VSIX payload.");
     }
     await extension.activate();
-    const uri = vscode.Uri.file(path.join(__dirname, "workspace/main.bas"));
+    const corpusRoot = process.env.FREEBASIC_CORPUS_ROOT || "";
+    const initialFile = corpusRoot
+        ? path.join(corpusRoot, "fb_src/sqlite3_initialize.bas")
+        : path.join(__dirname, "workspace/main.bas");
+    const uri = vscode.Uri.file(initialFile);
     const document = await vscode.workspace.openTextDocument(uri);
     await vscode.window.showTextDocument(document);
     await vscode.commands.executeCommand("freebasic.rebuildWorkspaceIndex");
@@ -116,6 +121,40 @@ async function run() {
         console.log(`PASS: ${name}`);
     };
 
+    if (corpusRoot) await check("SQLite FreeBASIC corpus indexes and resolves both projects", async () => {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        assert.equal(path.resolve(workspaceFolder || ""), path.resolve(corpusRoot));
+
+        const sqliteSymbols = await vscode.commands.executeCommand("vscode.executeDocumentSymbolProvider", uri);
+        assert.ok(sqliteSymbols.some((symbol) => symbol.name === "sqlite3_initialize"),
+            "SQLite procedure symbols should be available in the implementation file");
+        const sqlitePosition = position(document, "Function sqlite3_initialize", "Function ".length);
+        const sqliteDefinitions = await vscode.commands.executeCommand("vscode.executeDefinitionProvider", uri, sqlitePosition);
+        assert.ok((Array.isArray(sqliteDefinitions) ? sqliteDefinitions : [sqliteDefinitions]).some((entry) =>
+            entry?.uri?.fsPath === uri.fsPath), "SQLite source definition should resolve to its physical procedure");
+
+        const converterFile = path.join(corpusRoot, "fb_tools/c2fb/c2fb.bas");
+        const converterUri = vscode.Uri.file(converterFile);
+        const converterDocument = await vscode.workspace.openTextDocument(converterUri);
+        await vscode.window.showTextDocument(converterDocument);
+        const converterPosition = position(converterDocument, "C2fbTranslationContext");
+        const converterDefinitions = await vscode.commands.executeCommand(
+            "vscode.executeDefinitionProvider", converterUri, converterPosition
+        );
+        assert.ok((Array.isArray(converterDefinitions) ? converterDefinitions : [converterDefinitions]).some((entry) =>
+            entry?.uri?.fsPath === path.join(corpusRoot, "fb_tools/c2fb/c2fb_model.bi")),
+        "C2FB type navigation should follow the root module's includes");
+
+        const workspaceSymbols = await vscode.commands.executeCommand(
+            "vscode.executeWorkspaceSymbolProvider", "C2fbTranslationContext"
+        );
+        assert.ok(workspaceSymbols.some((symbol) => symbol.name === "C2fbTranslationContext"),
+            "workspace symbols should include the converter's shared context type");
+        const memory = process.memoryUsage();
+        console.log(`Corpus provider memory: ${(memory.heapUsed / 1048576).toFixed(0)} MiB heap, ` +
+            `${(memory.rss / 1048576).toFixed(0)} MiB RSS.`);
+    });
+
     await check("member completion returns Point members", async () => {
         const result = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri, position(document, "origin.x", 7), undefined, 20);
         const labels = result.items.map((item) => typeof item.label === "string" ? item.label : item.label.label);
@@ -129,6 +168,52 @@ async function run() {
                 insertText: setX.insertText,
                 documentation: setX.documentation?.value
             })}`);
+        const original = document.getText();
+        for (const [source, relative, name] of [["origin.SetX (20)", "origin.Se".length, "SetX"],
+            ["Sin(0.5)", "Si".length, "Sin"]]) {
+            const selected = position(document, source, relative);
+            const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri, selected);
+            const item = completions.items.find((candidate) => String(candidate.label).toLowerCase() === name.toLowerCase() &&
+                candidate.kind !== vscode.CompletionItemKind.Text);
+            assert.ok(item, source);
+            const insertion = typeof item.insertText === "string" ? item.insertText : item.insertText?.value;
+            assert.equal(insertion?.toLowerCase(), name.toLowerCase(),
+                "a written argument list must receive only its identifier: " + JSON.stringify({ source, insertion }));
+            const range = item.range;
+            assert.ok(range instanceof vscode.Range, "the identifier replacement must not depend on suggest insert mode");
+            const start = document.offsetAt(range.start), end = document.offsetAt(range.end);
+            assert.equal(original.slice(start, end).toLowerCase(), name.toLowerCase(), "replace the complete identifier, including its suffix");
+            assert.ok(!original.slice(start, end).includes("("), "arguments must remain outside the edit");
+            assert.equal(original.slice(end).trimStart()[0], "(");
+        }
+        assert.equal(document.getText(), original);
+        let written = "origin.SetX (20)";
+        try {
+            for (const source of ["origin.SetX 20", "origin.SetX _ ' keep the argument\n    20",
+                "If origin.x Then origin.SetX 20 Else origin.SetX 30"]) {
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(uri, new vscode.Range(position(document, written), position(document, written, written.length)), source);
+                await applyEditAndWaitForDocuments(edit, [document]);
+                written = source;
+                const selected = position(document, source, source.indexOf("SetX") + 2);
+                const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri, selected);
+                const item = completions.items.find((candidate) => candidate.label === "SetX" &&
+                    candidate.kind !== vscode.CompletionItemKind.Text);
+                assert.ok(item, source);
+                const insertion = typeof item.insertText === "string" ? item.insertText : item.insertText?.value;
+                assert.equal(insertion, "SetX", "a bare call must not receive another argument template");
+                assert.ok(item.range instanceof vscode.Range);
+                assert.equal(document.getText(item.range), "SetX");
+                const before = document.getText(), start = document.offsetAt(item.range.start), end = document.offsetAt(item.range.end);
+                assert.equal(before.slice(0, start) + insertion + before.slice(end), before,
+                    "accepting the existing name must leave its bare arguments unchanged");
+            }
+        } finally {
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(uri, new vscode.Range(position(document, written), position(document, written, written.length)), "origin.SetX (20)");
+            await applyEditAndWaitForDocuments(edit, [document]);
+        }
+        assert.equal(document.getText(), original);
     });
     await check("definition and type definition follow the included header", async () => {
         const definitions = await vscode.commands.executeCommand("vscode.executeDefinitionProvider", uri, position(document, "origin.x", 7));
@@ -161,6 +246,550 @@ async function run() {
         const bases = await vscode.commands.executeCommand("vscode.provideSupertypes", coloredPoint);
         assert.ok(bases.some((item) => item.name === "Point"), "the direct base type should be available as a supertype");
     });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("Type Hierarchy reacquires native facts through closed files", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-closed-types-"));
+        const headerSource = ["#ifdef ALTERNATE", "Type SelectedBase", "alternateValue As Long", "End Type", "#else",
+            "Type SelectedBase", "normalValue As Long", "End Type", "#endif", ""].join("\n");
+        const source = '#include "api.bi"\nType Derived Extends SelectedBase\nEnd Type\n';
+        try {
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["analysis.run", "onDemand"],
+                ["diagnostics.run", "off"], ["compiler.arguments", []]]) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            for (const bridge of [false, true]) {
+                const backendDirectory = path.join(directory, bridge ? "bridge" : "stock");
+                fs.mkdirSync(backendDirectory);
+                const filePath = path.join(backendDirectory, "main.bas"), headerPath = path.join(backendDirectory, "api.bi");
+                fs.writeFileSync(filePath, source);
+                fs.writeFileSync(headerPath, headerSource);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [{ name: "closed-types", modules: [filePath] }], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.activeContext", { name: "closed-types", module: filePath }, vscode.ConfigurationTarget.Global);
+                const currentUri = vscode.Uri.file(filePath);
+                await vscode.commands.executeCommand("vscode.open", currentUri, { preview: false });
+                const current = vscode.workspace.textDocuments.find((opened) => opened.uri.toString() === currentUri.toString());
+                assert.ok(current);
+                const prepared = await vscode.commands.executeCommand("vscode.prepareTypeHierarchy", currentUri, position(current, "Derived", 1));
+                assert.deepEqual(prepared.map((item) => item.name), ["Derived"]);
+                await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+                const deadline = Date.now() + DOCUMENT_CHANGE_TIMEOUT_MS;
+                while (!current.isClosed && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+                assert.equal(current.isClosed, true, "the type's original document must really unload");
+                // Invalidate native snapshots without changing the selected
+                // source branch. Expansion must analyze the reloaded file.
+                await configuration.update("compiler.arguments", ["-d", "TYPE_TREE_RELOAD=1"], vscode.ConfigurationTarget.Global);
+                const activeEditor = vscode.window.activeTextEditor?.document.uri.toString();
+                const parents = await vscode.commands.executeCommand("vscode.provideSupertypes", prepared[0]);
+                assert.deepEqual(parents.map((item) => [item.uri.fsPath, item.selectionRange.start.line]), [[headerPath, 5]],
+                    `bridge=${bridge}: only the compiler-active base declaration may be selected`);
+                assert.equal(vscode.workspace.textDocuments.some((opened) => opened.uri.fsPath === headerPath), false,
+                    "the returned base header must not need to be loaded yet");
+                const children = await vscode.commands.executeCommand("vscode.provideSubtypes", parents[0]);
+                assert.deepEqual(children.map((item) => [item.name, item.uri.fsPath]), [["Derived", filePath]]);
+                assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), activeEditor, "tree expansion must not show an editor");
+                assert.equal(fs.readFileSync(filePath, "utf8"), source);
+                assert.equal(fs.readFileSync(headerPath, "utf8"), headerSource);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project Type Hierarchy finds closed direct subtypes in the active build", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-project-types-"));
+        const header = ["Type BaseRoot", "number As Long", "End Type", "Type OtherRoot", "number As Long", "End Type",
+            "Type RootAlias As BaseRoot", ""].join("\n");
+        const caller = '#include "api.bi"\nType LocalChild Extends BaseRoot\nEnd Type\nDim rootValue As BaseRoot\n';
+        const other = ['#include "api.bi"', "#ifdef ALTERNATE", "Type RemoteChild Extends OtherRoot", "#else",
+            "Type RemoteChild Extends RootAlias", "#endif", "End Type", "Type RemoteLeaf Extends RemoteChild", "End Type", ""].join("\n");
+        const sortedNames = (items) => items.map((item) => item.name).sort();
+        try {
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            for (const bridge of [false, true]) {
+                const backendDirectory = path.join(directory, bridge ? "bridge" : "stock");
+                fs.mkdirSync(backendDirectory);
+                const callerPath = path.join(backendDirectory, "caller.bas"), otherPath = path.join(backendDirectory, "other.bas");
+                const headerPath = path.join(backendDirectory, "api.bi");
+                for (const [file, text] of [[callerPath, caller], [otherPath, other], [headerPath, header]]) fs.writeFileSync(file, text);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [{ name: "normal", modules: [callerPath, otherPath] },
+                    { name: "alternate", modules: [callerPath, otherPath], arguments: ["-d", "ALTERNATE"] }], vscode.ConfigurationTarget.Global);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+                await vscode.window.showTextDocument(current);
+                for (const name of ["normal", "alternate"]) {
+                    await configuration.update("analysis.activeContext", { name, module: callerPath }, vscode.ConfigurationTarget.Global);
+                    const prepared = await vscode.commands.executeCommand("vscode.prepareTypeHierarchy", current.uri, position(current, "rootValue", 1));
+                    assert.deepEqual(sortedNames(prepared), ["BaseRoot"]);
+                    const children = await vscode.commands.executeCommand("vscode.provideSubtypes", prepared[0]);
+                    assert.deepEqual(sortedNames(children), name === "normal" ? ["LocalChild", "RemoteChild"] : ["LocalChild"],
+                        `bridge=${bridge}, ${name}: only direct active-build children belong in this level`);
+                    const implemented = await vscode.commands.executeCommand("vscode.executeImplementationProvider", current.uri,
+                        position(current, "rootValue", 1));
+                    const implementationKeys = (locations) => locations.map((item) => `${item.uri.fsPath}:${item.range.start.line}`).sort();
+                    const expected = name === "normal" ? [`${callerPath}:1`, `${otherPath}:4`, `${otherPath}:7`] : [`${callerPath}:1`];
+                    assert.deepEqual(implementationKeys(implemented), expected.sort(),
+                        "Go to Implementation includes transitive types but not the root or an unrelated branch");
+                    if (name === "normal") {
+                        assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === otherPath), false);
+                        const remote = children.find((item) => item.name === "RemoteChild");
+                        assert.deepEqual([remote.uri.fsPath, remote.selectionRange.start.line, remote.selectionRange.start.character], [otherPath, 4, 5]);
+                        const leaves = await vscode.commands.executeCommand("vscode.provideSubtypes", remote);
+                        assert.deepEqual(sortedNames(leaves), ["RemoteLeaf"], "a closed project result must remain expandable");
+                    }
+                    const included = await vscode.workspace.openTextDocument(vscode.Uri.file(headerPath));
+                    if (name === "normal") {
+                        const aliasImplementations = await vscode.commands.executeCommand("vscode.executeImplementationProvider", included.uri,
+                            new vscode.Position(6, 6));
+                        assert.deepEqual(implementationKeys(aliasImplementations), expected.sort(),
+                            "an alias origin follows the actual native root across modules");
+                    }
+                    const unrelated = await vscode.commands.executeCommand("vscode.prepareTypeHierarchy", included.uri, new vscode.Position(3, 6));
+                    const unrelatedChildren = await vscode.commands.executeCommand("vscode.provideSubtypes", unrelated[0]);
+                    assert.deepEqual(sortedNames(unrelatedChildren), name === "alternate" ? ["RemoteChild"] : []);
+                }
+                await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+                const localImplementations = await vscode.commands.executeCommand("vscode.executeImplementationProvider", current.uri,
+                    position(current, "rootValue", 1));
+                assert.deepEqual(localImplementations.map((item) => [item.uri.fsPath, item.range.start.line]), [[callerPath, 1]],
+                    "without project contexts, type implementations remain in the current native snapshot");
+                assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), current.uri.toString());
+                assert.equal(current.isDirty, false);
+                for (const [file, text] of [[callerPath, caller], [otherPath, other], [headerPath, header]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    for (const bridge of [false, true]) if (process.env.FBC_INTEGER128_EXECUTABLE && (!bridge || process.env.FBC_EDITOR_EXECUTABLE)) {
+        await check(`${bridge ? "current bridge" : "current FBC"} 128-bit types retain native layout and source-valid refactors`, async () => {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+                "compiler.path", "compiler.arguments", "diagnostics.run"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-native-integer128-"));
+            const sourcePath = path.join(directory, "main.bas");
+            const source = ["Type Integer128", "    memberValue As Long", "End Type", "Dim ordinaryValue As Integer128",
+                "Dim signedWide As Integer<128> = 1", "Dim unsignedWide As UInteger<128> = 1",
+                "Var inferredWide = signedWide + 1", "Var inferredUnsignedWide = unsignedWide + 1",
+                "Var inferredOrdinary = ordinaryValue", "Var copiedOrdinary = inferredOrdinary",
+                "Dim callback As Function(ByVal As Integer<128>) As UInteger<128>", "Var inferredCallback = callback",
+                "Print SizeOf(inferredWide), SizeOf(inferredUnsignedWide), ordinaryValue.memberValue", ""].join("\n");
+            try {
+                fs.writeFileSync(sourcePath, bridge ? "' saved baseline\n" : source);
+                for (const [name, value] of [["analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : ""],
+                    ["compiler.path", process.env.FBC_INTEGER128_EXECUTABLE],
+                    ["compiler.arguments", []], ["analysis.projectContexts", []], ["analysis.activeContext", null],
+                    ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                    await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                }
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+                await vscode.window.showTextDocument(current);
+                if (bridge) {
+                    const overlay = new vscode.WorkspaceEdit();
+                    overlay.replace(current.uri, new vscode.Range(0, 0, current.lineCount - 1, 0), source);
+                    await applyEditAndWaitForDocuments(overlay, [current]);
+                    assert.equal(current.isDirty, true, "the new bridge must type unsaved 128-bit declarations");
+                    assert.equal(fs.readFileSync(sourcePath, "utf8"), "' saved baseline\n");
+                }
+                for (const [name, typeName] of [["inferredWide", "Integer<128>"], ["inferredUnsignedWide", "UInteger<128>"]]) {
+                    const selected = position(current, name, 1);
+                    const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri, selected);
+                    const markdown = hovers.flatMap((hover) => hover.contents.map((content) => content.value)).join("\n");
+                    assert.ok(markdown.toLowerCase().includes(typeName.toLowerCase()),
+                        "native inferred hover must retain a source-valid 128-bit spelling: " + markdown);
+                    assert.match(markdown, /16 bytes/i, "the current compiler must supply the native 128-bit layout");
+                    const hints = await vscode.commands.executeCommand("vscode.executeInlayHintProvider", current.uri,
+                        new vscode.Range(selected.line, 0, selected.line, current.lineAt(selected.line).text.length));
+                    assert.ok(hints.some((hint) => (typeof hint.label === "string" ? hint.label
+                        : hint.label.map((part) => part.value).join("")).toLowerCase() === `: ${typeName}`.toLowerCase()),
+                    "native inferred hints must use the source-valid primitive spelling: " + JSON.stringify(hints));
+                    const actions = await vscode.commands.executeCommand("vscode.executeCodeActionProvider", current.uri,
+                        new vscode.Range(selected, selected), vscode.CodeActionKind.RefactorRewrite.value);
+                    const action = actions.find((candidate) => candidate.title.toLowerCase() ===
+                        `Make inferred Var type explicit as '${typeName}'`.toLowerCase());
+                    assert.ok(action?.edit, `${name} must support an explicit declaration (version ${current.version}, dirty ${current.isDirty}): ` +
+                        JSON.stringify(actions));
+                    assert.ok(action.edit.get(current.uri).some((edit) => edit.newText.toLowerCase() === ` As ${typeName}`.toLowerCase()));
+                    await applyEditAndWaitForDocuments(action.edit, [current]);
+                    assert.ok(await current.save());
+                    assert.match(current.lineAt(selected.line).text, new RegExp(`^Dim ${name} As U?Integer<128> =`, "i"));
+                }
+                const definitions = await vscode.commands.executeCommand("vscode.executeTypeDefinitionProvider", current.uri,
+                    position(current, "ordinaryValue.memberValue", 1));
+                assert.deepEqual(definitions.map((item) => [item.uri.fsPath, item.range.start.line]), [[sourcePath, 0]],
+                    "a user type named Integer128 must remain distinct from the primitive spelling Integer<128>");
+                if (bridge) {
+                    for (const [name, expected, relative = 1] of [["inferredOrdinary", /Compiler-selected variable type: `INTEGER128`/i],
+                        ["inferredCallback", /Compiler-selected variable type: `function\(as integer<128>\) as uinteger<128>`/i],
+                        ["copiedOrdinary = inferredOrdinary", /Compiler-selected variable type: `INTEGER128`/i,
+                            "copiedOrdinary = ".length + 1]]) {
+                        const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri,
+                            position(current, name, relative));
+                        const markdown = hovers.flatMap((hover) => hover.contents.map((content) => content.value)).join("\n");
+                        assert.match(markdown, expected, `native VAR hover for ${name} must retain its inferred type: ${markdown}`);
+                    }
+                }
+                const checkResult = await vscode.commands.executeCommand("freebasic.checkSyntax");
+                assert.equal(checkResult.exitCode, 0, "the current compiler must accept both generated explicit declarations");
+            } finally {
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                await vscode.window.showTextDocument(document);
+                fs.rmSync(directory, { recursive: true, force: true });
+            }
+        });
+    }
+    if (process.env.FBC_EXECUTABLE) await check("stock FBC inferred pointer refactors preserve native const qualifiers", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-native-pointer-const-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const source = ["Dim pointee As Long = 1", "Dim constPointee As Const Long Ptr = @pointee",
+            "Dim fixedPointer As Long Const Ptr = @pointee", "Var inferredConstPointer = constPointee",
+            "Var inferredNestedPointer = @fixedPointer", "Print *inferredConstPointer, **inferredNestedPointer", ""].join("\n");
+        try {
+            fs.writeFileSync(sourcePath, source);
+            for (const [name, value] of [["analysis.compilerPath", ""], ["compiler.path", process.env.FBC_EXECUTABLE],
+                ["compiler.arguments", []], ["analysis.projectContexts", []], ["analysis.activeContext", null],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            await vscode.window.showTextDocument(current);
+            for (const [name, typeName] of [["inferredConstPointer", "Const Long Ptr"],
+                ["inferredNestedPointer", "Long Const Ptr Ptr"]]) {
+                const selected = position(current, name, 1);
+                const actions = await vscode.commands.executeCommand("vscode.executeCodeActionProvider", current.uri,
+                    new vscode.Range(selected, selected), vscode.CodeActionKind.RefactorRewrite.value);
+                const action = actions.find((candidate) => candidate.title === `Make inferred Var type explicit as '${typeName}'`);
+                assert.ok(action?.edit, "pointer refactors must retain pointee and nested pointer constness: " + JSON.stringify(actions));
+                assert.ok(action.edit.get(current.uri).some((edit) => edit.newText === ` As ${typeName}`));
+                await applyEditAndWaitForDocuments(action.edit, [current]);
+                assert.ok(await current.save());
+                assert.equal(current.lineAt(selected.line).text,
+                    `Dim ${name} As ${typeName} = ${name === "inferredConstPointer" ? "constPointee" : "@fixedPointer"}`);
+            }
+            const checkResult = await vscode.commands.executeCommand("freebasic.checkSyntax");
+            assert.equal(checkResult.exitCode, 0, "the real compiler must accept both qualifier-preserving edits");
+            // Writing through either guarded level must still be rejected
+            // after the editor rewrite, not merely remain syntactically valid.
+            const invalidEdit = new vscode.WorkspaceEdit();
+            invalidEdit.insert(current.uri, new vscode.Position(current.lineCount - 1, 0),
+                "*inferredConstPointer = 2\n*inferredNestedPointer = @pointee\n");
+            await applyEditAndWaitForDocuments(invalidEdit, [current]);
+            assert.ok(await current.save());
+            const invalidResult = await vscode.commands.executeCommand("freebasic.checkSyntax");
+            assert.notEqual(invalidResult.exitCode, 0, "explicit types must preserve the compiler's const-write restrictions");
+            const constErrors = vscode.languages.getDiagnostics(current.uri).filter((diagnostic) =>
+                diagnostic.severity === vscode.DiagnosticSeverity.Error && /const|constant/i.test(diagnostic.message));
+            assert.equal(new Set(constErrors.map((diagnostic) => diagnostic.range.start.line)).size, 2,
+                "FBC must reject writes at both the pointee and intermediate pointer level");
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE) await check("stock FBC native declaration refactors preserve compiler-selected values and modes", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-native-declaration-refactors-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const source = ["Enum EditorCodes", "    PriorCode = 7", "    NextCode", "End Enum",
+            "Declare Sub ModeProbe(value As Long)", "Declare Sub ContinuedProbe( _", "    continuedValue As Long)",
+            "Function ImplicitResult()", "    Return 1", "End Function", "Print NextCode, ImplicitResult()", ""].join("\n");
+        try {
+            fs.writeFileSync(sourcePath, source);
+            for (const [name, value] of [["analysis.compilerPath", ""], ["compiler.path", process.env.FBC_EXECUTABLE],
+                ["compiler.arguments", ["-lang", "deprecated"]], ["analysis.projectContexts", []], ["analysis.activeContext", null],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            await vscode.window.showTextDocument(current);
+            for (const [needle, relative, title, expected] of [
+                ["NextCode", 1, "Make enum value explicit as 8", "    NextCode = 8"],
+                ["ModeProbe(value", "ModeProbe(".length + 1, "Make parameter passing mode explicit as 'ByRef'",
+                    "Declare Sub ModeProbe(ByRef value As Long)"],
+                ["continuedValue", 1, "Make parameter passing mode explicit as 'ByRef'", "    ByRef continuedValue As Long)"],
+                ["ImplicitResult", 1, "Add explicit return type 'Integer'", "Function ImplicitResult() As Integer"]
+            ]) {
+                const selected = position(current, needle, relative);
+                const actions = await vscode.commands.executeCommand("vscode.executeCodeActionProvider", current.uri,
+                    new vscode.Range(selected, selected));
+                const action = actions.find((candidate) => candidate.title === title);
+                assert.ok(action?.edit, `${title} must use the current native declaration: ` + JSON.stringify(actions));
+                await applyEditAndWaitForDocuments(action.edit, [current]);
+                assert.ok(await current.save());
+                assert.equal(current.lineAt(selected.line).text, expected);
+            }
+            const checkResult = await vscode.commands.executeCommand("freebasic.checkSyntax");
+            assert.equal(checkResult.exitCode, 0, "the actual compiler must accept all four explicit declarations");
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("current-source compiler preserves contextual THREAD and TLS storage", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-contextual-thread-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const source = fs.readFileSync(path.join(__dirname, "../fixtures/contextual-thread.bas"), "utf8");
+        try {
+            fs.writeFileSync(sourcePath, source);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", []], ["analysis.activeContext", null], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            await vscode.window.showTextDocument(current);
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri, position(current, "perThread", 1));
+                const markdown = hovers.flatMap((hover) => hover.contents.map((content) => content.value)).join("\n");
+                assert.match(markdown, /Compiler-selected storage class: `thread-local`/, bridge ? "bridge TLS" : "stock TLS");
+                for (const [spelling, relative, declarationLine] of [["holder.Thread", "holder.".length + 1, 8],
+                    ["LocalNames.Thread", "LocalNames.".length + 1, 14]]) {
+                    const targets = await vscode.commands.executeCommand("vscode.executeDefinitionProvider", current.uri,
+                        position(current, spelling, relative));
+                    assert.equal(targets.length, 1, spelling);
+                    assert.equal(targets[0].range.start.line, declarationLine, "THREAD names retain their distinct native owners");
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("native method Signature Help follows compound receivers", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-compound-method-signature-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const source = fs.readFileSync(path.join(__dirname, "../fixtures/compound-method-signatures.bas"), "utf8");
+        let current;
+        try {
+            fs.writeFileSync(sourcePath, source);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", []], ["analysis.activeContext", null], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            await vscode.window.showTextDocument(current);
+            await configuration.update("analysis.compilerPath", process.env.FBC_EDITOR_EXECUTABLE, vscode.ConfigurationTarget.Global);
+            // Request completion before Signature Help so signature-specific
+            // enrichment cannot hide missing recovery metadata.
+            for (const [statement, expected] of [["With services(0)\n    .Mea", "Measure"],
+                ["With services(0)\n    .", "value"], ["With services(0)\n    .Hid", null], [".Mea", false]]) {
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(current.uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)), source + statement);
+                await applyEditAndWaitForDocuments(edit, [current]);
+                const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", current.uri,
+                    current.positionAt(current.getText().length));
+                // VS Code also supplies plain word suggestions. Only declared
+                // methods/fields can prove native member assistance here.
+                const members = completions.items.filter((item) => [vscode.CompletionItemKind.Method, vscode.CompletionItemKind.Function,
+                    vscode.CompletionItemKind.Field, vscode.CompletionItemKind.Variable, vscode.CompletionItemKind.Property].includes(item.kind));
+                const labels = members.map((item) => typeof item.label === "string" ? item.label : item.label.label);
+                if (expected) assert.ok(labels.includes(expected), `unclosed WITH completion: ${statement}`);
+                if (expected === false) assert.ok(!labels.includes("Measure"), "a dot outside WITH cannot borrow the previous receiver");
+                assert.ok(!labels.includes("HiddenMethod"), "unclosed scopes do not certify private caller access");
+            }
+            await vscode.commands.executeCommand("workbench.action.files.revert");
+            assert.equal(current.isDirty, false);
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const [call, type, count] of [["MakeServicePointer()->Measure(CDbl(1), 2)", "Double", 2],
+                    ["MakeService().Measure(CLng(1), 2)", "Long", 2], ["MakeService().Measure(CDbl(1), 2)", "Double", 2],
+                    ["services(0).Measure(CLng(1), 2)", "Long", 2], ["(*servicePointer).Measure(CDbl(1), 2)", "Double", 2],
+                    ["MakeService().Item(CDbl(1))", "Double", 2], ["MakeService().Apply(1, 2)", "Long", 1],
+                    ["MakeService().Measure CLng(1), 2", "Long", 2], ["MakeServicePointer()->Apply 1, 2", "Long", 1],
+                    ["    .Measure CLng(1), 2", "Long", 2], ["    .Measure CDbl(1), 2", "Double", 2]]) {
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, call, call.endsWith(")") ? call.length - 1 : call.length));
+                    assert.equal(help?.signatures.length, count, `${bridge ? "bridge" : "stock"}: ${call}`);
+                    assert.match(help.signatures[help.activeSignature].label, new RegExp(`(?:amount|index) As ${type}\\b`, "i"));
+                    assert.ok(help.signatures.every((signature) => !/amount As String/i.test(signature.label)));
+                    if (call.includes(".Item")) assert.ok(help.signatures.every((signature) => signature.parameters.length === 1));
+                }
+            }
+            for (const [statement, count] of [["Print MakeService().Measure(1,", 2], ["Print MakeService().HiddenMethod(", 0],
+                ["With services(0)\n    .Apply 1,", 1], [".Apply 1,", 0]]) {
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(current.uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)), source + statement);
+                await applyEditAndWaitForDocuments(edit, [current]);
+                const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                    current.positionAt(current.getText().length));
+                assert.equal(help?.signatures.length || 0, count, statement);
+            }
+            assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+        } finally {
+            if (current?.isDirty) {
+                await vscode.window.showTextDocument(current);
+                await vscode.commands.executeCommand("workbench.action.files.revert");
+            }
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("sized integer casts retain their own Signature Help", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-sized-cast-signature-"));
+        const sourcePath = path.join(directory, "main.bas");
+        // Older compatibility fixtures support the same syntax without 128-bit widths.
+        const unsignedWidth = process.env.FBC_INTEGER128_EXECUTABLE ? 128 : 32;
+        const source = ["Type ConvertedValue", "    value As Short", "    Declare Operator Cast() As Short", "End Type",
+            "Operator ConvertedValue.Cast() As Short", "    Return this.value", "End Operator",
+            "Declare Function Scale(ByVal amount As Short) As Long", "Dim item As ConvertedValue",
+            "Dim small As Short = CInt<16>(item)", `Dim wide As UInteger<${unsignedWidth}> = CUInt<${unsignedWidth}>(1)`,
+            "Print Scale(CInt<(8 Shl 1)>(1))", ""].join("\n");
+        try {
+            fs.writeFileSync(sourcePath, source);
+            for (const [name, value] of [["compiler.arguments", []], ["analysis.projectContexts", []],
+                ["analysis.activeContext", null], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            await vscode.window.showTextDocument(current);
+            for (const backend of ["source", "stock", "bridge"]) {
+                await configuration.update("compiler.path", backend === "source" ? "/__freebasic_test__/missing-fbc" : process.env.FBC_EXECUTABLE,
+                    vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.compilerPath", backend === "bridge" ? process.env.FBC_EDITOR_EXECUTABLE : "",
+                    vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.run", backend === "source" ? "off" : "onDemand", vscode.ConfigurationTarget.Global);
+                for (const spelling of ["CInt<16>(item)", `CUInt<${unsignedWidth}>(1)`, "CInt<(8 Shl 1)>(1)"]) {
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, spelling, spelling.lastIndexOf(">(") + 2));
+                    assert.equal(help?.signatures.length, 1, `${backend}: ${spelling}`);
+                    assert.match(help.signatures[0].label, /\bcu?int<bits>/i);
+                    assert.equal(help.signatures[0].parameters.length, 1);
+                    assert.equal(help.activeParameter, 0);
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+            const statement = "Print Scale(CInt<32>(";
+            const edit = new vscode.WorkspaceEdit();
+            edit.insert(current.uri, current.positionAt(current.getText().length), statement);
+            await applyEditAndWaitForDocuments(edit, [current]);
+            const incomplete = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                position(current, statement, statement.length));
+            assert.equal(incomplete?.signatures.length, 1, "the unfinished cast must not borrow Scale's signature");
+            assert.match(incomplete.signatures[0].label, /\bcint<bits>/i);
+            assert.equal(current.isDirty, true);
+            assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("parameter hovers distinguish direct assignments from indirect effects", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-parameter-write-hover-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const source = ["Type ParameterRecord", "    fieldValue As Long", "End Type",
+            "Sub AssignIndirect(ByRef destination As Long)", "    destination = 5", "End Sub",
+            "Declare Sub ExternalWrites(ByRef externalValue As Long)",
+            "Sub ReviewWrites(ByRef changed As Long, ByVal localCopy As Long, ByRef inputOnly As Long, " +
+                "ByVal pointerValue As Long Ptr, ByRef recordValue As ParameterRecord, ByRef indirectOnly As Long)",
+            "    changed += 1", "    localCopy = 2", "    Print inputOnly", "    *pointerValue = 3",
+            "    recordValue.fieldValue = 4", "    AssignIndirect(indirectOnly)", "End Sub", ""].join("\n");
+        try {
+            fs.writeFileSync(sourcePath, source);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", []], ["analysis.activeContext", null], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            await vscode.window.showTextDocument(current);
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const name of ["changed", "localCopy", "inputOnly", "pointerValue", "recordValue", "indirectOnly", "externalValue"]) {
+                    const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri, position(current, name, 1));
+                    const markdown = hovers.flatMap((hover) => hover.contents.map((content) => content.value)).join("\n");
+                    assert.match(markdown, /Compiler-selected parameter passing:/);
+                    assert.equal(/routine body contains a direct source assignment to this parameter value/.test(markdown),
+                        ["changed", "localCopy"].includes(name), `${bridge ? "bridge" : "stock"}: ${name}: ${markdown}`);
+                    assert.doesNotMatch(markdown, /parameter is read.only|parameter is unused|pure routine/i);
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("parameter-name preference preserves native type hints on both backends", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run", "inlayHints.parameterNames.enabled"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-parameter-hint-preference-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const source = "Declare Function Scale(ByVal amount As Long) As Long\nVar inferred = 1\nPrint Scale(inferred)\n";
+        try {
+            fs.writeFileSync(sourcePath, source);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", []], ["analysis.activeContext", null], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            await vscode.window.showTextDocument(current);
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const enabled of [true, false, true]) {
+                    await configuration.update("inlayHints.parameterNames.enabled", enabled, vscode.ConfigurationTarget.Global);
+                    const hints = await vscode.commands.executeCommand("vscode.executeInlayHintProvider", current.uri,
+                        new vscode.Range(0, 0, current.lineCount - 1, 0));
+                    assert.ok(hints.some((hint) => hint.kind === vscode.InlayHintKind.Type),
+                        "turning off parameter names must retain compiler-selected inferred types");
+                    const parameters = hints.filter((hint) => hint.kind === vscode.InlayHintKind.Parameter);
+                    assert.equal(parameters.length, enabled ? 1 : 0, `${bridge ? "bridge" : "stock"}: parameter names ${enabled}`);
+                    if (enabled) assert.equal(typeof parameters[0].label === "string" ? parameters[0].label
+                        : parameters[0].label.map((part) => part.value).join(""), "amount:");
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
     if (process.env.FBC_EXECUTABLE) await check("stock FBC type navigation follows inferred and TYPEOF-derived variables", async () => {
         const configuration = vscode.workspace.getConfiguration("freebasic");
         const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
@@ -186,7 +815,11 @@ async function run() {
             await vscode.window.showTextDocument(current);
             // Populate the source index as normal Outline/editor activity does.
             await vscode.commands.executeCommand("vscode.executeDocumentSymbolProvider", current.uri);
-            for (const [text, relative] of [["Print fromVar.number", "Print f".length], ["fromTypeOf.number", 1], ["fromAlias.number", 1]]) {
+            const requests = [["Print fromVar.number", "Print f".length], ["fromTypeOf.number", 1], ["fromAlias.number", 1]];
+            for (const [requestIndex, [text, relative]] of requests.entries()) {
+                // Retire the prior native snapshot without changing the text.
+                // Each request must still resolve the inferred physical type.
+                await configuration.update("compiler.arguments", ["-d", `TYPE_NAV_CONTEXT=${requestIndex}`], vscode.ConfigurationTarget.Global);
                 const definitions = await vscode.commands.executeCommand("vscode.executeTypeDefinitionProvider", current.uri,
                     position(current, text, relative));
                 assert.deepEqual(definitions.map((item) => [item.uri.fsPath, item.range.start.line]), [[sourcePath, 3]],
@@ -268,6 +901,191 @@ async function run() {
             fs.rmSync(directory, { recursive: true, force: true });
         }
     });
+    if (process.env.FBC_EXECUTABLE) await check("stock guarded operators use native prototypes and bodies", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-guarded-indexers-"));
+        const headerPath = path.join(directory, "indexed.bi"), sourcePath = path.join(directory, "main.bas");
+        const header = ["#ifndef GUARDED_INDEXERS_BI", "#define GUARDED_INDEXERS_BI", "Type IndexNumber As Double", "Type GuardedIndexer",
+            "    value As Long",
+            "#ifdef INACTIVE_BUILD", "    Declare Operator [](ByVal inactiveIndex As Double) As Long", "#else",
+            "    Declare Operator [](ByVal activeIndex As Double) As Long", "#endif",
+            "    Declare Operator [](ByVal longIndex As Long) As Long",
+            "    Declare Operator [](ByVal externalIndex As Single) As Long", "End Type",
+            "Declare Operator +(ByRef value As GuardedIndexer, ByVal amount As Long) As Long",
+            "#ifdef INACTIVE_BUILD", "Declare Operator +(ByRef value As GuardedIndexer, ByVal inactiveAmount As Double) As Long",
+            "#else", "Declare Operator +(ByRef value As GuardedIndexer, ByVal amount As Double) As Long", "#endif",
+            "Declare Operator +(ByRef value As GuardedIndexer, ByVal externalAmount As Single) As Long",
+            "Operator GuardedIndexer.[](ByVal activeIndex As IndexNumber) As Long", "    Return CLng(activeIndex)", "End Operator",
+            "Operator GuardedIndexer.[](ByVal longIndex As Long) As Long", "    Return longIndex", "End Operator",
+            "Operator +(ByRef value As GuardedIndexer, ByVal amount As Long) As Long", "    Return amount", "End Operator",
+            "Operator +(ByRef value As GuardedIndexer, ByVal amount As Double) As Long", "    Return CLng(amount)", "End Operator",
+            "#endif", ""].join("\n");
+        try {
+            fs.writeFileSync(headerPath, header);
+            fs.writeFileSync(sourcePath, '#include "indexed.bi"\nDim item As GuardedIndexer\nPrint item[CDbl(1)]\nPrint item[CLng(2)]\n' +
+                "Print item + CLng(3)\nPrint item + CDbl(4)\nPrint item[CDbl(5)]\nPrint item + CDbl(6)\n" +
+                "Print item[CSng(7)]\nPrint item + CSng(8)\nPrint item + CSng(9)\n");
+            for (const [name, value] of [["analysis.compilerPath", ""], ["compiler.path", process.env.FBC_EXECUTABLE],
+                ["compiler.arguments", []], ["analysis.projectContexts", [{ name: "guarded-operators", modules: [sourcePath] }]],
+                ["analysis.activeContext", { name: "guarded-operators", module: sourcePath }],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            const included = await vscode.workspace.openTextDocument(vscode.Uri.file(headerPath));
+            await vscode.window.showTextDocument(current);
+            for (const [call, parameter, type] of [["item[CDbl(1)]", "activeIndex", "Double"], ["item[CLng(2)]", "longIndex", "Long"]]) {
+                const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                    position(current, call, "item[".length + 1));
+                assert.ok(help?.signatures.some((signature) => /As Double\)/i.test(signature.label)));
+                assert.ok(help.signatures.some((signature) => /As Long\)/i.test(signature.label)));
+                assert.match(help.signatures[help.activeSignature].label, new RegExp("ByVal " + parameter + " As " + type, "i"));
+                const closing = position(current, call, call.length - 1);
+                for (const [command, needle] of [["vscode.executeDeclarationProvider", "Declare Operator [](ByVal " + parameter],
+                    ["vscode.executeDefinitionProvider", "Operator GuardedIndexer.[](ByVal " + parameter],
+                    ["vscode.executeImplementationProvider", "Operator GuardedIndexer.[](ByVal " + parameter]]) {
+                    const targets = await vscode.commands.executeCommand(command, current.uri, closing);
+                    assert.equal(targets.length, 1, command);
+                    assert.equal(targets[0].uri.fsPath, headerPath);
+                    assert.equal(targets[0].range.start.line, position(included, needle).line, command);
+                }
+                const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri, closing);
+                const contents = hovers.flatMap((entry) => entry.contents.map((content) => content.value)).join("\n");
+                assert.match(contents, new RegExp("ByVal " + parameter + " As " + type, "i"));
+                assert.doesNotMatch(contents, /inactiveIndex/i);
+                const expected = [position(current, call).line];
+                if (type === "Double") expected.push(position(current, "item[CDbl(5)]").line);
+                const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri, closing);
+                const referenceLines = [...new Set(references.filter((entry) => entry.uri.fsPath === sourcePath)
+                    .map((entry) => entry.range.start.line))].sort((a, b) => a - b);
+                assert.deepEqual(referenceLines, expected, "indexer references must use the selected native symbol, not the shared return type");
+                assert.ok(references.filter((entry) => entry.uri.fsPath === headerPath)
+                    .every((entry) => !/inactiveIndex/i.test(included.lineAt(entry.range.start.line).text)));
+                const highlights = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", current.uri, closing);
+                assert.deepEqual([...new Set(highlights.map((entry) => entry.range.start.line))].sort((a, b) => a - b), expected);
+                const prototype = position(included, "Declare Operator [](ByVal " + parameter, "Declare Operator [".length);
+                const body = position(included, "Operator GuardedIndexer.[](ByVal " + parameter, "Operator GuardedIndexer.[".length);
+                for (const origin of [prototype, body]) {
+                    const fromDeclaration = await vscode.commands.executeCommand("vscode.executeReferenceProvider", included.uri, origin);
+                    assert.deepEqual([...new Set(fromDeclaration.filter((entry) => entry.uri.fsPath === sourcePath)
+                        .map((entry) => entry.range.start.line))].sort((a, b) => a - b), expected);
+                    const selected = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", included.uri, origin);
+                    assert.deepEqual([...new Set(selected.map((entry) => entry.range.start.line))].sort((a, b) => a - b),
+                        [prototype.line, body.line].sort((a, b) => a - b));
+                    for (const [command, expected] of [["vscode.executeDeclarationProvider", prototype.line],
+                        ["vscode.executeDefinitionProvider", body.line], ["vscode.executeImplementationProvider", body.line]]) {
+                        const targets = await vscode.commands.executeCommand(command, included.uri, origin);
+                        assert.deepEqual(targets.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[headerPath, expected]]);
+                    }
+                }
+                for (const [uri, origin] of [[current.uri, closing], [included.uri, prototype], [included.uri, body]]) {
+                    const items = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", uri, origin);
+                    assert.equal(items.length, 1, `index hierarchy ${type} at ${uri.fsPath}:${origin.line}:${origin.character}`);
+                    const incoming = await vscode.commands.executeCommand("vscode.provideIncomingCalls", items[0]);
+                    const module = incoming.find((call) => call.from.detail === "Module-level calls" && call.from.uri.fsPath === sourcePath);
+                    assert.deepEqual(module?.fromRanges.map((range) => range.start.line).sort((a, b) => a - b), expected);
+                }
+            }
+            for (const [call, type] of [["item + CLng(3)", "Long"], ["item + CDbl(4)", "Double"]]) {
+                const operator = position(current, call, "item ".length);
+                for (const command of ["vscode.executeDeclarationProvider", "vscode.executeDefinitionProvider",
+                    "vscode.executeImplementationProvider"]) {
+                    const targets = await vscode.commands.executeCommand(command, current.uri, operator);
+                    assert.equal(targets.length, 1, command);
+                    assert.equal(targets[0].uri.fsPath, headerPath);
+                    const selected = included.lineAt(targets[0].range.start.line).text.trim();
+                    assert.match(selected, command === "vscode.executeDeclarationProvider" ? /^Declare Operator/i : /^Operator/i,
+                        "declaration navigation must select a prototype, not its guarded body");
+                    assert.match(selected, new RegExp("ByVal amount As " + type, "i"));
+                }
+                const expected = [position(current, call).line];
+                if (type === "Double") expected.push(position(current, "item + CDbl(6)").line);
+                const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri, operator);
+                assert.deepEqual([...new Set(references.filter((entry) => entry.uri.fsPath === sourcePath)
+                    .map((entry) => entry.range.start.line))].sort((a, b) => a - b), expected);
+                assert.ok(references.filter((entry) => entry.uri.fsPath === headerPath)
+                    .every((entry) => !/inactiveAmount/i.test(included.lineAt(entry.range.start.line).text)));
+                const highlights = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", current.uri, operator);
+                assert.deepEqual([...new Set(highlights.map((entry) => entry.range.start.line))].sort((a, b) => a - b), expected);
+                const prototype = position(included,
+                    "Declare Operator +(ByRef value As GuardedIndexer, ByVal amount As " + type, "Declare Operator ".length);
+                const body = position(included,
+                    "\nOperator +(ByRef value As GuardedIndexer, ByVal amount As " + type, "\nOperator ".length);
+                for (const origin of [prototype, body]) {
+                    const fromDeclaration = await vscode.commands.executeCommand("vscode.executeReferenceProvider", included.uri, origin);
+                    assert.deepEqual([...new Set(fromDeclaration.filter((entry) => entry.uri.fsPath === sourcePath)
+                        .map((entry) => entry.range.start.line))].sort((a, b) => a - b), expected);
+                    const selected = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", included.uri, origin);
+                    assert.deepEqual([...new Set(selected.map((entry) => entry.range.start.line))].sort((a, b) => a - b),
+                        [prototype.line, body.line].sort((a, b) => a - b));
+                    for (const [command, expected] of [["vscode.executeDeclarationProvider", prototype.line],
+                        ["vscode.executeDefinitionProvider", body.line], ["vscode.executeImplementationProvider", body.line]]) {
+                        const targets = await vscode.commands.executeCommand(command, included.uri, origin);
+                        assert.deepEqual(targets.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[headerPath, expected]]);
+                    }
+                }
+                for (const [uri, origin] of [[current.uri, operator], [included.uri, prototype], [included.uri, body]]) {
+                    const items = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", uri, origin);
+                    assert.equal(items.length, 1);
+                    const incoming = await vscode.commands.executeCommand("vscode.provideIncomingCalls", items[0]);
+                    const module = incoming.find((call) => call.from.detail === "Module-level calls" && call.from.uri.fsPath === sourcePath);
+                    assert.deepEqual(module?.fromRanges.map((range) => range.start.line).sort((a, b) => a - b), expected);
+                }
+            }
+            for (const needle of ["Declare Operator [](ByVal inactiveIndex", "Declare Operator +(ByRef value As GuardedIndexer, ByVal inactiveAmount"]) {
+                const inactive = position(included, needle, "Declare Operator ".length);
+                assert.deepEqual(await vscode.commands.executeCommand("vscode.executeReferenceProvider", included.uri, inactive), []);
+                // VS Code can represent an empty highlight result as undefined.
+                assert.deepEqual((await vscode.commands.executeCommand("vscode.executeDocumentHighlights", included.uri, inactive)) ?? [], []);
+                for (const command of ["vscode.executeDeclarationProvider", "vscode.executeDefinitionProvider", "vscode.executeImplementationProvider"]) {
+                    assert.deepEqual((await vscode.commands.executeCommand(command, included.uri, inactive)) ?? [], []);
+                }
+            }
+            for (const needle of ["Declare Operator [](ByVal externalIndex", "Declare Operator +(ByRef value As GuardedIndexer, ByVal externalAmount"]) {
+                const external = position(included, needle, "Declare Operator ".length);
+                for (const command of ["vscode.executeDefinitionProvider", "vscode.executeDeclarationProvider"]) {
+                    const targets = await vscode.commands.executeCommand(command, included.uri, external);
+                    assert.deepEqual(targets.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[headerPath, external.line]]);
+                }
+                assert.deepEqual((await vscode.commands.executeCommand("vscode.executeImplementationProvider", included.uri, external)) ?? [], []);
+            }
+            for (const [call, parameter, declaration, indexed] of [
+                ["item[CSng(7)]", "externalIndex", "Declare Operator [](ByVal externalIndex", true],
+                ["item + CSng(8)", "externalAmount", "Declare Operator +(ByRef value As GuardedIndexer, ByVal externalAmount", false]
+            ]) {
+                const selected = position(current, call, indexed ? call.length - 1 : "item ".length);
+                const prototype = position(included, declaration, "Declare Operator ".length);
+                for (const command of ["vscode.executeDefinitionProvider", "vscode.executeDeclarationProvider"]) {
+                    const targets = await vscode.commands.executeCommand(command, current.uri, selected);
+                    assert.deepEqual(targets.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[headerPath, prototype.line]]);
+                }
+                assert.deepEqual((await vscode.commands.executeCommand("vscode.executeImplementationProvider", current.uri, selected)) ?? [], []);
+                const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri, selected);
+                assert.match(hovers.flatMap((entry) => entry.contents.map((content) => content.value)).join("\n"),
+                    new RegExp("ByVal " + parameter + " As Single", "i"));
+                const expected = [position(current, call).line];
+                if (!indexed) expected.push(position(current, "item + CSng(9)").line);
+                const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri, selected);
+                assert.deepEqual([...new Set(references.filter((entry) => entry.uri.fsPath === sourcePath)
+                    .map((entry) => entry.range.start.line))].sort((a, b) => a - b), expected);
+                const highlights = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", current.uri, selected);
+                assert.deepEqual([...new Set(highlights.map((entry) => entry.range.start.line))].sort((a, b) => a - b), expected);
+                const items = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri, selected);
+                assert.equal(items.length, 1);
+                const incoming = await vscode.commands.executeCommand("vscode.provideIncomingCalls", items[0]);
+                const module = incoming.find((call) => call.from.detail === "Module-level calls" && call.from.uri.fsPath === sourcePath);
+                assert.deepEqual(module?.fromRanges.map((range) => range.start.line).sort((a, b) => a - b), expected);
+            }
+            assert.equal(fs.readFileSync(headerPath, "utf8"), header);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
     if (process.env.FBC_EXECUTABLE) await check("cached stock FBC qualifiers mark readonly values without freezing const pointees", async () => {
         const configuration = vscode.workspace.getConfiguration("freebasic");
         const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
@@ -321,6 +1139,1103 @@ async function run() {
             fs.rmSync(directory, { recursive: true, force: true });
         }
     });
+    if (process.env.FBC_EXECUTABLE) await check("native semantic highlighting follows active declarations without NOKEYWORD", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-stock-native-tokens-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const source = ["#ifdef FUNCTION_BUILD", "Declare Function chosen() As Long", "#else",
+            "Dim chosen As Long = 1", "#endif", "#define FixedInput 7", "Dim fixedValue As Const Long = FixedInput", "Dim resultValue As Long",
+            "resultValue = chosen + fixedValue", "Print resultValue", "' chosen resultValue", "Dim wide As Integer<128>",
+            "Dim pointerValue As Const UInteger Ptr", "Dim textValue As String", "Dim fixedText As String * 1",
+            "Type NumberAlias As Long", "Dim aliased As NumberAlias",
+            "#define NumericType Double", "Dim macroValue As NumericType", ""].join("\n");
+        let current;
+        try {
+            fs.writeFileSync(sourcePath, source);
+            await configuration.update("analysis.compilerPath", "", vscode.ConfigurationTarget.Global);
+            await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+            await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+            current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            const { TOKEN_TYPES, TOKEN_MODIFIERS } = require(path.join(extension.extensionPath, "lib/semantic-token-data"));
+            const decode = (result) => {
+                const records = new Map();
+                let line = 0, character = 0;
+                for (let index = 0; index < result.data.length; index += 5) {
+                    line += result.data[index];
+                    character = result.data[index] ? result.data[index + 1] : character + result.data[index + 1];
+                    records.set(`${line}:${character}`, { type: TOKEN_TYPES[result.data[index + 3]],
+                        length: result.data[index + 2], modifiers: result.data[index + 4] });
+                }
+                return records;
+            };
+            const builds = [["", false], ["", true]];
+            if (process.env.FBC_EDITOR_EXECUTABLE) builds.push(["", false, process.env.FBC_EDITOR_EXECUTABLE],
+                ["", true, process.env.FBC_EDITOR_EXECUTABLE], [process.env.FBC_EDITOR_EXECUTABLE, false], [process.env.FBC_EDITOR_EXECUTABLE, true]);
+            for (const [compilerPath, functions, normalCompiler = process.env.FBC_EXECUTABLE] of builds) {
+                await configuration.update("compiler.path", normalCompiler, vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.compilerPath", compilerPath, vscode.ConfigurationTarget.Global);
+                await configuration.update("compiler.arguments", functions ? ["-d", "FUNCTION_BUILD"] : [], vscode.ConfigurationTarget.Global);
+                if (compilerPath || normalCompiler === process.env.FBC_EDITOR_EXECUTABLE) {
+                    for (const [text, prefix, expected] of [["Dim wide As Integer<128>", "Dim wide As ", "16 bytes"],
+                        ["Dim pointerValue As Const UInteger Ptr", "Dim pointerValue As Const ", "pointer value, not the pointed-to storage"],
+                        ["Dim textValue As String", "Dim textValue As ", "string descriptor; character storage is separate"],
+                        ["Dim fixedText As String * 1", "Dim fixedText As ", "1 byte"]]) {
+                        const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri,
+                            position(current, text, prefix.length + 1));
+                        const contents = hovers?.flatMap((hover) => hover.contents.map((content) => content.value || "")).join("\n") || "";
+                        assert.match(contents, /Compiler-selected type:/, "a cold type hover must acquire native layout facts");
+                        assert.ok(contents.includes(expected), `${text}: ${contents}`);
+                    }
+                }
+                const result = await vscode.commands.executeCommand("vscode.provideDocumentSemanticTokens", current.uri);
+                assert.ok(result?.data.length);
+                const records = decode(result);
+                const at = (text, relative = 0) => {
+                    const point = position(current, text, relative);
+                    return records.get(`${point.line}:${point.character}`);
+                };
+                assert.equal(at("resultValue = chosen", "resultValue = ".length)?.type, functions ? "function" : "variable",
+                    `native coloring must follow the active compiler binding: bridge=${Boolean(compilerPath)}, functions=${functions}`);
+                assert.equal(at(functions ? "Dim chosen" : "Declare Function chosen", functions ? "Dim ".length : "Declare Function ".length),
+                    undefined, "the inactive declaration must not receive semantic coloring");
+                assert.equal(at("#define FixedInput", "#define ".length)?.type, "macro");
+                assert.equal(at("Long = FixedInput", "Long = ".length)?.type, "macro", "retain native macro invocation coloring alongside ordinary symbols");
+                const fixed = at("chosen + fixedValue", "chosen + ".length);
+                assert.equal(fixed?.type, "variable");
+                assert.ok(fixed.modifiers & (1 << TOKEN_MODIFIERS.indexOf("readonly")), "retain native CONST value qualifiers");
+                const written = at("resultValue = chosen");
+                assert.ok(written?.modifiers & (1 << TOKEN_MODIFIERS.indexOf("modification")),
+                    `retain the native assignment role: bridge=${Boolean(compilerPath)}, functions=${functions}`);
+                assert.equal(at("' chosen", 2), undefined, "comments must not become semantic identifiers");
+                for (const [text, prefix] of [["Dim wide As Integer<128>", "Dim wide As "],
+                    ["Dim pointerValue As Const UInteger Ptr", "Dim pointerValue As Const "],
+                    [functions ? "Declare Function chosen() As Long" : "Dim chosen As Long", functions ? "Declare Function chosen() As " : "Dim chosen As "]]) {
+                    const primitive = at(text, prefix.length);
+                    assert.equal(primitive?.type, "type", text);
+                    assert.ok(primitive.modifiers & (1 << TOKEN_MODIFIERS.indexOf("defaultLibrary")), text);
+                }
+                const inactive = functions ? "Dim chosen As Long" : "Declare Function chosen() As Long";
+                assert.equal(at(inactive, inactive.indexOf("Long")), undefined, "inactive type spellings have no primitive receipt");
+                for (const [text, prefix, expected] of [["Dim aliased As NumberAlias", "Dim aliased As ", "type"],
+                    ["Dim macroValue As NumericType", "Dim macroValue As ", "macro"]]) {
+                    const entry = at(text, prefix.length);
+                    assert.equal(entry?.type, expected);
+                    assert.equal(Boolean(entry.modifiers & (1 << TOKEN_MODIFIERS.indexOf("defaultLibrary"))), false);
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+            if (process.env.FBC_EDITOR_EXECUTABLE) {
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(current.uri, new vscode.Range(current.positionAt(0), current.positionAt(source.length)),
+                    source.replace("Dim wide As Integer<128>", "Dim wide As Double"));
+                await applyEditAndWaitForDocuments(edit, [current]);
+                const updated = decode(await vscode.commands.executeCommand("vscode.provideDocumentSemanticTokens", current.uri));
+                const point = position(current, "Dim wide As Double", "Dim wide As ".length);
+                const primitive = updated.get(`${point.line}:${point.character}`);
+                assert.equal(primitive?.type, "type");
+                assert.equal(primitive.length, "Double".length, "the old Integer token must not survive the unsaved edit");
+                assert.ok(primitive.modifiers & (1 << TOKEN_MODIFIERS.indexOf("defaultLibrary")));
+                const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri,
+                    position(current, "Dim wide As Double", "Dim wide As ".length + 1));
+                const contents = hovers?.flatMap((hover) => hover.contents.map((content) => content.value || "")).join("\n") || "";
+                assert.ok(contents.includes("Compiler-selected type: `double`."), contents);
+                assert.ok(contents.includes("`8 bytes`"), "the old 128-bit type layout must not survive the unsaved edit");
+                assert.equal(current.isDirty, true);
+                assert.equal(fs.readFileSync(sourcePath, "utf8"), source, "semantic highlighting must not save the changed type");
+            }
+        } finally {
+            if (current?.isDirty) {
+                await vscode.window.showTextDocument(current);
+                await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+            }
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("guarded argument constructors follow active compiler declarations, signatures, and hovers", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-guarded-constructors-"));
+        const filePath = path.join(directory, "main.bas"), headerPath = path.join(directory, "guarded.bi");
+        const header = fs.readFileSync(path.join(__dirname, "../fixtures/guarded-argument-constructors.bi"), "utf8");
+        const headerLines = header.split("\n");
+        const source = ['#include "guarded.bi"', "Declare Sub consumeGuarded(ByVal item As GuardedArgumentValue)",
+            "consumeGuarded(17)", "Dim argumentValue As Long", "consumeGuarded(argumentValue)", "consumeGuarded 17",
+            'consumeGuarded("text")', "Dim wholePtr As GuardedArgumentValue Ptr = New GuardedArgumentValue(17)",
+            'Dim textPtr As GuardedArgumentValue Ptr = New GuardedArgumentValue("text")',
+            "Dim wholeValue As GuardedArgumentValue = GuardedArgumentValue(23)",
+            'Dim textValue As GuardedArgumentValue = GuardedArgumentValue("other")',
+            "Namespace GuardedNames", "Type ValueAlias As GuardedArgumentValue", "End Namespace",
+            "Dim aliasedPtr As GuardedNames.ValueAlias Ptr = New GuardedNames.ValueAlias(29)",
+            "Dim aliasedValue As GuardedNames.ValueAlias = GuardedNames.ValueAlias(31)",
+            "Dim sourceValue As Long", "Dim fromValue As GuardedArgumentValue = GuardedArgumentValue(sourceValue)", ""].join("\n");
+        try {
+            fs.writeFileSync(filePath, source);
+            fs.writeFileSync(headerPath, header);
+            await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+            await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+            const version = current.version;
+            const expectConstructorFeatures = async (label, external, alternate) => {
+                const referenceLines = {
+                    Long: ["consumeGuarded(17)", "consumeGuarded(argumentValue)", "consumeGuarded 17",
+                        "GuardedArgumentValue(17)", "GuardedArgumentValue(23)", "GuardedNames.ValueAlias(29)",
+                        "GuardedNames.ValueAlias(31)", "GuardedArgumentValue(sourceValue)"].map((anchor) => position(current, anchor).line),
+                    String: ['consumeGuarded("text")', 'GuardedArgumentValue("text")',
+                        'GuardedArgumentValue("other")'].map((anchor) => position(current, anchor).line)
+                };
+                // References run before navigation and hints can warm metadata.
+                for (const [anchor, type] of [["GuardedArgumentValue(23)", "Long"],
+                    ["GuardedArgumentValue(17)", "Long"], ['GuardedArgumentValue("text")', "String"],
+                    ['GuardedArgumentValue("other")', "String"], ["GuardedNames.ValueAlias(29)", "Long"],
+                    ["GuardedNames.ValueAlias(31)", "Long"]]) {
+                    const selected = position(current, anchor, anchor.lastIndexOf(".") + 2);
+                    const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri, selected);
+                    const rootReferences = references.filter((entry) => entry.uri.fsPath === filePath);
+                    assert.deepEqual([...new Set(rootReferences.map((entry) => entry.range.start.line))].sort((a, b) => a - b),
+                        referenceLines[type], `${label}: references: ${anchor}`);
+                    const highlights = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", current.uri, selected);
+                    assert.deepEqual([...new Set(highlights.map((entry) => entry.range.start.line))].sort((a, b) => a - b),
+                        referenceLines[type], `${label}: highlights: ${anchor}`);
+                    assert.ok(highlights.some((entry) => entry.range.start.line === selected.line &&
+                        current.getText(entry.range) === anchor.slice(0, anchor.indexOf("(")).split(".").at(-1)),
+                        `${label}: constructor highlights must keep the terminal callee token`);
+                    for (const command of ["vscode.executeDefinitionProvider", "vscode.executeDeclarationProvider", "vscode.executeImplementationProvider"]) {
+                        const entries = await vscode.commands.executeCommand(command, current.uri,
+                            position(current, anchor, anchor.lastIndexOf(".") + 2));
+                        if (external && command === "vscode.executeImplementationProvider") {
+                            assert.deepEqual(entries, [], `${label}: ${command}: external constructor has no local body`);
+                        } else {
+                            const prototype = external || command === "vscode.executeDeclarationProvider";
+                            const pattern = prototype ? `^\\s*Declare Constructor\\(ByVal initial As ${type}\\)`
+                                : `^Constructor GuardedArgumentValue\\(ByVal initial As ${type}\\)`;
+                            const candidates = headerLines.flatMap((line, index) => new RegExp(pattern).test(line) ? [index] : []);
+                            assert.equal(entries.length, 1, `${label}: ${command}: ${anchor}`);
+                            assert.equal(entries[0].uri.fsPath, headerPath, label);
+                            assert.equal(entries[0].range.start.line, candidates[alternate ? 0 : 1], label);
+                        }
+                    }
+                    const hover = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri,
+                        position(current, anchor, anchor.lastIndexOf(".") + 2));
+                    const hoverText = (hover || []).flatMap((entry) => entry.contents.map((content) => content.value)).join("\n");
+                    assert.match(hoverText, new RegExp(`Constructor[^\\n]*ByVal initial As ${type}`, "i"), `${label}: ${anchor}`);
+                    assert.doesNotMatch(hoverText, new RegExp(`Constructor[^\\n]*ByVal initial As ${type === "Long" ? "String" : "Long"}`, "i"), label);
+                    const result = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, anchor, anchor.indexOf("(") + 1));
+                    assert.equal(result?.signatures.length, 1, `${label}: ${anchor}`);
+                    assert.match(result.signatures[0].label, new RegExp(`ByVal initial As ${type}`, "i"), label);
+                    assert.equal(result.activeSignature, 0, label);
+                    assert.equal(result.activeParameter, 0, label);
+                }
+                for (const [anchor, relative] of [["GuardedNames.ValueAlias(29)", 1],
+                    ["GuardedArgumentValue(sourceValue)", "GuardedArgumentValue(".length]]) {
+                    const hover = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri,
+                        position(current, anchor, relative));
+                    const hoverText = (hover || []).flatMap((entry) => entry.contents.map((content) => content.value)).join("\n");
+                    assert.doesNotMatch(hoverText, /Constructor[^\n]*ByVal initial/i,
+                        `${label}: qualifiers and argument values retain their own hovers`);
+                }
+            };
+            for (const bridge of [true, false]) for (const alternate of [false, true, false]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                await configuration.update("compiler.arguments", alternate ? ["-d", "ALTERNATE"] : [], vscode.ConfigurationTarget.Global);
+                await expectConstructorFeatures(`guarded, bridge=${bridge}, alternate=${alternate}`, false, alternate);
+                for (const [anchor, relative, type] of [["consumeGuarded(17)", "consumeGuarded(".length, "Long"],
+                    ["consumeGuarded 17", "consumeGuarded ".length, "Long"],
+                    ['consumeGuarded("text")', 'consumeGuarded("'.length, "String"]]) {
+                    const point = position(current, anchor, relative);
+                    for (const command of ["vscode.executeDefinitionProvider", "vscode.executeDeclarationProvider", "vscode.executeImplementationProvider"]) {
+                        const entries = await vscode.commands.executeCommand(command, current.uri, point);
+                        const label = `${command}, ${type}, bridge=${bridge}, alternate=${alternate}`;
+                        assert.equal(entries.length, 1, label);
+                        assert.equal(entries[0].uri.fsPath, headerPath, label);
+                        const declaration = command === "vscode.executeDeclarationProvider";
+                        const pattern = declaration ? `^\\s*Declare Constructor\\(ByVal initial As ${type}\\)`
+                            : `^Constructor GuardedArgumentValue\\(ByVal initial As ${type}\\)`;
+                        const candidates = headerLines.flatMap((line, index) => new RegExp(pattern).test(line) ? [index] : []);
+                        assert.equal(entries[0].range.start.line, candidates[alternate ? 0 : 1], label);
+                        assert.equal(headerLines[entries[0].range.start.line].slice(entries[0].range.start.character, entries[0].range.end.character),
+                            declaration ? "Constructor" : "GuardedArgumentValue", label);
+                    }
+                }
+                assert.equal(current.version, version, "build selection must not require a source edit");
+            }
+            const bodyStart = header.indexOf("\n#ifdef ALTERNATE\nConstructor");
+            assert.ok(bodyStart > 0);
+            fs.writeFileSync(headerPath, header.slice(0, bodyStart) + "\n#endif\n");
+            for (const bridge of [false, true]) for (const alternate of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                await configuration.update("compiler.arguments", alternate ? ["-d", "ALTERNATE"] : [], vscode.ConfigurationTarget.Global);
+                await expectConstructorFeatures(`external, bridge=${bridge}, alternate=${alternate}`, true, alternate);
+            }
+            assert.equal(vscode.workspace.textDocuments.some((document) => document.uri.fsPath === headerPath), false,
+                "native declaration mapping must not require an open header");
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(filePath, "utf8"), source);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project constructor references retain selected overloads across modules", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-project-constructors-"));
+        const filePath = path.join(directory, "main.bas"), otherPath = path.join(directory, "other.bas");
+        const headerPath = path.join(directory, "guarded.bi");
+        const guarded = fs.readFileSync(path.join(__dirname, "../fixtures/guarded-argument-constructors.bi"), "utf8");
+        const prototypeStart = guarded.indexOf("#ifdef ALTERNATE");
+        const prototypeEnd = guarded.indexOf("#endif", prototypeStart);
+        assert.ok(prototypeStart > 0 && prototypeEnd > prototypeStart);
+        // Shared prototypes join the distinct guarded bodies. Without a shared
+        // physical anchor, different build identities remain ambiguous.
+        const header = guarded.slice(0, prototypeStart) + "    Declare Constructor(ByVal initial As Long)\n" +
+            "    Declare Constructor(ByVal initial As String)\n" + guarded.slice(prototypeEnd + "#endif".length);
+        const source = ['#include "guarded.bi"', "Dim selectedValue As GuardedArgumentValue = GuardedArgumentValue(1)", ""].join("\n");
+        const other = ['#include "guarded.bi"', "Sub Other()",
+            "    Dim wholeValue As GuardedArgumentValue = GuardedArgumentValue(2)",
+            '    Dim textValue As GuardedArgumentValue = GuardedArgumentValue("x")', "End Sub", ""].join("\n");
+        try {
+            for (const [file, text] of [[filePath, source], [otherPath, other], [headerPath, header]]) fs.writeFileSync(file, text);
+            await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+            await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.projectContexts", [
+                { name: "constructors", modules: [filePath, otherPath] },
+                { name: "alternate", modules: [filePath, otherPath], arguments: ["-d", "ALTERNATE"] }
+            ], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.activeContext", { name: "constructors", module: filePath }, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+            await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri,
+                    position(current, "GuardedArgumentValue(1)", 1));
+                const otherSites = references.filter((entry) => entry.uri.fsPath === otherPath);
+                const callColumn = other.split("\n")[2].indexOf("GuardedArgumentValue(2)");
+                assert.ok(otherSites.some((entry) => entry.range.start.line === 2 && entry.range.start.character === callColumn &&
+                    entry.range.end.character === callColumn + "GuardedArgumentValue".length),
+                    `bridge=${bridge}: Find References must include the selected constructor call in the closed module`);
+                assert.ok(otherSites.every((entry) => entry.range.start.line === 2),
+                    "project constructor references must exclude the String overload");
+                const headerSites = references.filter((entry) => entry.uri.fsPath === headerPath);
+                assert.equal(headerSites.length, 3, "both configured guards join through their shared Long prototype");
+                assert.ok(headerSites.every((entry) => /Constructor[^\n]*ByVal initial As Long/i.test(
+                    header.split("\n")[entry.range.start.line])));
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === otherPath), false,
+                "cross-module references must not require opening the other root");
+            for (const [file, text] of [[filePath, source], [otherPath, other], [headerPath, header]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project destructor references retain native cleanup across modules", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-project-cleanup-"));
+        const headerPath = path.join(directory, "cleanup.bi"), implementationPath = path.join(directory, "implementation.bas");
+        const callerPath = path.join(directory, "caller.bas"), otherPath = path.join(directory, "other.bas");
+        const header = ["Type Managed", "    payload As Long", "    Declare Destructor()", "End Type",
+            "Type Unrelated", "    payload As Long", "    Declare Destructor()", "End Type", ""].join("\n");
+        const implementation = ['#include "cleanup.bi"', "Destructor Managed()", "End Destructor",
+            "Destructor Unrelated()", "End Destructor", ""].join("\n");
+        const caller = ['#include "cleanup.bi"', "Sub Caller()", "    Dim localValue As Managed", "End Sub",
+            "Sub UnrelatedCaller()", "    Dim unrelatedValue As Unrelated", "End Sub", ""].join("\n");
+        const other = ['#include "cleanup.bi"', "Sub Release()", "    Dim allocated As Managed Ptr = New Managed",
+            "    Delete allocated", "End Sub", "Sub ExplicitRelease(ByVal pointerValue As Managed Ptr)",
+            "    pointerValue->Destructor()", "End Sub", ""].join("\n");
+        const sources = [[headerPath, header], [implementationPath, implementation], [callerPath, caller], [otherPath, other]];
+        const keys = (entries) => entries.map((entry) => `${entry.uri.fsPath}:${entry.range.start.line}:` +
+            `${entry.range.start.character}:${entry.range.end.line}:${entry.range.end.character}`).sort();
+        try {
+            for (const [file, text] of sources) fs.writeFileSync(file, text);
+            await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+            await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.projectContexts", [{ name: "cleanup", modules: [implementationPath, callerPath, otherPath] }],
+                vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.activeContext", { name: "cleanup", module: callerPath }, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+            await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(headerPath));
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri,
+                    position(current, "Declare Destructor", "Declare ".length + 1));
+                assert.equal(references.filter((entry) => entry.uri.fsPath === headerPath).length, 1);
+                assert.equal(references.filter((entry) => entry.uri.fsPath === implementationPath).length, 1);
+                assert.deepEqual(references.filter((entry) => entry.uri.fsPath === callerPath).map((entry) => entry.range.start.line), [2],
+                    `bridge=${bridge}: unrelated cleanup must stay separate`);
+                assert.deepEqual(references.filter((entry) => entry.uri.fsPath === otherPath).map((entry) => entry.range.start.line), [3, 6],
+                    `bridge=${bridge}: closed-module DELETE and explicit calls must be included`);
+                await configuration.update("analysis.activeContext", { name: "cleanup", module: otherPath }, vscode.ConfigurationTarget.Global);
+                const otherDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(otherPath));
+                const fromCall = await vscode.commands.executeCommand("vscode.executeReferenceProvider", otherDocument.uri,
+                    position(otherDocument, "Destructor()", 1));
+                assert.deepEqual(keys(fromCall), keys(references), "explicit destructor calls must select the same project family");
+            }
+            for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project operator references and incoming hierarchy retain selected binary and index overloads", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-project-operators-"));
+        const headerPath = path.join(directory, "operators.bi"), implementationPath = path.join(directory, "implementation.bas");
+        const callerPath = path.join(directory, "caller.bas"), otherPath = path.join(directory, "other.bas");
+        const header = ["Type ProjectValue", "    value As Long", "    Declare Operator [](ByVal index As Long) As Long",
+            "    Declare Operator [](ByVal index As Double) As Long", "End Type",
+            "Declare Operator +(ByRef item As ProjectValue, ByVal amount As Long) As Long",
+            "Declare Operator +(ByRef item As ProjectValue, ByVal amount As Double) As Long", ""].join("\n");
+        const implementation = ['#include "operators.bi"', "Operator ProjectValue.[](ByVal index As Long) As Long",
+            "    Return index", "End Operator", "Operator ProjectValue.[](ByVal index As Double) As Long",
+            "    Return CLng(index)", "End Operator", "Operator +(ByRef item As ProjectValue, ByVal amount As Long) As Long",
+            "    Return amount", "End Operator", "Operator +(ByRef item As ProjectValue, ByVal amount As Double) As Long",
+            "    Return CLng(amount)", "End Operator", ""].join("\n");
+        const moduleText = (name) => ['#include "operators.bi"', `Sub ${name}()`, "    Dim item As ProjectValue",
+            "    Print item + CDbl(1)", "    Print item + CLng(2)", "    Print item[CDbl(3)]", "    Print item[CLng(4)]",
+            "End Sub", ""].join("\n");
+        const caller = moduleText("Caller");
+        const other = ['#include "operators.bi"', "#ifdef ALTERNATE", "Sub ActiveOther()", "#else", "Sub InactiveOther()", "#endif",
+            "    Dim item As ProjectValue", "    Print item + CDbl(1)", "    Print item + CLng(2)", "    Print item[CDbl(3)]",
+            "    Print item[CLng(4)]", "End Sub", "Dim sharedItem As ProjectValue", "Print sharedItem + CDbl(8)",
+            "Print sharedItem[CDbl(9)]", ""].join("\n");
+        const sources = [[headerPath, header], [implementationPath, implementation], [callerPath, caller], [otherPath, other]];
+        try {
+            for (const [file, text] of sources) fs.writeFileSync(file, text);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "operators", modules: [implementationPath, callerPath, otherPath], arguments: ["-d", "ALTERNATE"] }]],
+                ["analysis.activeContext", { name: "operators", module: callerPath }], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+            const headerDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(headerPath));
+            let expandedOther = false;
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const [anchor, relative, line, declarationLine, bodyLine, otherLine, moduleLine] of [
+                    ["item[CDbl(3)]", "item[CDbl(3)".length, 5, 3, 4, 9, 14], ["item + CDbl(1)", "item ".length, 3, 6, 10, 7, 13]
+                ]) {
+                    const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri,
+                        position(current, anchor, relative));
+                    const actual = references.map((entry) => `${entry.uri.fsPath}:${entry.range.start.line}`).sort();
+                    const expected = [[headerPath, declarationLine], [implementationPath, bodyLine], [callerPath, line],
+                        [otherPath, otherLine], [otherPath, moduleLine]]
+                        .map(([file, line]) => `${file}:${line}`).sort();
+                    assert.deepEqual(actual, expected, `bridge=${bridge}: ${anchor}: project references must keep the selected Double overload: ${JSON.stringify(actual)}`);
+                    const highlights = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", current.uri,
+                        position(current, anchor, relative));
+                    assert.deepEqual(highlights.map((entry) => entry.range.start.line), [line], "highlights remain local to this document");
+                    const declarationText = headerDocument.lineAt(declarationLine).text;
+                    const items = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", headerDocument.uri,
+                        new vscode.Position(declarationLine, declarationText.indexOf(anchor.includes("[") ? "[]" : "+")));
+                    assert.equal(items.length, 1, `bridge=${bridge}: the selected operator prototype must prepare`);
+                    const incoming = await vscode.commands.executeCommand("vscode.provideIncomingCalls", items[0]);
+                    assert.deepEqual(incoming.map((call) => [call.from.name, path.basename(call.from.uri.fsPath),
+                        call.fromRanges.map((range) => range.start.line)]).sort(),
+                    [["Caller", "caller.bas", [line]], ["ActiveOther", "other.bas", [otherLine]],
+                        ["other.bas", "other.bas", [moduleLine]]].sort(),
+                    `bridge=${bridge}: native operator ownership must retain closed callers and exclude inactive headers`);
+                    assert.equal(incoming.find((call) => call.from.name === "ActiveOther").from.selectionRange.start.line, 2);
+                    if (!expandedOther) assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === otherPath), false,
+                        "operator references and incoming lookup must not require opening another module");
+                    const activeCaller = incoming.find((call) => call.from.name === "ActiveOther");
+                    const visible = vscode.window.activeTextEditor;
+                    const outgoing = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", activeCaller.from);
+                    expandedOther = true;
+                    assert.equal(vscode.window.activeTextEditor, visible, "expanding a closed caller must not show its document");
+                    const selectedOperator = outgoing.filter((call) => call.to.uri.fsPath === headerPath &&
+                        call.to.selectionRange.start.line === declarationLine);
+                    assert.deepEqual(selectedOperator.map((call) => call.fromRanges.map((range) => range.start.line)), [[otherLine]],
+                        `bridge=${bridge}: a native conditional operator caller must expand back to its selected callee; targets: ` +
+                        outgoing.map((call) => `${call.to.detail}@${call.to.uri}:${call.to.selectionRange.start.line}`).join(" | "));
+                    const returning = await vscode.commands.executeCommand("vscode.provideIncomingCalls", selectedOperator[0].to);
+                    assert.ok(returning.some((call) => call.from.name === "ActiveOther"),
+                        `bridge=${bridge}: an outgoing operator target must retain its incoming hierarchy; ` +
+                        `outgoing=${selectedOperator[0].to.detail}, prepared=${items[0].detail}`);
+                }
+            }
+            for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project procedure references retain macro overloads and unsaved header changes", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run", "analysis.timeoutMs",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-procedure-references-"));
+        const headerPath = path.join(directory, "api.bi"), callerPath = path.join(directory, "caller.bas");
+        const otherPath = path.join(directory, "other.bas");
+        const header = "Declare Function Work Overload(ByVal value As Long) As Long\n" +
+            "Declare Function Work Overload(ByVal value As Double) As Long\n#define UseWork(value) Work(value)\n";
+        const caller = ['#include "api.bi"', "Sub Caller()", "    Print UseWork(CLng(1))", "    Print Work(CLng(9))",
+            "End Sub", "Sub QueryOnly()", "    Dim query As TypeOf(UseWork(CLng(2)))", "End Sub", ""].join("\n");
+        const other = '#include "api.bi"\nPrint UseWork(CDbl(3))\n';
+        const sources = [[headerPath, header], [callerPath, caller], [otherPath, other]];
+        let headerDocument;
+        try {
+            for (const [file, text] of sources) fs.writeFileSync(file, text);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "procedure-references", modules: [callerPath, otherPath] }]],
+                ["analysis.activeContext", { name: "procedure-references", module: callerPath }], ["analysis.run", "onDemand"],
+                ["analysis.timeoutMs", 120000], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+            headerDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(headerPath));
+            const locations = (references) => references.map((entry) => `${entry.uri.fsPath}:${entry.range.start.line}`).sort();
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const [line, expected] of [[0, [`${headerPath}:0`, `${callerPath}:2`, `${callerPath}:3`, `${callerPath}:6`]],
+                [1, [`${headerPath}:1`, `${otherPath}:1`]]]) {
+                    const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", headerDocument.uri,
+                        new vscode.Position(line, headerDocument.lineAt(line).text.indexOf("Work")));
+                    assert.deepEqual(locations(references), expected.sort(),
+                        `bridge=${bridge}, header ${line}: selected macro uses, including TYPEOF, must retain their overload`);
+                }
+                assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === otherPath), false);
+                if (!bridge) continue; // Stock sidecars require saved inputs.
+                const edit = new vscode.WorkspaceEdit(), start = position(headerDocument,
+                    "#define UseWork(value) Work(value)", "#define UseWork(value) ".length);
+                edit.replace(headerDocument.uri, new vscode.Range(start, start.translate(0, "Work(value)".length)), "Work(CDbl(value))");
+                await applyEditAndWaitForDocuments(edit, [headerDocument]);
+                assert.equal(headerDocument.isDirty, true);
+                for (const [line, expected] of [[0, [`${headerPath}:0`, `${callerPath}:3`]],
+                [1, [`${headerPath}:1`, `${callerPath}:2`, `${callerPath}:6`, `${otherPath}:1`]]]) {
+                    const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", headerDocument.uri,
+                        new vscode.Position(line, headerDocument.lineAt(line).text.indexOf("Work")));
+                    assert.deepEqual(locations(references), expected.sort(), "unsaved macro edits must move references to the selected overload");
+                }
+            }
+            for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            if (headerDocument?.isDirty) {
+                await vscode.window.showTextDocument(headerDocument);
+                await vscode.commands.executeCommand("workbench.action.files.revert");
+            }
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project memory operator references include macro uses and unsaved changes", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run", "analysis.timeoutMs",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-memory-references-"));
+        const headerPath = path.join(directory, "memory.bi"), callerPath = path.join(directory, "caller.bas");
+        const otherPath = path.join(directory, "other.bas");
+        const header = ["Type MemoryValue", "    value As Long", "    Declare Operator New(ByVal bytes As UInteger) As Any Ptr",
+            "    Declare Operator New[](ByVal bytes As UInteger) As Any Ptr", "End Type",
+            "Operator MemoryValue.New(ByVal bytes As UInteger) As Any Ptr", "    Return Allocate(bytes)", "End Operator",
+            "Operator MemoryValue.New[](ByVal bytes As UInteger) As Any Ptr", "    Return Allocate(bytes)", "End Operator",
+            "#macro MakeMemory()", "    Dim scalar As MemoryValue Ptr = New MemoryValue",
+            "    Dim vector As MemoryValue Ptr = New MemoryValue[2]", "#endmacro", ""].join("\n");
+        const caller = '#include "memory.bi"\nSub Caller()\n    MakeMemory()\nEnd Sub\n';
+        const other = '#include "memory.bi"\nSub Other()\n    MakeMemory()\nEnd Sub\n';
+        const sources = [[headerPath, header], [callerPath, caller], [otherPath, other]];
+        let current;
+        try {
+            for (const [file, text] of sources) fs.writeFileSync(file, text);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "memory", modules: [callerPath, otherPath] }]],
+                ["analysis.activeContext", { name: "memory", module: callerPath }], ["analysis.run", "onDemand"],
+                // This isolated profile shares the host with long-running decryption jobs.
+                ["analysis.timeoutMs", 120000], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+            const headerDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(headerPath));
+            const referenceLines = (references) => references.map((entry) => `${entry.uri.fsPath}:${entry.range.start.line}`).sort();
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const [line, body] of [[2, 5], [3, 8]]) {
+                    const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", headerDocument.uri,
+                        new vscode.Position(line, headerDocument.lineAt(line).text.indexOf("New")));
+                    assert.deepEqual(referenceLines(references), [`${headerPath}:${line}`, `${headerPath}:${body}`, `${callerPath}:2`, `${otherPath}:2`].sort(),
+                        `bridge=${bridge}, operator line=${line}: each selected allocator must retain its shared macro invocation; got ${JSON.stringify(referenceLines(references))}`);
+                }
+                assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === otherPath), false,
+                    "Find References must include closed modules without opening them");
+                // Stock sidecars accept saved inputs; dirty roots require the bridge.
+                if (!bridge) continue;
+                const edit = new vscode.WorkspaceEdit();
+                const start = position(current, "MakeMemory()");
+                edit.replace(current.uri, new vscode.Range(start, start.translate(0, "MakeMemory()".length)), "Var builtin = New Integer");
+                await applyEditAndWaitForDocuments(edit, [current]);
+                assert.equal(current.isDirty, true);
+                for (const [line, body] of [[2, 5], [3, 8]]) {
+                    const updated = await vscode.commands.executeCommand("vscode.executeReferenceProvider", headerDocument.uri,
+                        new vscode.Position(line, headerDocument.lineAt(line).text.indexOf("New")));
+                    assert.deepEqual(referenceLines(updated), [`${headerPath}:${line}`, `${headerPath}:${body}`, `${otherPath}:2`].sort(),
+                        `bridge=${bridge}, operator line=${line}: unsaved builtin allocation must remove both custom allocator references`);
+                }
+                await vscode.window.showTextDocument(current);
+                await vscode.commands.executeCommand("workbench.action.files.revert");
+            }
+            for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            if (current?.isDirty) {
+                await vscode.window.showTextDocument(current);
+                await vscode.commands.executeCommand("workbench.action.files.revert");
+            }
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project operator navigation follows the active guarded implementation", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-operator-navigation-"));
+        const headerPath = path.join(directory, "navigation.bi"), implementationPath = path.join(directory, "implementation.bas");
+        const callerPath = path.join(directory, "caller.bas");
+        const header = ["Type NavigationValue", "    value As Long", "    Declare Operator [](ByVal index As Double) As Long", "End Type",
+            "Declare Operator +(ByRef item As NavigationValue, ByVal amount As Long) As Long",
+            "Declare Operator +(ByRef item As NavigationValue, ByVal amount As Double) As Long", ""].join("\n");
+        const binary = "Operator +(ByRef item As NavigationValue, ByVal amount As Double) As Long";
+        const indexed = "Operator NavigationValue.[](ByVal index As Double) As Long";
+        const implementation = ['#include "navigation.bi"', "Operator +(ByRef item As NavigationValue, ByVal amount As Long) As Long",
+            "    Return amount", "End Operator", "#ifdef ALTERNATE", binary, "    Return CLng(amount) + 1", "End Operator",
+            indexed, "    Return CLng(index) + 1", "End Operator", "#else", binary, "    Return CLng(amount)", "End Operator",
+            indexed, "    Return CLng(index)", "End Operator", "#endif", ""].join("\n");
+        const caller = '#include "navigation.bi"\nSub Caller()\nDim item As NavigationValue\nPrint item + CDbl(1)\nPrint item[CDbl(2)]\nEnd Sub\n';
+        const sources = [[headerPath, header], [implementationPath, implementation], [callerPath, caller]];
+        const bodyLine = (spelling, alternate) => implementation.split("\n").flatMap((line, index) => line === spelling ? [index] : [])[alternate ? 0 : 1];
+        try {
+            for (const [file, text] of sources) fs.writeFileSync(file, text);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "normal", modules: [callerPath, implementationPath] },
+                    { name: "alternate", modules: [callerPath, implementationPath], arguments: ["-d", "ALTERNATE"] }]],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+            const version = current.version;
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const alternate of [false, true]) {
+                    await configuration.update("analysis.activeContext", { name: alternate ? "alternate" : "normal", module: callerPath },
+                        vscode.ConfigurationTarget.Global);
+                    for (const [anchor, relative, spelling, prototype] of [["item + CDbl(1)", "item ".length, binary, 5],
+                        ["item[CDbl(2)]", "item[CDbl(2)".length, indexed, 2]]) {
+                        for (const command of ["vscode.executeDefinitionProvider", "vscode.executeDeclarationProvider", "vscode.executeImplementationProvider"]) {
+                            const entries = await vscode.commands.executeCommand(command, current.uri, position(current, anchor, relative));
+                            const declaration = command === "vscode.executeDeclarationProvider";
+                            const expected = [[declaration ? headerPath : implementationPath, declaration ? prototype : bodyLine(spelling, alternate)]];
+                            assert.deepEqual(entries.map((entry) => [entry.uri.fsPath, entry.range.start.line]), expected,
+                                `${command}, bridge=${bridge}, alternate=${alternate}, ${anchor}: only the active selected overload may be returned`);
+                        }
+                    }
+                }
+            }
+            assert.equal(current.version, version, "changing builds must not require an editor-buffer edit");
+            assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === implementationPath), false,
+                "operator implementation navigation must work without opening its source file");
+            for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project lifetime navigation follows selected guarded constructors and destructors", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-lifetime-navigation-"));
+        const headerPath = path.join(directory, "lifetime.bi"), implementationPath = path.join(directory, "implementation.bas");
+        const callerPath = path.join(directory, "caller.bas");
+        const header = ["Type LifetimeValue", "    value As Long", "    Declare Constructor(ByVal amount As Long)",
+            "    Declare Constructor(ByVal amount As String)", "    Declare Destructor()", "End Type", ""].join("\n");
+        const numeric = "Constructor LifetimeValue(ByVal amount As Long)", destructor = "Destructor LifetimeValue()";
+        const branch = (alternate) => [numeric, `    value = amount + ${alternate ? 1 : 0}`, "End Constructor",
+            "Constructor LifetimeValue(ByVal amount As String)", "    value = Len(amount)", "End Constructor", destructor, "End Destructor"];
+        const implementation = ['#include "lifetime.bi"', "#ifdef ALTERNATE", ...branch(true), "#else", ...branch(false), "#endif", ""].join("\n");
+        const caller = ['#include "lifetime.bi"', "Sub Consume(ByVal item As LifetimeValue)", "End Sub", "Namespace LifetimeNames",
+            "Type AliasValue As LifetimeValue", "End Namespace", "Dim value As LifetimeValue = LifetimeNames.AliasValue(17)",
+            "Dim allocated As LifetimeValue Ptr = New LifetimeNames.AliasValue(18)", "Consume(19)",
+            "Dim typed As LifetimeValue = Type<LifetimeNames.AliasValue>(20)", ""].join("\n");
+        const sources = [[headerPath, header], [implementationPath, implementation], [callerPath, caller]];
+        const bodyLine = (spelling, alternate) => implementation.split("\n").flatMap((line, index) => line === spelling ? [index] : [])[alternate ? 0 : 1];
+        try {
+            for (const [file, text] of sources) fs.writeFileSync(file, text);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "normal", modules: [callerPath, implementationPath] },
+                    { name: "alternate", modules: [callerPath, implementationPath], arguments: ["-d", "ALTERNATE"] }]],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+            const version = current.version;
+            const included = await vscode.workspace.openTextDocument(vscode.Uri.file(headerPath));
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const alternate of [false, true]) {
+                    await configuration.update("analysis.activeContext", { name: alternate ? "alternate" : "normal", module: callerPath }, vscode.ConfigurationTarget.Global);
+                    const probes = [
+                        ["vscode.executeDefinitionProvider", current, "LifetimeNames.AliasValue(17)", "LifetimeNames.".length + 1, implementationPath, bodyLine(numeric, alternate)],
+                        ["vscode.executeDefinitionProvider", current, "Type<LifetimeNames.AliasValue>(20)", 1, implementationPath, bodyLine(numeric, alternate)],
+                        ["vscode.executeImplementationProvider", current, "Type<LifetimeNames.AliasValue>(20)", 1, implementationPath, bodyLine(numeric, alternate)],
+                        ["vscode.executeDeclarationProvider", current, "Type<LifetimeNames.AliasValue>(20)", 1, headerPath, 2],
+                        ["vscode.executeImplementationProvider", included, "Declare Destructor", "Declare ".length + 1, implementationPath, bodyLine(destructor, alternate)],
+                        ...(!alternate ? [
+                            ["vscode.executeImplementationProvider", current, "LifetimeNames.AliasValue(18)", "LifetimeNames.".length + 1, implementationPath, bodyLine(numeric, false)],
+                            ["vscode.executeDefinitionProvider", current, "Consume(19)", "Consume(".length, implementationPath, bodyLine(numeric, false)],
+                            ["vscode.executeDeclarationProvider", current, "LifetimeNames.AliasValue(17)", "LifetimeNames.".length + 1, headerPath, 2],
+                            ["vscode.executeDefinitionProvider", current, "LifetimeNames.AliasValue(17)", 1, callerPath, 3]
+                        ] : [])
+                    ];
+                    for (const [command, target, anchor, relative, file, line] of probes) {
+                        const entries = await vscode.commands.executeCommand(command, target.uri, position(target, anchor, relative));
+                        const actual = entries.map((entry) => [entry.uri.fsPath, entry.range.start.line]);
+                        assert.deepEqual(actual, [[file, line]],
+                            `${command}, bridge=${bridge}, alternate=${alternate}, ${anchor}: ${JSON.stringify(actual)}`);
+                    }
+                }
+            }
+            assert.equal(current.version, version, "build changes must not require an editor-buffer edit");
+            assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === implementationPath), false,
+                "lifetime navigation must not require an open implementation");
+            for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("ordinary project navigation follows only the active guarded function", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-active-function-"));
+        const headerPath = path.join(directory, "api.bi"), implementationPath = path.join(directory, "implementation.bas");
+        const callerPath = path.join(directory, "caller.bas");
+        const header = "Declare Function AdjustValue(ByVal value As Long) As Long\n";
+        const implementation = ['#include "api.bi"', "#ifdef ALTERNATE", "Function AdjustValue(ByVal value As Long) As Long",
+            "    Return value + 1", "End Function", "#else", "Function AdjustValue(ByVal value As Long) As Long",
+            "    Return value", "End Function", "#endif", ""].join("\n");
+        const caller = '#include "api.bi"\nPrint AdjustValue(1)\n';
+        const sources = [[headerPath, header], [implementationPath, implementation], [callerPath, caller]];
+        try {
+            for (const [file, text] of sources) fs.writeFileSync(file, text);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "normal", modules: [callerPath, implementationPath] },
+                    { name: "alternate", modules: [callerPath, implementationPath], arguments: ["-d", "ALTERNATE"] }]],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+            const version = current.version;
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const alternate of [false, true]) {
+                    await configuration.update("analysis.activeContext", { name: alternate ? "alternate" : "normal", module: callerPath }, vscode.ConfigurationTarget.Global);
+                    for (const command of ["vscode.executeDefinitionProvider", "vscode.executeDeclarationProvider", "vscode.executeImplementationProvider"]) {
+                        const locations = await vscode.commands.executeCommand(command, current.uri, position(current, "AdjustValue", 1));
+                        const declaration = command === "vscode.executeDeclarationProvider";
+                        assert.deepEqual(locations.map((entry) => [entry.uri.fsPath, entry.range.start.line]),
+                            [[declaration ? headerPath : implementationPath, declaration ? 0 : alternate ? 2 : 6]],
+                            `${command}, bridge=${bridge}, alternate=${alternate}: an inactive body must not be returned`);
+                    }
+                }
+            }
+            assert.equal(current.version, version);
+            assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === implementationPath), false);
+            for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("native virtual implementations follow descendants while definitions stay static", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-virtual-implementations-"));
+        const filePath = path.join(directory, "main.bas");
+        const lines = ["Type BasePicker Extends Object", "    Declare Virtual Function Pick(ByVal value As Long) As Long", "End Type",
+            "Type ChildPicker Extends BasePicker", "    Declare Virtual Function Pick(ByVal value As Long) As Long Override", "End Type",
+            "Type LeafPicker Extends ChildPicker", "    Declare Function Pick(ByVal value As Long) As Long Override", "End Type",
+            "Type UnrelatedPicker Extends Object", "    Declare Virtual Function Pick(ByVal value As Long) As Long", "End Type"];
+        const bodyLines = [];
+        for (const owner of ["BasePicker", "ChildPicker", "LeafPicker", "UnrelatedPicker"]) {
+            bodyLines.push(lines.length);
+            lines.push(`Function ${owner}.Pick(ByVal value As Long) As Long`, "    Return value", "End Function");
+        }
+        const source = lines.join("\n") + "\n";
+        try {
+            fs.writeFileSync(filePath, source);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", []], ["analysis.activeContext", null], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const [line, expected] of [[1, bodyLines.slice(0, 3)], [4, bodyLines.slice(1, 3)], [10, [bodyLines[3]]]]) {
+                    const point = new vscode.Position(line, lines[line].indexOf("Pick") + 1);
+                    const locations = await vscode.commands.executeCommand("vscode.executeImplementationProvider", current.uri, point);
+                    assert.deepEqual(locations.map((entry) => entry.range.start.line).sort((a, b) => a - b), expected,
+                        `bridge=${bridge}: virtual implementations must follow native descendants, not same-name methods`);
+                }
+                const point = new vscode.Position(1, lines[1].indexOf("Pick") + 1);
+                for (const [command, expected] of [["vscode.executeDefinitionProvider", bodyLines[0]], ["vscode.executeDeclarationProvider", 1]]) {
+                    const locations = await vscode.commands.executeCommand(command, current.uri, point);
+                    assert.deepEqual(locations.map((entry) => entry.range.start.line), [expected],
+                        "ordinary navigation retains the statically selected method");
+                }
+                const editor = await vscode.window.showTextDocument(current);
+                const leaf = new vscode.Position(7, lines[7].indexOf("Pick") + 1);
+                editor.selection = new vscode.Selection(leaf, leaf);
+                for (const expected of [bodyLines[1], bodyLines[0]]) {
+                    let listener, timeout;
+                    const moved = new Promise((resolve, reject) => {
+                        listener = vscode.window.onDidChangeTextEditorSelection((event) => {
+                            if (event.textEditor.document.uri.toString() === current.uri.toString() &&
+                                event.selections[0]?.start.line === expected) resolve();
+                        });
+                        timeout = setTimeout(() => reject(new Error(
+                            `Go to Base Method did not reach line ${expected}; selection=${JSON.stringify(vscode.window.activeTextEditor?.selection)}`
+                        )), DOCUMENT_CHANGE_TIMEOUT_MS);
+                    });
+                    try {
+                        await vscode.commands.executeCommand("freebasic.goToBaseMethod");
+                        await moved;
+                    } finally {
+                        listener.dispose();
+                        clearTimeout(timeout);
+                    }
+                    const active = vscode.window.activeTextEditor;
+                    assert.equal(active?.document.uri.toString(), current.uri.toString());
+                    assert.deepEqual([active.selection.start.line, active.selection.start.character],
+                        [expected, lines[expected].lastIndexOf("Pick")],
+                        `bridge=${bridge}: Go to Base Method must select the immediate base's terminal method name, got ${JSON.stringify(active.selection)}`);
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(filePath, "utf8"), source);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("qualified project navigation retains native terminal-name targets", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-qualified-navigation-"));
+        const headerPath = path.join(directory, "api.bi"), implementationPath = path.join(directory, "implementation.bas");
+        const callerPath = path.join(directory, "caller.bas");
+        const header = ["Namespace Api", "Declare Function Adjust Overload(ByVal value As Long) As Long",
+            "Declare Function Adjust Overload(ByVal value As Double) As Long", "Type Worker", "    value As Long",
+            "    Declare Function Adjust(ByVal value As Long) As Long", "End Type", "End Namespace",
+            "Namespace Other", "Declare Function Adjust(ByVal value As Long) As Long", "End Namespace", ""].join("\n");
+        const signatures = ["Api.Adjust(ByVal value As Long)", "Api.Adjust(ByVal value As Double)",
+            "Api.Worker.Adjust(ByVal value As Long)", "Other.Adjust(ByVal value As Long)"];
+        const implementation = ['#include "api.bi"', ...signatures.flatMap((signature) =>
+            [`Function ${signature} As Long`, "    Return CLng(value)", "End Function"]), ""].join("\n");
+        const caller = '#include "api.bi"\nPrint Api.Adjust(CLng(1))\nDim item As Api.Worker\nPrint item.Adjust(2)\n';
+        const sources = [[headerPath, header], [implementationPath, implementation], [callerPath, caller]];
+        try {
+            for (const [file, text] of sources) fs.writeFileSync(file, text);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "qualified", modules: [callerPath, implementationPath] }]],
+                ["analysis.activeContext", { name: "qualified", module: callerPath }], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const [anchor, prototype, body] of [["Api.Adjust", 1, 1], ["item.Adjust", 5, 7]]) {
+                    for (const command of ["vscode.executeDefinitionProvider", "vscode.executeDeclarationProvider", "vscode.executeImplementationProvider"]) {
+                        const locations = await vscode.commands.executeCommand(command, current.uri, position(current, anchor, anchor.indexOf("Adjust") + 1));
+                        const declaration = command === "vscode.executeDeclarationProvider";
+                        const line = declaration ? prototype : body;
+                        const column = (declaration ? header : implementation).split("\n")[line].indexOf("Adjust");
+                        assert.deepEqual(locations.map((entry) => [entry.uri.fsPath, entry.range.start.line,
+                            entry.range.start.character, entry.range.end.character]),
+                        [[declaration ? headerPath : implementationPath, line, column, column + "Adjust".length]],
+                        `${command}, bridge=${bridge}, ${anchor}: only the selected terminal name may be targeted`);
+                    }
+                }
+            }
+            assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === implementationPath), false);
+            for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project virtual implementations follow closed active-build override bodies", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-project-overrides-"));
+        const headerPath = path.join(directory, "api.bi"), implementationPath = path.join(directory, "implementation.bas");
+        const callerPath = path.join(directory, "caller.bas");
+        const header = ["Type BasePicker Extends Object", "Declare Virtual Function Pick(ByVal value As Long) As Long", "End Type",
+            "Type ChildPicker Extends BasePicker", "Declare Virtual Function Pick(ByVal value As Long) As Long Override", "End Type",
+            "Type LeafPicker Extends ChildPicker", "Declare Function Pick(ByVal value As Long) As Long Override", "End Type",
+            "Type UnrelatedPicker Extends Object", "Declare Virtual Function Pick(ByVal value As Long) As Long", "End Type", ""].join("\n");
+        const caller = ['#include "api.bi"', "Function BasePicker.Pick(ByVal value As Long) As Long", "Return value", "End Function",
+            "Dim basePointer As BasePicker Ptr", "Print basePointer->Pick(1)", "Dim childPointer As ChildPicker Ptr", "Print childPointer->Pick(2)",
+            "Dim leafPointer As LeafPicker Ptr", "Print leafPointer->Pick(3)", ""].join("\n");
+        const implementation = ['#include "api.bi"', "#ifdef ALTERNATE", "Function ChildPicker.Pick(ByVal value As Long) As Long", "Return value + 1", "End Function",
+            "#else", "Function ChildPicker.Pick(ByVal value As Long) As Long", "Return value", "End Function", "#endif",
+            "Function LeafPicker.Pick(ByVal value As Long) As Long", "Return value", "End Function",
+            "Function UnrelatedPicker.Pick(ByVal value As Long) As Long", "Return value", "End Function", ""].join("\n");
+        const sources = [[headerPath, header], [implementationPath, implementation], [callerPath, caller]];
+        const keys = (values) => values.map((entry) => JSON.stringify(entry)).sort();
+        try {
+            for (const [file, text] of sources) fs.writeFileSync(file, text);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "normal", modules: [callerPath, implementationPath] },
+                    { name: "alternate", modules: [callerPath, implementationPath], arguments: ["-d", "ALTERNATE"] }]],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const alternate of [false, true]) {
+                    await configuration.update("analysis.activeContext", { name: alternate ? "alternate" : "normal", module: callerPath }, vscode.ConfigurationTarget.Global);
+                    const childLine = alternate ? 2 : 6;
+                    for (const [anchor, expected] of [["basePointer->Pick", [[callerPath, 1], [implementationPath, childLine], [implementationPath, 10]]],
+                        ["childPointer->Pick", [[implementationPath, childLine], [implementationPath, 10]]]]) {
+                        const locations = await vscode.commands.executeCommand("vscode.executeImplementationProvider", current.uri,
+                            position(current, anchor, anchor.indexOf("Pick") + 1));
+                        const actual = locations.map((entry) => [entry.uri.fsPath, entry.range.start.line]);
+                        assert.deepEqual(keys(actual), keys(expected), `bridge=${bridge}, alternate=${alternate}, ${anchor}: ${JSON.stringify(actual)}`);
+                    }
+                    if (!alternate) for (const [command, expected] of [["vscode.executeDefinitionProvider", [callerPath, 1]],
+                        ["vscode.executeDeclarationProvider", [headerPath, 1]]]) {
+                        const locations = await vscode.commands.executeCommand(command, current.uri, position(current, "basePointer->Pick", "basePointer->".length + 1));
+                        assert.deepEqual(locations.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [expected]);
+                    }
+                }
+            }
+            assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === implementationPath), false);
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const alternate of [false, true]) {
+                    await configuration.update("analysis.activeContext", { name: alternate ? "alternate" : "normal", module: callerPath }, vscode.ConfigurationTarget.Global);
+                    const editor = await vscode.window.showTextDocument(current);
+                    const point = position(current, "leafPointer->Pick", "leafPointer->".length + 1);
+                    editor.selection = new vscode.Selection(point, point);
+                    const expected = alternate ? 2 : 6;
+                    let listener, timeout;
+                    const moved = new Promise((resolve) => {
+                        listener = vscode.window.onDidChangeTextEditorSelection((event) => {
+                            if (event.textEditor.document.uri.fsPath === implementationPath && event.selections[0]?.start.line === expected) resolve();
+                        });
+                    });
+                    try {
+                        await vscode.commands.executeCommand("freebasic.goToBaseMethod");
+                        await Promise.race([moved, new Promise((_, reject) => {
+                            timeout = setTimeout(() => reject(new Error("Go to Base Method did not select its project body")), DOCUMENT_CHANGE_TIMEOUT_MS);
+                        })]);
+                        assert.equal(vscode.window.activeTextEditor.selection.start.character, implementation.split("\n")[expected].lastIndexOf("Pick"));
+                    } finally { listener.dispose(); clearTimeout(timeout); }
+                }
+            }
+            assert.equal(current.isDirty, false);
+            for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("native constructor argument navigation retains selected overloads", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const constructorUri = vscode.Uri.file(path.join(__dirname, "workspace/implicit-argument-constructor.bas"));
+        const current = await vscode.workspace.openTextDocument(constructorUri);
+        const original = current.getText();
+        try {
+            await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+            await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+            await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const [argument, typeName] of [["17", "Long"], ["2.5", "Double"]]) {
+                    const point = position(current, `takeArgument(${argument})`, "takeArgument(".length);
+                    for (const command of ["vscode.executeDefinitionProvider", "vscode.executeDeclarationProvider", "vscode.executeImplementationProvider"]) {
+                        const entries = await vscode.commands.executeCommand(command, constructorUri, point);
+                        const label = `${command}, ${typeName}, bridge=${bridge}`;
+                        assert.equal(entries.length, 1, label);
+                        assert.equal(entries[0].uri.toString(), constructorUri.toString(), label);
+                        const prefix = command === "vscode.executeDeclarationProvider" ? "Declare Constructor" : "Constructor ArgumentValue";
+                        assert.match(current.lineAt(entries[0].range.start.line).text,
+                            new RegExp(`^\\s*${prefix}\\(ByVal initial As ${typeName}\\)`, "i"), label);
+                    }
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(current.getText(), original);
+            assert.equal(fs.readFileSync(constructorUri.fsPath, "utf8"), original);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("native hover exposes declaration facts on first use", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-first-hover-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const source = ["Type HoverLayout", "    prefix As Byte", "    amount As Long", "End Type",
+            "Dim values(2 To 5, 1 To 3) As Long", "Dim instance As HoverLayout", "Sub InspectValue(ByVal valueCount As Long)",
+            "    Print valueCount", "End Sub", "InspectValue(values(2, 1))", "Print instance.amount", "Print 2 + 3",
+            "Namespace HoverStorage", "Dim Shared macroValue As Long", "End Namespace",
+            "#define HOVER_ALIAS HoverStorage.macroValue", "#define macroValue() HoverStorage.macroValue",
+            "Print HOVER_ALIAS", "Print macroValue()", "Const HOVER_ANSWER As ULongInt = 42",
+            "Enum HoverMode", "HOVER_FAST = 7", "End Enum", "Print HOVER_ANSWER, HOVER_FAST", ""].join("\n");
+        try {
+            fs.writeFileSync(sourcePath, source);
+            await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+            await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+            await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                // Keep this document inactive so background coloring cannot
+                // acquire bindings. Exercise an expression-only stock hover
+                // before declaration hovers request the layout metadata.
+                const expression = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri,
+                    position(current, "Print 2 + 3", "Print 2 ".length));
+                assert.match(expression.flatMap((hover) => hover.contents.map((content) => content.value || String(content))).join("\n"),
+                    /Compiler type: `[^`]+`/i, `bridge=${bridge}: the initial expression hover must retain native types`);
+                for (const [spelling, relative, expected] of [
+                    ["Dim values", "Dim ".length + 2, [/array bounds[^\n]*2 to 5[^\n]*1 to 3/i, /storage width[^\n]*4 bytes/i]],
+                    ["amount As Long", 2, [/field offset[^\n]*4 bytes/i]],
+                    ["Sub InspectValue(ByVal valueCount", "Sub InspectValue(ByVal ".length + 2, [/parameter passing: ByVal/i]],
+                    ["Type HoverLayout", "Type ".length + 2, [/aggregate layout[^\n]*8 bytes/i]]
+                ]) {
+                    const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri, position(current, spelling, relative));
+                    const text = hovers.flatMap((hover) => hover.contents.map((content) => content.value || String(content))).join("\n");
+                    for (const pattern of expected) assert.match(text, pattern, `bridge=${bridge}, ${spelling}`);
+                }
+                if (!bridge) for (const spelling of ["Print HOVER_ALIAS", "Print macroValue()"]) {
+                    const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri,
+                        position(current, spelling, "Print ".length + 1));
+                    const text = hovers.flatMap((hover) => hover.contents.map((content) => content.value || String(content))).join("\n");
+                    assert.match(text, /Compiler-selected macro signature:/i, spelling);
+                    assert.match(text, /HoverStorage\.macroValue/i, "cached data hover must not replace macro definitions");
+                }
+                if (!bridge) for (const [anchor, relative, value] of [["Const HOVER_ANSWER", "Const ".length + 2, "42"],
+                    ["Print HOVER_ANSWER", "Print ".length + 2, "42"], ["HOVER_FAST = 7", 2, "7"],
+                    ["Print HOVER_ANSWER, HOVER_FAST", "Print HOVER_ANSWER, ".length + 2, "7"]]) {
+                    const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri,
+                        position(current, anchor, relative));
+                    const text = hovers.flatMap((hover) => hover.contents.map((content) => content.value || String(content))).join("\n");
+                    assert.ok(text.includes(`Compiler constant value in this context: \`${value}\``),
+                        `${anchor}: symbol declarations and references must retain their native values`);
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("native occurrence queries retain references and read-write highlights", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-native-occurrences-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const source = ["#define OCCURRENCE_VALUE 42", "Dim sharedValue As Long", "sharedValue = OCCURRENCE_VALUE",
+            "sharedValue += 1", "Print sharedValue, OCCURRENCE_VALUE", ""].join("\n");
+        try {
+            fs.writeFileSync(sourcePath, source);
+            await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+            await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+            await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+            await vscode.window.showTextDocument(current);
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                assert.equal(await vscode.commands.executeCommand("freebasic.analyzeModule"), true);
+                for (const [name, point, lines] of [
+                    ["sharedValue", new vscode.Position(4, "Print ".length + 2), [1, 2, 3, 4]],
+                    ["OCCURRENCE_VALUE", new vscode.Position(2, "sharedValue = ".length + 2), [0, 2, 4]]
+                ]) {
+                    const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri, point);
+                    assert.ok(references.every((entry) => entry.uri.toString() === current.uri.toString()));
+                    assert.deepEqual(references.map((entry) => entry.range.start.line).sort((a, b) => a - b), lines, `${name}, bridge=${bridge}`);
+                    assert.ok(references.every((entry) => current.getText(entry.range) === name));
+                    const highlights = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", current.uri, point);
+                    assert.deepEqual(highlights.map((entry) => entry.range.start.line).sort((a, b) => a - b), lines, `${name}, bridge=${bridge}`);
+                    if (name === "sharedValue") {
+                        assert.deepEqual(highlights.filter((entry) => entry.kind === vscode.DocumentHighlightKind.Write)
+                            .map((entry) => entry.range.start.line).sort((a, b) => a - b), [2, 3],
+                            `bridge=${bridge}: ${JSON.stringify(highlights.map((entry) => [entry.range.start.line, entry.kind]))}`);
+                        assert.equal(highlights.find((entry) => entry.range.start.line === 4)?.kind, vscode.DocumentHighlightKind.Read, `bridge=${bridge}`);
+                    }
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
     if (process.env.FBC_EXECUTABLE) await check("stock NOKEYWORD highlighting preserves ordinary symbols", async () => {
         const configuration = vscode.workspace.getConfiguration("freebasic");
         const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
@@ -364,6 +2279,223 @@ async function run() {
             assert.equal(current.isDirty, false);
             assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
         } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE) await check("native NOKEYWORD type navigation preserves disabled identifiers", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-nokeyword-types-"));
+        const sourcePath = path.join(directory, "main.bas");
+        const uri = vscode.Uri.file(sourcePath);
+        let current;
+        const keywordDeclaration = "Declare Sub IF(ByVal amount As Long, ByVal scale As Double)";
+        const source = "\uFEFF" + ["#lang \"fblite\"", "#if 1", "Option NoKeyword REM, IF, Abs", "#endif",
+            "Type KeywordPayload", "    value As Long", "End Type",
+            "Declare Sub Work(ByVal amount As Long, ByVal scale As Long)", keywordDeclaration, "Dim REM As KeywordPayload",
+            "Dim Abs(2) As Long", "Print Abs(0)", "Print Sin(0.5)",
+            "Print REM.value", "Work(REM.value, 2)", "Work REM.value, 2",
+            "IF 1, 2", "IF(1, 2)", "IF 1, _", "    2",
+            "Print REM.value /' block starts after the disabled keyword", "Work(1, 2)", "'/",
+            "' REM", 'Print "REM"', ""].join("\n");
+        try {
+            fs.writeFileSync(sourcePath, source);
+            current = await vscode.workspace.openTextDocument(uri);
+            await vscode.window.showTextDocument(current);
+            await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+            await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+            await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+            await configuration.update("analysis.compilerPath", "", vscode.ConfigurationTarget.Global);
+            const conditionalPath = path.join(directory, "conditional.bas");
+            const conditionalSource = ['#lang "fblite"', "Option NoKeyword Abs", "#ifdef FUNCTION_BUILD",
+                "Declare Function Abs Overload(ByVal amount As Long) As Long",
+                "Declare Function Abs Overload(ByVal amount As Double) As Double", "#else",
+                "Dim Abs(2) As Long", "#endif", "Print Abs(0)", "Print Sin(0.5)", ""].join("\n");
+            fs.writeFileSync(conditionalPath, conditionalSource);
+            const conditional = await vscode.workspace.openTextDocument(vscode.Uri.file(conditionalPath));
+            await vscode.window.showTextDocument(conditional);
+            const conditionalHelp = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", conditional.uri,
+                position(conditional, "Print Abs(0)", "Print Abs(".length));
+            assert.equal(conditionalHelp?.signatures.length, 1);
+            assert.match(conditionalHelp.signatures[0].label, /^Array Abs\(index1: 0 To 2\)$/i,
+                "a first stock binding probe must replace inactive source procedures with native array help");
+            const callbackPath = path.join(directory, "conditional-callback.bas");
+            fs.writeFileSync(callbackPath, ["#ifdef PROCEDURE_BUILD",
+                "Declare Function Choose Overload(ByVal amount As Long) As Long",
+                "Declare Function Choose Overload(ByVal amount As Double) As Double", "#else",
+                "Dim Choose As Function(ByVal amount As Long) As Double", "#endif", "Print Choose(1)", ""].join("\n"));
+            const callback = await vscode.workspace.openTextDocument(vscode.Uri.file(callbackPath));
+            await vscode.window.showTextDocument(callback);
+            const callbackHelp = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", callback.uri,
+                position(callback, "Print Choose(1)", "Print Choose(".length));
+            assert.equal(callbackHelp?.signatures.length, 1, "native callback types must replace conditional source procedures");
+            assert.equal(callbackHelp.signatures[0].label, "Function Choose(as long) as double");
+            assert.equal(callbackHelp.signatures[0].label.slice(...callbackHelp.signatures[0].parameters[0].label), "as long");
+            const hoverPath = path.join(directory, "conditional-hover.bas");
+            fs.writeFileSync(hoverPath, ["#ifdef PROCEDURE_BUILD",
+                "Declare Function Chosen Overload(ByVal amount As Long) As Long",
+                "Declare Function Chosen Overload(ByVal amount As Double) As Double", "#else",
+                "Dim Chosen As Long", "#endif", "Print Chosen", ""].join("\n"));
+            const hoverDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(hoverPath));
+            await vscode.window.showTextDocument(hoverDocument);
+            const selectedHover = await vscode.commands.executeCommand("vscode.executeHoverProvider", hoverDocument.uri,
+                position(hoverDocument, "Print Chosen", "Print C".length));
+            const selectedHoverText = selectedHover.flatMap((entry) => entry.contents.map((content) => content.value)).join("\n");
+            assert.match(selectedHoverText, /Dim Chosen As Long/i);
+            assert.doesNotMatch(selectedHoverText, /Declare Function Chosen/i,
+                "native value identity must suppress inactive conditional procedures on first hover");
+            const guardedHeaderPath = path.join(directory, "guarded-choice.bi");
+            fs.writeFileSync(guardedHeaderPath, ["#ifndef GUARDED_CHOICE_BI", "#define GUARDED_CHOICE_BI",
+                "Declare Function GuardedChoice Overload(ByVal amount As Long) As Long",
+                "Declare Function GuardedChoice Overload(ByVal amount As Double) As Long", "#endif", ""].join("\n"));
+            const guardedPath = path.join(directory, "guarded-choice.bas");
+            fs.writeFileSync(guardedPath, '#include "guarded-choice.bi"\nPrint GuardedChoice(CDbl(1))\n');
+            const guarded = await vscode.workspace.openTextDocument(vscode.Uri.file(guardedPath));
+            await vscode.window.showTextDocument(guarded);
+            const guardedHovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", guarded.uri,
+                position(guarded, "GuardedChoice(CDbl(1))", 2));
+            const guardedText = guardedHovers.flatMap((entry) => entry.contents.map((content) => content.value)).join("\n");
+            assert.match(guardedText, /ByVal amount As Double/i);
+            assert.doesNotMatch(guardedText, /ByVal amount As Long/i,
+                "a native declaration site must select the active guarded overload even when return types are identical");
+            const operatorHeaderPath = path.join(directory, "guarded-operators.bi");
+            fs.writeFileSync(operatorHeaderPath, ["#ifndef GUARDED_OPERATORS_BI", "#define GUARDED_OPERATORS_BI",
+                "Type GuardedOperand", "    value As Long", "End Type",
+                "Operator +(ByRef value As GuardedOperand, ByVal amount As Long) As Long",
+                "    Return amount", "End Operator",
+                "Operator +(ByRef value As GuardedOperand, ByVal amount As Double) As Long",
+                "    Return CLng(amount)", "End Operator", "#endif", ""].join("\n"));
+            const operatorPath = path.join(directory, "guarded-operators.bas");
+            fs.writeFileSync(operatorPath, '#include "guarded-operators.bi"\nDim item As GuardedOperand\nPrint item + CDbl(1)\n');
+            const operatorDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(operatorPath));
+            await vscode.window.showTextDocument(operatorDocument);
+            const operatorPosition = position(operatorDocument, "item + CDbl(1)", "item ".length);
+            const operatorHovers = await vscode.commands.executeCommand("vscode.executeHoverProvider",
+                operatorDocument.uri, operatorPosition);
+            const operatorText = operatorHovers.flatMap((entry) => entry.contents.map((content) => content.value)).join("\n");
+            assert.match(operatorText, /ByVal amount As Double/i);
+            assert.doesNotMatch(operatorText, /ByVal amount As Long/i,
+                "a guarded operator hover must use the native-selected overload");
+            const operatorDefinitions = await vscode.commands.executeCommand("vscode.executeDefinitionProvider",
+                operatorDocument.uri, operatorPosition);
+            assert.equal(operatorDefinitions.length, 1);
+            assert.equal(operatorDefinitions[0].uri.fsPath, operatorHeaderPath);
+            assert.equal(operatorDefinitions[0].range.start.line, 8);
+            await vscode.window.showTextDocument(current);
+            for (const compilerPath of ["", ...(process.env.FBC_EDITOR_EXECUTABLE ? [process.env.FBC_EDITOR_EXECUTABLE] : [])]) {
+                await configuration.update("analysis.compilerPath", compilerPath, vscode.ConfigurationTarget.Global);
+                if (compilerPath) {
+                    const changes = new vscode.WorkspaceEdit();
+                    changes.replace(uri, new vscode.Range(position(current, keywordDeclaration),
+                        position(current, keywordDeclaration, keywordDeclaration.length)),
+                    ["#macro EmitProcedure(procName)",
+                        "Declare Sub procName(ByVal amount As Long, ByVal scale As Double)",
+                        "#endmacro", "EmitProcedure(IF)"].join("\n"));
+                    changes.insert(uri, current.positionAt(current.getText().length), "' bridge overlay\n");
+                    assert.equal(await vscode.workspace.applyEdit(changes), true);
+                }
+                assert.equal(current.isDirty, Boolean(compilerPath), "stock uses saved input; the bridge uses an overlay");
+                const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri,
+                    position(current, "Print REM.value", "Print REM.v".length));
+                assert.ok(completions.items.some((item) => item.label === "value" &&
+                    item.kind !== vscode.CompletionItemKind.Text), compilerPath || "stock compiler");
+                for (const call of ["Work(REM.value,", "Work REM.value,"]) {
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                        position(current, call, call.length));
+                    assert.ok(help?.signatures.some((signature) => /\bWork\b/.test(signature.label)), call);
+                    assert.equal(help.activeParameter, 1, call);
+                }
+                for (const call of ["IF 1,", "IF(1,", "IF 1, _"]) {
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                        position(current, call, call.indexOf(",") + 1));
+                    assert.equal(help?.signatures.length, 1, "native keyword options must precede source name guards: " + call);
+                    assert.match(help.signatures[0].label, /\bIF\(/i);
+                    assert.equal(help.activeParameter, 1);
+                }
+                const arrayHelp = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                    position(current, "Print Abs(0)", "Print Abs(".length));
+                assert.equal(arrayHelp?.signatures.length, 1);
+                assert.match(arrayHelp.signatures[0].label, /^Array Abs\(index1: 0 To 2\)$/i,
+                    "a compiler-bound array must not borrow intrinsic ABS signatures");
+                const sineHelp = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                    position(current, "Print Sin(0.5)", "Print Sin(".length));
+                assert.ok(sineHelp?.signatures.length, "genuine builtin reference signatures must remain available");
+                const commented = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                    position(current, "Work(1, 2)", "Work(1,".length));
+                assert.equal(commented?.signatures.length || 0, 0, "REM must not hide the later block-comment opener");
+                for (const relative of ["Print R".length, "Print RE".length]) {
+                    const selected = position(current, "Print REM.value", relative);
+                    const hierarchy = await vscode.commands.executeCommand("vscode.prepareTypeHierarchy", uri, selected);
+                    assert.deepEqual(hierarchy.map((item) => item.name), ["KeywordPayload"], compilerPath || "stock compiler");
+                    const definitions = await vscode.commands.executeCommand("vscode.executeTypeDefinitionProvider", uri, selected);
+                    assert.deepEqual(definitions.map((location) => [location.uri.toString(), location.range.start.line]),
+                        [[uri.toString(), position(current, "Type KeywordPayload").line]]);
+                }
+                for (const selected of [position(current, "' REM", 3), position(current, 'Print "REM"', 8)]) {
+                    /* VS Code 1.85's public converter dereferences a null item
+                       for an empty hierarchy. Inspect the raw command result
+                       for negatives; positives above exercise the public API. */
+                    const hierarchy = await vscode.commands.executeCommand("_executePrepareTypeHierarchy", uri, selected);
+                    assert.deepEqual((hierarchy || []).filter(Boolean), [], "comment and string spellings have no native type identity");
+                    const definitions = await vscode.commands.executeCommand("vscode.executeTypeDefinitionProvider", uri, selected);
+                    assert.deepEqual(definitions || [], [], "type navigation must not bind a comment or string by spelling");
+                }
+                if (compilerPath) {
+                    const unfinished = current.getText().replace("Print REM.value", "Print REM.v")
+                        .replace("Work(REM.value, 2)", "Work(REM.value, )").replace("IF 1, 2", "IF 1,");
+                    const edit = new vscode.WorkspaceEdit();
+                    edit.replace(uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)), unfinished);
+                    await applyEditAndWaitForDocuments(edit, [current]);
+                    const suggestions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri,
+                        position(current, "Print REM.v", "Print REM.v".length));
+                    assert.ok(suggestions.items.some((item) => item.label === "value" &&
+                        item.kind !== vscode.CompletionItemKind.Text), "a genuinely unfinished REM receiver must retain native members");
+                    const call = "Work(REM.value,";
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                        position(current, call, call.length));
+                    assert.ok(help?.signatures.some((signature) => /\bWork\b/.test(signature.label)));
+                    assert.equal(help.activeParameter, 1, "missing arguments must retain the native lexical context");
+                    const keyword = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                        position(current, "IF 1,", "IF 1,".length));
+                    assert.equal(keyword?.signatures.length, 1, "generated disabled-keyword callees retain recovery signatures");
+                    assert.equal(keyword.activeParameter, 1);
+                    const coldSource = "\uFEFF" + ['#lang "fblite"', "#if 1", "Option NoKeyword IF", "#endif",
+                        "#macro EmitProcedure(procName)",
+                        "Declare Sub procName(ByVal amount As Long, ByVal scale As Double)",
+                        "#endmacro", "EmitProcedure(IF)", "IF 1, 2", ""].join("\n");
+                    const coldEdit = new vscode.WorkspaceEdit();
+                    coldEdit.replace(uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)), coldSource);
+                    await applyEditAndWaitForDocuments(coldEdit, [current]);
+                    const cold = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                        position(current, "IF 1,", "IF 1,".length));
+                    assert.equal(cold?.signatures.length, 1, "a NOKEYWORD hint must acquire native signatures without preceding REM context");
+                    assert.equal(cold.activeParameter, 1);
+                    const scalarSource = "\uFEFF" + ['#lang "fblite"', "Option NoKeyword Abs", "Sub Work()",
+                        "Dim Abs As Long", "Print Abs(1)", "Print Sin(0.5)", "End Sub", ""].join("\n");
+                    const scalarEdit = new vscode.WorkspaceEdit();
+                    scalarEdit.replace(uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)), scalarSource);
+                    await applyEditAndWaitForDocuments(scalarEdit, [current]);
+                    const scalarHelp = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                        position(current, "Print Abs(1)", "Print Abs(".length));
+                    assert.equal(scalarHelp?.signatures.length || 0, 0, "an invalid scalar call must not acquire builtin signatures");
+                    const recoveredSine = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri,
+                        position(current, "Print Sin(0.5)", "Print Sin(".length));
+                    assert.ok(recoveredSine?.signatures.length, "an unrelated failed call must not erase real builtin help");
+                }
+                assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+            }
+        } finally {
+            if (current?.isDirty) {
+                await vscode.window.showTextDocument(current);
+                await vscode.commands.executeCommand("workbench.action.files.revert");
+            }
             for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
             await vscode.window.showTextDocument(document);
             fs.rmSync(directory, { recursive: true, force: true });
@@ -431,7 +2563,7 @@ async function run() {
                             `${match[0]} at ${sourceLine}, bridge=${Boolean(bridge)}, actual=${TOKEN_TYPES[records.get(`${sourceLine}:${match.index}`)]}`);
                         const hierarchy = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri,
                             new vscode.Position(sourceLine, match.index + 1));
-                        assert.equal(hierarchy.length, 1);
+                        assert.equal(hierarchy.length, 1, `${match[0]} at ${sourceLine}, bridge=${Boolean(bridge)}`);
                         assert.equal(hierarchy[0].kind, namespace ? vscode.SymbolKind.Function : vscode.SymbolKind.Method,
                             "Call Hierarchy must use the resolved namespace/type owner, not a dotted-name guess");
                     }
@@ -492,7 +2624,8 @@ async function run() {
         const previous = settings.map((name) => [name, configuration.get(name)]);
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-cold-outline-"));
         const filePath = path.join(directory, "main.bas");
-        const source = '#if 1\nNamespace ColdOutline\nType ReadyValue\nnumber As Long\nEnd Type\n' +
+        const source = '#if 1\nNamespace ColdOutline\nType ReadyValue\nnumber As Long\n' +
+            'Declare Operator [](ByVal index As Long) As Long\nDeclare Operator Cast() As Long\nEnd Type\n' +
             'Sub ReadyProcedure()\nDim localValue As Long\nEnd Sub\nEnd Namespace\n#else\n' +
             'Type InactiveOutlineValue\nnumber As Long\nEnd Type\n#endif\n';
         try {
@@ -513,6 +2646,13 @@ async function run() {
             assert.ok(namespace, "the first native Outline request must finish despite activation refreshes");
             assert.ok(namespace.children.some((symbol) => symbol.name === "ReadyValue"));
             assert.ok(namespace.children.some((symbol) => symbol.name === "ReadyProcedure"));
+            const valueType = namespace.children.find((symbol) => symbol.name === "ReadyValue");
+            const indexed = valueType.children.find((symbol) => symbol.name === "Operator []");
+            const cast = valueType.children.find((symbol) => symbol.name === "Operator Cast");
+            assert.ok(indexed && cast, "native Outline must show complete operator labels under their native type");
+            const bracket = position(current, "Declare Operator []", "Declare Operator ".length);
+            assert.ok(indexed.selectionRange.isEqual(new vscode.Range(bracket, bracket.translate(0, 2))),
+                "native Outline must select both index-operator brackets");
             assert.equal(symbols.some((symbol) => symbol.name === "InactiveOutlineValue"), false);
             assert.equal(current.version, version);
             assert.equal(current.isDirty, false);
@@ -548,7 +2688,9 @@ async function run() {
             const current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
             await vscode.window.showTextDocument(current);
             const version = current.version;
-            const names = async () => (await vscode.commands.executeCommand("vscode.executeDocumentSymbolProvider", current.uri))
+            // A watcher can retire a snapshot between requests. Poll through
+            // the provider's empty response, but still require the exact names.
+            const names = async () => ((await vscode.commands.executeCommand("vscode.executeDocumentSymbolProvider", current.uri)) || [])
                 .map((entry) => entry.name).sort();
             const expectNames = async (expected) => {
                 const deadline = Date.now() + 5000;
@@ -987,6 +3129,36 @@ async function run() {
             fs.rmSync(directory, { recursive: true, force: true });
         }
     });
+    await check("thread-local source declarations retain Outline, completion and navigation", async () => {
+        // Untitled documents exercise the source index without invoking a
+        // compiler that may predate THREAD LOCAL support.
+        const lines = [
+            "Thread Local Dim Shared tlsRequestCount As Integer = 0",
+            'Thread Local Extern tlsExternalCount Alias "external_count" As Long',
+            "Sub TLSWork()",
+            "    Dim tlsRequestCount As Long",
+            "    Print tlsRequestCount",
+            "End Sub",
+            "Print tlsRequestCount, tlsExternalCount",
+            "Print tls"
+        ];
+        const current = await vscode.workspace.openTextDocument({ language: "freebasic", content: lines.join("\r\n") });
+        const symbols = await vscode.commands.executeCommand("vscode.executeDocumentSymbolProvider", current.uri);
+        assert.deepEqual(symbols.map((symbol) => symbol.name), ["tlsRequestCount", "tlsExternalCount", "TLSWork"]);
+        assert.deepEqual(symbols[2].children.map((symbol) => symbol.name), ["tlsRequestCount"]);
+        for (const [line, name, declarationLine] of [[6, "tlsRequestCount", 0], [6, "tlsExternalCount", 1], [4, "tlsRequestCount", 3]]) {
+            const definitions = await vscode.commands.executeCommand("vscode.executeDefinitionProvider", current.uri,
+                new vscode.Position(line, lines[line].indexOf(name)));
+            assert.equal(definitions.length, 1, `${name} on line ${line}`);
+            assert.equal(definitions[0].uri.toString(), current.uri.toString());
+            assert.equal(definitions[0].range.start.line, declarationLine);
+        }
+        const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", current.uri,
+            new vscode.Position(7, lines[7].length));
+        for (const name of ["tlsRequestCount", "tlsExternalCount"]) {
+            assert.ok(completions.items.some((item) => item.label === name), `Missing thread-local completion: ${name}`);
+        }
+    });
     await check("source call hierarchy follows direct and bare zero-argument calls", async () => {
         const configuration = vscode.workspace.getConfiguration("freebasic");
         const previousCompiler = configuration.get("analysis.compilerPath", "");
@@ -1084,6 +3256,14 @@ async function run() {
                 ]) {
                     const prototypePoint = position(current, prototype, prototype.indexOf(name) + name.length - 1);
                     const bodyPoint = position(current, body, body.indexOf(name) + name.length - 1);
+                    const ownerPoint = position(current, body, body.indexOf("NamespacedRecord") + 2);
+                    for (const command of ["vscode.executeDefinitionProvider", "vscode.executeDeclarationProvider"]) {
+                        const owner = await vscode.commands.executeCommand(command, current.uri, ownerPoint);
+                        assert.deepEqual(owner.map((entry) => entry.range.start.line), [position(current, "Type NamespacedRecord").line],
+                            `${backend}: ${name} owner must remain a type reference`);
+                    }
+                    assert.deepEqual(await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri, ownerPoint), [],
+                        `${backend}: an owner type must not prepare an operator caller item`);
                     const declarations = await vscode.commands.executeCommand("vscode.executeDeclarationProvider", current.uri, bodyPoint);
                     assert.deepEqual(declarations.map((entry) => entry.range.start.line), [prototypePoint.line], `${backend}: ${name} prototype`);
                     const implementations = await vscode.commands.executeCommand("vscode.executeImplementationProvider", current.uri, prototypePoint);
@@ -1239,7 +3419,9 @@ async function run() {
                 for (const caller of callers) {
                     const callees = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", caller.from);
                     const cleanup = callees.filter((call) => call.to.selectionRange.isEqual(destructor.from.selectionRange));
-                    assert.equal(cleanup.length, 1, `${backend}: ${caller.from.name} must show its selected cleanup`);
+                    assert.equal(cleanup.length, 1, `${backend}: ${caller.from.name} must show its selected cleanup at ` +
+                        `${rangeKey(destructor.from.selectionRange)}; targets: ${callees.map((call) =>
+                            `${call.to.detail}@${rangeKey(call.to.selectionRange)}`).join(" | ")}`);
                     assert.deepEqual(cleanup[0].fromRanges.map(rangeKey).sort(), caller.fromRanges.map(rangeKey).sort(),
                         `${backend}: incoming and outgoing cleanup must retain the same physical ranges`);
                     assert.equal(callees.filter((call) => call.to.kind === vscode.SymbolKind.Constructor).length, 1,
@@ -1259,6 +3441,133 @@ async function run() {
                 assert.equal(current.isDirty, false);
                 assert.equal(fs.readFileSync(filePath, "utf8"), source);
             }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project lifetime incoming hierarchy uses native active-build callers", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-project-lifetime-calls-"));
+        const header = ["Type ProjectLifetime", "    value As Long", "    Declare Constructor(ByVal initial As Long)",
+            "    Declare Constructor(ByVal initial As String)", "    Declare Destructor()", "End Type", ""].join("\n");
+        const implementation = ['#include "lifetime.bi"', "Constructor ProjectLifetime(ByVal initial As Long)",
+            "    value = initial", "End Constructor", "Constructor ProjectLifetime(ByVal initial As String)",
+            "    value = Len(initial)", "End Constructor", "Destructor ProjectLifetime()", "End Destructor", ""].join("\n");
+        const caller = ['#include "lifetime.bi"', "Sub LocalLifetime()",
+            "    Dim localValue As ProjectLifetime = ProjectLifetime(1)", "End Sub", ""].join("\n");
+        const remote = ['#include "lifetime.bi"', "#ifdef ALTERNATE", "Sub ActiveRemoteLifetime()", "#else",
+            "Sub InactiveRemoteLifetime()", "#endif", "    Dim remoteValue As ProjectLifetime = ProjectLifetime(2)",
+            "End Sub", ""].join("\n");
+        const files = [["lifetime.bi", header], ["implementation.bas", implementation], ["caller.bas", caller], ["remote.bas", remote]];
+        try {
+            for (const [name, text] of files) fs.writeFileSync(path.join(directory, name), text);
+            for (const [name, value] of [["analysis.run", "onDemand"], ["diagnostics.run", "off"], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "alternate", modules: files.slice(1).map(([name]) => path.join(directory, name)),
+                    arguments: ["-d", "ALTERNATE"] }]],
+                ["analysis.activeContext", { name: "alternate", module: path.join(directory, "caller.bas") }]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(directory, "lifetime.bi")));
+            await vscode.window.showTextDocument(current);
+            for (const backend of ["stock", "bridge"]) {
+                await configuration.update("analysis.compilerPath", backend === "bridge" ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                await configuration.update("compiler.path", backend === "stock" ? process.env.FBC_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                // Destruction must work before a constructor request has had
+                // a chance to warm the native binding snapshot.
+                for (const kind of ["Destructor", "Constructor"]) {
+                    const items = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri,
+                        position(current, `Declare ${kind}`, "Declare ".length + 1));
+                    assert.equal(items.length, 1, `${backend}/${kind}: one native prototype target`);
+                    const incoming = await vscode.commands.executeCommand("vscode.provideIncomingCalls", items[0]);
+                    assert.deepEqual(incoming.map((call) => [call.from.name, path.basename(call.from.uri.fsPath),
+                        [...new Set(call.fromRanges.map((range) => range.start.line))]]).sort(),
+                    [["ActiveRemoteLifetime", "remote.bas", [6]], ["LocalLifetime", "caller.bas", [2]]].sort(),
+                    `${backend}/${kind}: native caller ownership must cover closed modules and exclude inactive headers`);
+                    const remoteCaller = incoming.find((call) => call.from.name === "ActiveRemoteLifetime");
+                    assert.equal(remoteCaller.from.selectionRange.start.line, 2);
+                }
+            }
+            assert.equal(current.isDirty, false);
+            for (const [name, text] of files) assert.equal(fs.readFileSync(path.join(directory, name), "utf8"), text);
+            assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === path.join(directory, "remote.bas")), false,
+                "project incoming analysis must not open closed caller documents");
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("native refactor code actions retain current compiler-selected edits", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-current-actions-"));
+        const source = '#lang "fblite"\nDefInt A-Z\nFunction ActionProbe()\n    Return 1\nEnd Function\n';
+        const valueSource = ["Sub ParameterProbe(value As Integer)", "    Print value", "End Sub",
+            "Var inferredValue = CLng(42)", "Enum ActionCode", "    FirstCode = 7", "    NextCode", "End Enum",
+            'Extern "C"', "Declare Function ForeignAction(ByVal value As Integer) As Integer",
+            "Declare Function ExplicitForeign Cdecl(ByVal value As Integer) As Integer", "End Extern",
+            "Type ActionBase Extends Object", "    Declare Virtual Sub ExecuteAction()", "End Type",
+            "Type ActionChild Extends ActionBase", "    Declare Sub ExecuteAction()", "End Type",
+            "Sub ActionBase.ExecuteAction()", "End Sub", "Sub ActionChild.ExecuteAction()", "End Sub", ""].join("\n");
+        const missing = [];
+        try {
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["analysis.activeContext", null],
+                ["analysis.projectContexts", []], ["compiler.arguments", []], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            for (const bridge of [false, true]) {
+                const filePath = path.join(directory, bridge ? "bridge.bas" : "stock.bas");
+                fs.writeFileSync(filePath, source);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                const point = position(current, "ActionProbe", 1);
+                const actions = await vscode.commands.executeCommand("vscode.executeCodeActionProvider", current.uri,
+                    new vscode.Range(point, point), vscode.CodeActionKind.RefactorRewrite.value);
+                const action = actions.find((candidate) => candidate.title.toLowerCase() === "add explicit return type 'integer'");
+                assert.ok(action?.edit, `bridge=${bridge}: native return-type refactoring must survive normal model acquisition; actions=${actions.map((item) => item.title).join(" | ")}`);
+                assert.deepEqual(action.edit.get(current.uri).map((edit) => [edit.range.start.line, edit.range.start.character, edit.newText.toLowerCase()]),
+                    [[2, current.lineAt(2).text.length, " as integer"]]);
+                assert.equal(current.isDirty, false);
+                assert.equal(fs.readFileSync(filePath, "utf8"), source);
+                const valuesPath = path.join(directory, bridge ? "bridge-values.bas" : "stock-values.bas");
+                fs.writeFileSync(valuesPath, valueSource);
+                const values = await vscode.workspace.openTextDocument(vscode.Uri.file(valuesPath));
+                for (const [name, title, expectedText] of [["value", "make parameter passing mode explicit as ", null],
+                    ["inferredValue", "make inferred var type explicit as 'long'", " as long"],
+                    ["NextCode", "make enum value explicit as 8", " = 8"],
+                    ["ForeignAction", "make calling convention explicit as 'cdecl'", " cdecl"],
+                    ["Declare Sub ExecuteAction()", "add explicit 'override' marker", " override"]]) {
+                    const point = position(values, name, name.startsWith("Declare Sub") ? "Declare Sub ".length + 1 : 1);
+                    const actions = await vscode.commands.executeCommand("vscode.executeCodeActionProvider", values.uri,
+                        new vscode.Range(point, point), vscode.CodeActionKind.RefactorRewrite.value);
+                    const action = actions.find((candidate) => candidate.title.toLowerCase().startsWith(title));
+                    if (!action?.edit) {
+                        missing.push(`bridge=${bridge}, ${name}: ${actions.map((item) => item.title).join(" | ")}`);
+                        continue;
+                    }
+                    const texts = action.edit.get(values.uri).map((edit) => edit.newText.toLowerCase());
+                    assert.equal(expectedText ? texts.includes(expectedText) : texts.some((text) => ["byval ", "byref "].includes(text)), true,
+                        `${name}: the edit must contain the compiler-selected value/type/mode`);
+                }
+                for (const [name, relative, forbidden] of [["ExplicitForeign", 1, "make calling convention explicit"],
+                    ["Declare Virtual Sub ExecuteAction()", "Declare Virtual Sub ".length + 1, "add explicit 'override' marker"]]) {
+                    const point = position(values, name, relative);
+                    const actions = await vscode.commands.executeCommand("vscode.executeCodeActionProvider", values.uri,
+                        new vscode.Range(point, point), vscode.CodeActionKind.RefactorRewrite.value);
+                    assert.equal(actions.some((action) => action.title.toLowerCase().startsWith(forbidden)), false,
+                        "written conventions and non-overriding root methods must not receive redundant markers");
+                }
+                assert.equal(values.isDirty, false);
+                assert.equal(fs.readFileSync(valuesPath, "utf8"), valueSource);
+            }
+            assert.deepEqual(missing, [], `native parameter, Var, and enum refactors must work with actual sidecar entries: ${JSON.stringify(missing)}`);
         } finally {
             for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
             await vscode.window.showTextDocument(document);
@@ -1285,14 +3594,20 @@ async function run() {
                 const typeName = qualified ? "TemporaryAlias" : "TemporaryValue";
                 const source = fs.readFileSync(path.join(__dirname, "../fixtures", fixture), "utf8")
                     .replace(`'' end of ${fixture}`,
-                        `ConsumeTemporary(${typeName}())\nConsumeTemporary(Type<${typeName}>(CLng(3)))\n'' end of ${fixture}`);
+                        `ConsumeTemporary(${typeName}())\nConsumeTemporary(Type<${typeName}>(CLng(3)))\n` +
+                        `ConsumeTemporary(Type<TypeOf(${typeName})>(CLng(4)))\n` +
+                        ["Type SharedSpanWrapper", "number As Long", `Declare Constructor(ByRef incoming As ${typeName})`, "End Type",
+                            `Constructor SharedSpanWrapper(ByRef incoming As ${typeName})`, "number = incoming.number", "End Constructor",
+                            "Sub ConsumeConverted(ByVal item As SharedSpanWrapper)", "End Sub",
+                            `ConsumeConverted(Type<${typeName}>(CLng(5)))`, `'' end of ${fixture}`].join("\n"));
                 const filePath = path.join(directory, `${backend}${qualified ? "-qualified" : ""}.bas`);
                 fs.writeFileSync(filePath, source);
                 const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
                 await vscode.window.showTextDocument(current);
                 const calls = [
                     [`${typeName}(CLng(1))`, "Long"], [qualified ? "ConstructionScope.TemporaryValue(CDbl(2))" : "TemporaryValue(CDbl(2))", "Double"],
-                    [`${typeName}()`, "Long"], [`Type<${typeName}>(CLng(3))`, "Long"]
+                    [`${typeName}()`, "Long"], [`Type<${typeName}>(CLng(3))`, "Long"],
+                    [`Type<TypeOf(${typeName})>(CLng(4))`, "Long"], [`Type<${typeName}>(CLng(5))`, "Long"]
                 ].map(([spelling, type]) => ({ spelling, type, site: position(current, spelling,
                     spelling.startsWith("ConstructionScope.") ? "ConstructionScope.".length : 0) }));
                 for (const type of ["Long", "Double"]) {
@@ -1326,6 +3641,18 @@ async function run() {
                         assert.equal(selected.length, 1);
                         assert.deepEqual(selected[0].fromRanges.map((range) => range.start.line), caller.fromRanges.map((range) => range.start.line),
                             `${backend}: outgoing hierarchy must agree with incoming constructor sites`);
+                        if (caller.fromRanges.some((range) => range.start.isEqual(calls[5].site))) {
+                            const conversion = position(current, `Constructor SharedSpanWrapper(ByRef incoming As ${typeName})`, 1);
+                            // An argument-conversion receipt can include the
+                            // call's opening parenthesis, unlike the TYPE token.
+                            assert.ok(outgoing.some((entry) => entry.to.selectionRange.start.line === conversion.line &&
+                                entry.fromRanges.some((range) => range.contains(calls[5].site))),
+                                "both the explicit construction and the enclosing conversion remain in the native call graph: " +
+                                JSON.stringify({ conversion, site: calls[5].site, outgoing: outgoing.map((entry) => ({
+                                    name: entry.to.name, selection: entry.to.selectionRange,
+                                    ranges: entry.fromRanges
+                                })) }));
+                        }
                     }
                     for (const call of calls.filter((call) => call.type === type)) {
                         const preparedCall = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri, call.site);
@@ -1334,11 +3661,53 @@ async function run() {
                             `${backend}: the written construction must select the same overload as its declaration`);
                     }
                 }
-                const signature = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
-                    position(current, "TemporaryValue(CDbl(2))", "TemporaryValue(".length));
-                assert.ok(signature?.signatures.length);
-                assert.match(signature.signatures[signature.activeSignature || 0].label, /initialValue As Double/i,
-                    `${backend}: Signature Help must select the compiler-confirmed temporary constructor`);
+                for (const call of [calls[1], calls[3], calls[4], calls[5]]) {
+                    const opening = call.spelling.startsWith("Type<") ? call.spelling.lastIndexOf(">(") + 1 : call.spelling.indexOf("(");
+                    const signature = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, call.spelling, opening + 1));
+                    assert.ok(signature?.signatures.length, `${backend}: ${call.spelling}`);
+                    if (call.spelling.startsWith("Type<")) {
+                        assert.equal(signature.signatures.length, 1, "a selected constructor's prototype and body must not duplicate the menu");
+                        assert.match(signature.signatures[0].label, /=\s*0/, "typed construction retains the optional default from its prototype");
+                        const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri,
+                            position(current, call.spelling, 1));
+                        const hoverText = hovers.flatMap((hover) => hover.contents.map((content) => content.value)).join("\n");
+                        assert.match(hoverText, /Declare Constructor\(ByVal initialValue As Long\s*=\s*0\)/i,
+                            `${backend}: TYPE hover retains its selected constructor prototype`);
+                        const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri,
+                            position(current, call.spelling, 1));
+                        const highlights = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", current.uri,
+                            position(current, call.spelling, 1));
+                        for (const other of calls) {
+                            assert.equal(references.some((entry) => entry.range.start.isEqual(other.site)), other.type === call.type,
+                                "typed references retain the explicit overload even when a conversion shares its site");
+                            assert.equal(highlights.some((entry) => entry.range.start.isEqual(other.site)), other.type === call.type,
+                                "typed highlights keep constructor families separate");
+                        }
+                        for (const [command, prototype] of [["vscode.executeDefinitionProvider", false],
+                            ["vscode.executeDeclarationProvider", true], ["vscode.executeImplementationProvider", false]]) {
+                            const targets = await vscode.commands.executeCommand(command, current.uri, position(current, call.spelling, 1));
+                            const expected = position(current, prototype ? "Declare Constructor(ByVal initialValue As Long"
+                                : "Constructor TemporaryValue(ByVal initialValue As Long", 1);
+                            assert.equal(targets.length, 1, `${backend}: ${command} on ${call.spelling}`);
+                            assert.equal(targets[0].uri.fsPath, filePath);
+                            assert.equal(targets[0].range.start.line, expected.line, "typed construction navigation retains the requested native role");
+                        }
+                        const argument = position(current, call.spelling, opening + 1);
+                        const hints = await vscode.commands.executeCommand("vscode.executeInlayHintProvider", current.uri,
+                            new vscode.Range(argument, new vscode.Position(argument.line, current.lineAt(argument.line).text.length)));
+                        const parameters = hints.filter((hint) => hint.position.isEqual(argument) && hint.kind === vscode.InlayHintKind.Parameter);
+                        assert.equal(parameters.length, 1, `${backend}: one constructor hint for ${call.spelling}`);
+                        assert.equal(parameters[0].label.map((part) => part.value).join(""), "initialValue:");
+                        const target = parameters[0].label[0].location;
+                        assert.equal(target?.uri.fsPath, filePath);
+                        const formal = position(current, "Declare Constructor(ByVal initialValue As Long", "Declare Constructor(ByVal ".length);
+                        assert.ok(target.range.start.isEqual(formal), "typed construction hints link to the selected physical prototype formal");
+                    }
+                    assert.match(signature.signatures[signature.activeSignature || 0].label,
+                        new RegExp(`initialValue As ${call.type}\\b`, "i"),
+                        `${backend}: Signature Help must select ${call.spelling}'s constructor rather than its enclosing call`);
+                }
                 if (qualified) {
                     const namespace = position(current, "ConstructionScope.TemporaryValue(CDbl(2))");
                     const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri, namespace);
@@ -1411,6 +3780,323 @@ async function run() {
                     `${backend}: module constructor targets must expand to their implementation calls`);
                 assert.equal(current.isDirty, false);
                 assert.equal(fs.readFileSync(filePath, "utf8"), source);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project Call Hierarchy separates namespace and property accessor targets", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-accessor-callers-"));
+        const header = ["Namespace CallApi", "Declare Function ReadValue() As Long", "End Namespace", "Type Meter", "number As Long",
+            "Declare Property Value() As Long", "Declare Property Value(ByVal amount As Long)", "End Type", ""].join("\n");
+        const caller = '#include "api.bi"\nDim item As Meter\nPrint CallApi.ReadValue(), item.Value\nitem.Value = 1\n';
+        const other = '#include "api.bi"\nNamespace Client\nSub Collect(ByRef item As Meter)\nPrint CallApi.ReadValue()\nPrint item.Value\nitem.Value = 2\nEnd Sub\nEnd Namespace\n';
+        const implementation = '#include "api.bi"\nFunction CallApi.ReadValue() As Long\nReturn 1\nEnd Function\n' +
+            'Property Meter.Value() As Long\nReturn number\nEnd Property\nProperty Meter.Value(ByVal amount As Long)\nnumber = amount\nEnd Property\n';
+        try {
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            for (const bridge of [false, true]) {
+                const backendDirectory = path.join(directory, bridge ? "bridge" : "stock");
+                fs.mkdirSync(backendDirectory);
+                const callerPath = path.join(backendDirectory, "caller.bas"), otherPath = path.join(backendDirectory, "other.bas");
+                const implementationPath = path.join(backendDirectory, "implementation.bas"), headerPath = path.join(backendDirectory, "api.bi");
+                const sources = [[callerPath, caller], [otherPath, other], [implementationPath, implementation], [headerPath, header]];
+                for (const [file, text] of sources) fs.writeFileSync(file, text);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [{ name: "accessors", modules: [callerPath, otherPath, implementationPath] }], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.activeContext", { name: "accessors", module: callerPath }, vscode.ConfigurationTarget.Global);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+                await vscode.window.showTextDocument(current);
+                for (const [anchor, relative, localLine, remoteLine, expectedKind] of [["ReadValue", 1, 2, 3, vscode.SymbolKind.Function],
+                    ["item.Value", "item.".length + 1, 2, 4, vscode.SymbolKind.Property],
+                    ["item.Value = 1", "item.".length + 1, 3, 5, vscode.SymbolKind.Property]]) {
+                    const prepared = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri, position(current, anchor, relative));
+                    assert.equal(prepared.length, 1, `bridge=${bridge}, ${anchor}: select exactly one native accessor`);
+                    assert.equal(prepared[0].kind, expectedKind);
+                    const calls = await vscode.commands.executeCommand("vscode.provideIncomingCalls", prepared[0]);
+                    assert.deepEqual(calls.map((call) => [call.from.uri.fsPath, call.from.kind, call.fromRanges.map((range) => range.start.line)]),
+                        [[callerPath, vscode.SymbolKind.File, [localLine]], [otherPath, vscode.SymbolKind.Function, [remoteLine]]],
+                        `bridge=${bridge}, ${anchor}: namespace callers stay functions and getter/setter sites stay separate`);
+                }
+                assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === otherPath), false,
+                    "incoming accessor lookup must not require an open caller module");
+                const included = await vscode.workspace.openTextDocument(vscode.Uri.file(otherPath));
+                const callers = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", included.uri, position(included, "Collect", 1));
+                assert.equal(callers.length, 1);
+                const outgoing = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", callers[0]);
+                assert.deepEqual(outgoing.map((call) => [call.to.uri.fsPath, call.to.selectionRange.start.line,
+                    call.fromRanges.map((range) => range.start.line)]).sort((first, second) => first[1] - second[1]),
+                    [[headerPath, 1, [3]], [headerPath, 5, [4]], [headerPath, 6, [5]]],
+                    "native outgoing calls retain separate namespace/getter/setter targets");
+                for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("standalone module Call Hierarchy uses native calls without project setup", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-default-call-context-"));
+        const lines = ["Sub DefaultHierarchyTarget(ByVal value As Long)", "End Sub", "Sub DefaultHierarchyCaller()",
+            "#ifdef ALTERNATE", "DefaultHierarchyTarget(CLng(1))", "#else", "DefaultHierarchyTarget(CLng(2))",
+            "#endif", "End Sub", "DefaultHierarchyCaller()", ""];
+        const source = lines.join("\n");
+        try {
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["analysis.projectContexts", []],
+                ["analysis.activeContext", null], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            for (const bridge of [false, true]) {
+                const filePath = path.join(directory, bridge ? "bridge.bas" : "stock.bas");
+                fs.writeFileSync(filePath, source);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                await vscode.window.showTextDocument(current);
+                assert.equal(vscode.workspace.getWorkspaceFolder(current.uri), undefined);
+                for (const alternate of [false, true]) {
+                    await configuration.update("compiler.arguments", alternate ? ["-d", "ALTERNATE"] : [], vscode.ConfigurationTarget.Global);
+                    const prepared = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri,
+                        position(current, "Sub DefaultHierarchyTarget", "Sub ".length + 1));
+                    assert.equal(prepared.length, 1);
+                    const incoming = await vscode.commands.executeCommand("vscode.provideIncomingCalls", prepared[0]);
+                    const activeLine = alternate ? 4 : 6;
+                    assert.deepEqual(incoming.map((call) => [call.from.uri.fsPath, call.from.name,
+                        call.fromRanges.map((range) => range.start.line)]), [[filePath, "DefaultHierarchyCaller", [activeLine]]],
+                    `bridge=${bridge}/alternate=${alternate}: only compiler-active calls belong in the default context`);
+                    const outgoing = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", incoming[0].from);
+                    assert.deepEqual(outgoing.map((call) => [call.to.name, call.to.uri.fsPath,
+                        call.fromRanges.map((range) => range.start.line)]), [["DefaultHierarchyTarget", filePath, [activeLine]]]);
+                    const parents = await vscode.commands.executeCommand("vscode.provideIncomingCalls", incoming[0].from);
+                    assert.deepEqual(parents.map((call) => [call.from.kind, call.from.uri.fsPath,
+                        call.fromRanges.map((range) => range.start.line)]), [[vscode.SymbolKind.File, filePath, [9]]]);
+                    assert.deepEqual(configuration.get("analysis.projectContexts"), [], "hierarchy must not create project settings");
+                    assert.equal(configuration.get("analysis.activeContext"), null);
+                }
+                assert.equal(current.isDirty, false);
+                assert.equal(fs.readFileSync(filePath, "utf8"), source);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("header Call Hierarchy preserves its originating module without project setup", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-header-call-context-"));
+        const header = ["Sub HeaderTarget(ByVal value As Long)", "End Sub", "Sub HeaderCaller()", "#ifdef ALTERNATE",
+            "HeaderTarget(CLng(1))", "#else", "HeaderTarget(CLng(2))", "#endif", "End Sub", "HeaderCaller()", ""].join("\n");
+        try {
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", []], ["analysis.activeContext", null], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            for (const bridge of [false, true]) {
+                const backendDirectory = path.join(directory, bridge ? "bridge" : "stock");
+                fs.mkdirSync(backendDirectory);
+                const headerPath = path.join(backendDirectory, "calls.bi");
+                const sources = [[headerPath, header], [path.join(backendDirectory, "first.bas"), '#define ALTERNATE\n#include "calls.bi"\nHeaderCaller()\n'],
+                    [path.join(backendDirectory, "second.bas"), '#include "calls.bi"\nHeaderCaller()\n']];
+                for (const [file, text] of sources) fs.writeFileSync(file, text);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                const preparedItems = [];
+                for (const [filePath] of sources.slice(1)) {
+                    const uri = vscode.Uri.file(filePath);
+                    await vscode.commands.executeCommand("vscode.open", uri, { preview: false });
+                    const current = vscode.workspace.textDocuments.find((opened) => opened.uri.toString() === uri.toString());
+                    const prepared = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", uri, position(current, "HeaderCaller()", 1));
+                    assert.equal(prepared.length, 1);
+                    assert.equal(prepared[0].uri.fsPath, headerPath);
+                    preparedItems.push(prepared[0]);
+                }
+                for (const [step, rootIndex] of [0, 1, 0].entries()) {
+                    const rootPath = sources[rootIndex + 1][0];
+                    if (step === 2) {
+                        const uri = vscode.Uri.file(rootPath);
+                        await vscode.commands.executeCommand("vscode.open", uri, { preview: false });
+                        const beforeClose = vscode.workspace.textDocuments.find((opened) => opened.uri.toString() === uri.toString());
+                        await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+                        const deadline = Date.now() + DOCUMENT_CHANGE_TIMEOUT_MS;
+                        while (!beforeClose.isClosed && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+                        assert.equal(beforeClose.isClosed, true, "the originating module must really unload before expansion");
+                    }
+                    // Closing a tab can resolve before its active-editor
+                    // notification reaches the extension host. Establish a
+                    // stable background editor before checking context loads.
+                    const backgroundUri = vscode.Uri.file(sources[2][0]);
+                    const background = vscode.workspace.textDocuments.find((opened) => opened.uri.toString() === backgroundUri.toString());
+                    await vscode.window.showTextDocument(background);
+                    const focusDeadline = Date.now() + DOCUMENT_CHANGE_TIMEOUT_MS;
+                    while (vscode.window.activeTextEditor?.document.uri.toString() !== backgroundUri.toString() && Date.now() < focusDeadline) {
+                        await new Promise((resolve) => setTimeout(resolve, 25));
+                    }
+                    const activeUri = backgroundUri.toString();
+                    assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), activeUri);
+                    const outgoing = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", preparedItems[rootIndex]);
+                    const activeLine = rootIndex === 0 ? 4 : 6;
+                    const actual = outgoing.map((call) => [call.to.uri.fsPath, call.to.name, call.fromRanges.map((range) => range.start.line)]);
+                    assert.deepEqual(actual, [[headerPath, "HeaderTarget", [activeLine]]],
+                        `bridge=${bridge}/step=${step}: retain the originating module's defines: ${JSON.stringify(actual)}`);
+                    const incoming = await vscode.commands.executeCommand("vscode.provideIncomingCalls", outgoing[0].to);
+                    assert.deepEqual(incoming.map((call) => [call.from.uri.fsPath, call.from.name, call.fromRanges.map((range) => range.start.line)]),
+                        [[headerPath, "HeaderCaller", [activeLine]]]);
+                    const parents = await vscode.commands.executeCommand("vscode.provideIncomingCalls", incoming[0].from);
+                    assert.deepEqual(parents.map((call) => [call.from.uri.fsPath, call.fromRanges.map((range) => range.start.line)]).sort(),
+                        [[headerPath, [9]], [rootPath, [rootIndex === 0 ? 2 : 1]]].sort());
+                    for (const parent of parents) {
+                        const moduleCalls = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", parent.from);
+                        assert.deepEqual(moduleCalls.map((call) => [call.to.uri.fsPath, call.to.name,
+                            call.fromRanges.map((range) => range.start.line)]),
+                            [[headerPath, "HeaderCaller", parent.fromRanges.map((range) => range.start.line)]],
+                            "root and included-file module nodes must keep their own global sites, excluding routine bodies");
+                    }
+                    assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), activeUri,
+                        `bridge=${bridge}/step=${step}: loading a module context must not show its editor`);
+                }
+                for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+                assert.deepEqual(configuration.get("analysis.projectContexts"), []);
+                assert.equal(configuration.get("analysis.activeContext"), null);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project incoming Call Hierarchy uses native closed caller ownership", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-project-callers-"));
+        const header = ["Declare Sub ProjectCallTarget Overload(ByVal value As Long)",
+            "Declare Sub ProjectCallTarget Overload(ByVal value As Double)", "#ifdef ALTERNATE", "Declare Sub AlternateCaller()",
+            "#else", "Declare Sub RemoteCaller()", "#endif", ""].join("\n");
+        const caller = ['#include "api.bi"', "Sub LocalCaller()", "#ifdef ALTERNATE", "ProjectCallTarget(CLng(10))",
+            "#else", "ProjectCallTarget(CLng(1))", "#endif", "End Sub",
+            "ProjectCallTarget(CLng(2))", "Dim callback As Sub(ByVal As Long) = @ProjectCallTarget",
+            "#ifdef ALTERNATE", "AlternateCaller()", "#else", "RemoteCaller()", "#endif", ""].join("\n");
+        const other = ['#include "api.bi"', "#ifdef ALTERNATE", "Sub AlternateCaller()", "#else", "Sub RemoteCaller()", "#endif",
+            "ProjectCallTarget(CLng(3))", "End Sub", "Type CallOwner", "number As Long", "Declare Constructor()", "End Type",
+            "Constructor CallOwner()", "ProjectCallTarget(CLng(4))", "End Constructor", "ProjectCallTarget(CDbl(5))", ""].join("\n");
+        const implementation = '#include "api.bi"\nSub ProjectCallTarget(ByVal value As Long)\nEnd Sub\nSub ProjectCallTarget(ByVal value As Double)\nEnd Sub\n';
+        try {
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            for (const bridge of [false, true]) {
+                const backendDirectory = path.join(directory, bridge ? "bridge" : "stock");
+                fs.mkdirSync(backendDirectory);
+                const callerPath = path.join(backendDirectory, "caller.bas"), otherPath = path.join(backendDirectory, "other.bas");
+                const implementationPath = path.join(backendDirectory, "implementation.bas"), headerPath = path.join(backendDirectory, "api.bi");
+                const sources = [[callerPath, caller], [otherPath, other], [implementationPath, implementation], [headerPath, header]];
+                for (const [file, text] of sources) fs.writeFileSync(file, text);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [{ name: "normal", modules: [callerPath, otherPath, implementationPath] },
+                    { name: "alternate", modules: [callerPath, otherPath, implementationPath], arguments: ["-d", "ALTERNATE"] }], vscode.ConfigurationTarget.Global);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(callerPath));
+                await vscode.window.showTextDocument(current);
+                for (const name of ["normal", "alternate"]) {
+                    await configuration.update("analysis.activeContext", { name, module: callerPath }, vscode.ConfigurationTarget.Global);
+                    const prepared = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri, position(current, "ProjectCallTarget(CLng(2))", 1));
+                    assert.equal(prepared.length, 1);
+                    const calls = await vscode.commands.executeCommand("vscode.provideIncomingCalls", prepared[0]);
+                    const keys = (entries) => entries.map(JSON.stringify).sort();
+                    const actual = calls.map((call) => [call.from.uri.fsPath, call.from.kind, call.from.selectionRange.start.line,
+                        call.fromRanges.map((range) => range.start.line)]);
+                    const remoteLine = name === "normal" ? 4 : 2;
+                    assert.deepEqual(keys(actual), keys([[callerPath, vscode.SymbolKind.Function, 1, [name === "normal" ? 5 : 3]],
+                        [callerPath, vscode.SymbolKind.File, 0, [8]], [otherPath, vscode.SymbolKind.Function, remoteLine, [6]],
+                        [otherPath, vscode.SymbolKind.Constructor, 12, [13]]]),
+                    `bridge=${bridge}, ${name}: native callers, not inactive calls, address references or the other overload: ${JSON.stringify(actual)}`);
+                    if (name === "normal") assert.equal(vscode.workspace.textDocuments.some((item) => item.uri.fsPath === otherPath), false);
+                    const remote = calls.find((call) => call.from.uri.fsPath === otherPath && call.from.kind === vscode.SymbolKind.Function);
+                    const parents = await vscode.commands.executeCommand("vscode.provideIncomingCalls", remote.from);
+                    assert.deepEqual(parents.map((call) => [call.from.uri.fsPath, call.fromRanges.map((range) => range.start.line)]),
+                        [[callerPath, [name === "normal" ? 13 : 11]]], "a closed caller must remain expandable in the incoming tree");
+                    const outgoing = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", remote.from);
+                    assert.deepEqual(outgoing.map((call) => [call.to.uri.fsPath, call.to.selectionRange.start.line,
+                        call.fromRanges.map((range) => range.start.line)]), [[headerPath, 0, [6]]],
+                        "a conditional project caller must expand outgoing by native ownership too");
+                }
+                assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), current.uri.toString());
+                for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("native outgoing Call Hierarchy expands special routine bodies in the active build", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-special-outgoing-"));
+        const header = ["Declare Sub TraceLong(ByVal value As Long)", "Declare Sub TraceDouble(ByVal value As Double)",
+            "Type CallOwner", "number As Long", "Declare Constructor(ByVal initial As Long)",
+            "Declare Destructor()", "Declare Operator Cast() As Long", "End Type", ""].join("\n");
+        const lines = ['#include "api.bi"', "#ifdef ALTERNATE", "Constructor CallOwner(ByVal alternateValue As Long)",
+            "#else", "Constructor CallOwner(ByVal initial As Long)", "#endif", "TraceLong(CLng(1))",
+            "Dim callback As Sub(ByVal As Double) = @TraceDouble", "End Constructor", "Destructor CallOwner()",
+            "#ifdef ALTERNATE", "TraceDouble(CDbl(2))", "#else", "TraceLong(CLng(2))", "#endif", "End Destructor",
+            "Operator CallOwner.Cast() As Long", "TraceLong(CLng(3))", "Return number", "End Operator", ""];
+        const source = lines.join("\n");
+        try {
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            for (const bridge of [false, true]) {
+                const backendDirectory = path.join(directory, bridge ? "bridge" : "stock");
+                fs.mkdirSync(backendDirectory);
+                const filePath = path.join(backendDirectory, "main.bas"), headerPath = path.join(backendDirectory, "api.bi");
+                fs.writeFileSync(filePath, source);
+                fs.writeFileSync(headerPath, header);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [{ name: "normal", modules: [filePath] },
+                    { name: "alternate", modules: [filePath], arguments: ["-d", "ALTERNATE"] }], vscode.ConfigurationTarget.Global);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                await vscode.window.showTextDocument(current);
+                for (const name of ["normal", "alternate"]) {
+                    await configuration.update("analysis.activeContext", { name, module: filePath }, vscode.ConfigurationTarget.Global);
+                    const callers = new Map();
+                    for (const target of name === "normal" ? ["TraceLong"] : ["TraceLong", "TraceDouble"]) {
+                        const anchor = target === "TraceLong" ? "TraceLong(CLng(1))" : "TraceDouble(CDbl(2))";
+                        const prepared = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri, position(current, anchor, 1));
+                        assert.equal(prepared.length, 1, `${bridge}/${name}/${target}: prepare the native target`);
+                        callers.set(target, await vscode.commands.executeCommand("vscode.provideIncomingCalls", prepared[0]));
+                    }
+                    for (const [line, kind, target, site] of [[name === "normal" ? 4 : 2, vscode.SymbolKind.Constructor, "TraceLong", 6],
+                        [9, vscode.SymbolKind.Method, name === "normal" ? "TraceLong" : "TraceDouble", name === "normal" ? 13 : 11],
+                        [16, vscode.SymbolKind.Method, "TraceLong", 17]]) {
+                        const caller = callers.get(target).find((call) => call.from.uri.fsPath === filePath &&
+                            call.from.selectionRange.start.line === line);
+                        assert.ok(caller, `${bridge}/${name}: missing native owner on line ${line}`);
+                        assert.equal(caller.from.kind, kind);
+                        const outgoing = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", caller.from);
+                        const actual = outgoing.map((call) => [call.to.name, call.to.uri.fsPath,
+                            call.fromRanges.map((range) => range.start.line)]);
+                        assert.deepEqual(actual, [[target, headerPath, [site]]],
+                            `${bridge}/${name}/${line}: preserve native ownership, excluding inactive calls and address-taking: ${JSON.stringify(actual)}`);
+                    }
+                }
+                assert.equal(current.isDirty, false);
+                assert.equal(fs.readFileSync(filePath, "utf8"), source);
+                assert.equal(fs.readFileSync(headerPath, "utf8"), header);
             }
         } finally {
             for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
@@ -1684,8 +4370,15 @@ async function run() {
         const signature = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri, position(document, "Sin(0.5)", 6));
         assert.ok(signature.signatures.length > 0);
         assert.match(signature.signatures[0].parameters[0].label, /angle/);
-        const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri, position(document, "Sin(0.5)", 2));
-        const sin = completions.items.find((item) => String(item.label).toLowerCase() === "sin");
+        const written = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri, position(document, "Sin(0.5)", 2));
+        const existingSin = written.items.find((item) => String(item.label).toLowerCase() === "sin" &&
+            item.kind !== vscode.CompletionItemKind.Text);
+        const existingInsertion = typeof existingSin?.insertText === "string" ? existingSin.insertText : existingSin?.insertText?.value;
+        assert.equal(existingInsertion?.toLowerCase(), "sin", "existing builtin arguments must not receive another call template");
+        const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri,
+            document.positionAt(document.getText().length));
+        const sin = completions.items.find((item) => String(item.label).toLowerCase() === "sin" &&
+            item.kind !== vscode.CompletionItemKind.Text);
         const sinSnippet = typeof sin?.insertText === "string" ? sin.insertText : sin?.insertText?.value;
         assert.equal(sinSnippet, "Sin(${1:angle})$0", "manual-backed builtin completion should insert its shared parameter name");
         const screenRes = completions.items.find((item) => String(item.label).toLowerCase() === "screenres");
@@ -1698,11 +4391,145 @@ async function run() {
             "compatible reference overloads should share required parameter placeholders");
         const len = completions.items.find((item) => String(item.label).toLowerCase() === "len");
         assert.equal(len.insertText, "LEN", "reference overloads with different parameter names should remain name-only");
+        // VS Code resolves documentation when the suggestion detail pane opens.
+        const resolved = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri,
+            document.positionAt(document.getText().length), undefined, completions.items.length);
+        for (const [name, parameters] of [["Gfx3ScreenCapture", 5], ["Gfx3SurfaceCopyFromScreen", 7]]) {
+            const item = resolved.items.find((candidate) => String(candidate.label).toLowerCase() === name.toLowerCase());
+            const snippet = typeof item?.insertText === "string" ? item.insertText : item?.insertText?.value;
+            assert.equal((snippet?.match(/\$\{\d+:/g) || []).length, parameters, name);
+            const imports = (item.additionalTextEdits || []).map((edit) => edit.newText).join("\n");
+            assert.match(imports, /#include once "fbgfx3\.bi"/);
+            assert.match(imports, /using fb/i);
+            const documentation = typeof item.documentation === "string" ? item.documentation : item.documentation?.value;
+            assert.match(documentation || "", /selects and links gfxlib3/i);
+        }
     });
     await check("member signature uses the user declaration", async () => {
         const signature = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", uri, position(document, "origin.SetX (20)", 14));
         assert.ok(signature?.signatures.length);
         assert.match(signature.signatures[0].parameters[0].label, /newValue/);
+    });
+    if (process.env.FBC_EDITOR_EXECUTABLE) await check("native index Signature Help survives incomplete unsaved brackets", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run", "compiler.path", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-index-signature-recovery-"));
+        const filePath = path.join(directory, "main.bas");
+        const prefix = ["Type RecoveryIndex", "value As Long", "Declare Operator [](ByVal index As Long) As Long",
+            "Declare Operator [](ByVal index As Double) As Long", "Private:", "Declare Operator [](ByVal index As String) As Long",
+            "Public:", "Declare Sub Inspect()", "Declare Static Sub InspectStatic()", "End Type", "Type Holder",
+            "item As RecoveryIndex", "Private:", "hidden As RecoveryIndex", "End Type", "Dim item As RecoveryIndex",
+            "Dim holderValue As Holder", "Dim indexedValues(0 To 1) As RecoveryIndex", "Dim pointerValue As RecoveryIndex Ptr = @item",
+            "Declare Function MakeIndex() As RecoveryIndex", ""].join("\n");
+        const saved = prefix + "Print 1\n";
+        try {
+            fs.writeFileSync(filePath, saved);
+            for (const [name, value] of [["analysis.compilerPath", process.env.FBC_EDITOR_EXECUTABLE], ["compiler.path", ""],
+                ["analysis.projectContexts", []], ["analysis.activeContext", null], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+            await vscode.window.showTextDocument(current);
+            for (const [statement, expected, before = "", after = ""] of [
+                ["Print item[", 2], ["Print holderValue.item[", 2], ["Print This[", 3, "Sub RecoveryIndex.Inspect()\n", "End Sub\n"],
+                ["Print This[", 0, "Sub RecoveryIndex.InspectStatic()\n", "End Sub\n"], ["Print pointerValue[", 0],
+                ["Print indexedValues[", 0], ["Print holderValue.hidden[", 0], ["Print item[", 0, "Sub Shadow(ByVal item As Long)\n", "End Sub\n"],
+                ["Print MakeIndex()[", 2], ["Print indexedValues(0)[", 2], ["Print (*pointerValue)[", 2], ["Print (item)[", 2],
+                ["Print (pointerValue)[", 0], ["Print indexedValues()[", 0], ["Print indexedValues(0, 1)[", 0]
+            ]) {
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(current.uri, new vscode.Range(new vscode.Position(0, 0), current.positionAt(current.getText().length)),
+                    prefix + before + statement + "\n" + after);
+                await applyEditAndWaitForDocuments(edit, [current]);
+                const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                    position(current, statement, statement.length));
+                const signatures = help?.signatures.filter((entry) => /\boperator\s*\[\]/i.test(entry.label)) || [];
+                assert.equal(signatures.length, expected, `native incomplete index signatures: ${before}${statement}`);
+                if (expected) {
+                    assert.equal(help.activeParameter, 0);
+                    assert.ok(signatures.every((entry) => entry.parameters.length === 1 && /ByVal index As /i.test(entry.label)),
+                        "native recovery must retain the complete index parameter label");
+                    if (expected !== 3) assert.ok(signatures.every((entry) => !/index As String/i.test(entry.label)));
+                }
+                assert.equal(current.isDirty, true);
+                assert.equal(fs.readFileSync(filePath, "utf8"), saved);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EDITOR_EXECUTABLE) await check("native constructor Signature Help survives incomplete unsaved calls", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+            "compiler.path", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-constructor-signature-recovery-"));
+        const filePath = path.join(directory, "main.bas");
+        const prefix = ["Type RecoveryWidget", "value As Long",
+            "Declare Constructor(ByVal amount As Long, ByVal scale As Double)",
+            "Declare Constructor(ByVal amount As Double, ByVal scale As Double)",
+            "Private:", "Declare Constructor(ByVal amount As String, ByVal scale As Double)", "End Type", ""].join("\n");
+        const saved = prefix + "Print 1\n";
+        try {
+            fs.writeFileSync(filePath, saved);
+            for (const [name, value] of [["analysis.compilerPath", process.env.FBC_EDITOR_EXECUTABLE], ["compiler.path", ""],
+                ["analysis.projectContexts", []], ["analysis.activeContext", null], ["analysis.run", "onDemand"], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+            await vscode.window.showTextDocument(current);
+            for (const [before, statement, after, expected] of [
+                [prefix, "Dim result As RecoveryWidget = RecoveryWidget(1,", "", 2],
+                [prefix, "Dim allocated As RecoveryWidget Ptr = New RecoveryWidget(1,", "", 2],
+                [prefix + "Sub Work(ByVal RecoveryWidget As Long)\n", "Print RecoveryWidget(1,", "End Sub\n", 2],
+                ["Namespace Types\n" + prefix + "End Namespace\nUsing Types\nSub Work(ByVal RecoveryWidget As Long)\n",
+                    "Print RecoveryWidget(1,", "End Sub\n", 0],
+                [prefix, "Dim result As RecoveryWidget = Type<RecoveryWidget>(1,", "", 2],
+                [prefix, "Dim result As RecoveryWidget = Type<RecoveryWidget>(1, )", "", 2],
+                [prefix + "Type RecoveryAlias As RecoveryWidget\n", "Dim result As RecoveryWidget = Type<RecoveryAlias>(1,", "", 2],
+                ["Namespace Types\n" + prefix + "End Namespace\n", "Dim result As Types.RecoveryWidget = Type<Types.RecoveryWidget>(1,", "", 2],
+                [prefix, "Dim result As RecoveryWidget = Type<TypeOf(RecoveryWidget)>(1,", "", 2],
+                [prefix + "Dim original As RecoveryWidget = Any\n", "Dim result As RecoveryWidget = Type<TypeOf(original)>(1,", "", 2],
+                [prefix + "Dim original As RecoveryWidget = Any\n", "Dim result As RecoveryWidget = Type<TypeOf((original))>(1,", "", 2],
+                [prefix + "Declare Function Factory() As RecoveryWidget\n", "Dim result As RecoveryWidget = Type<TypeOf(Factory())>(1,", "", 2],
+                [prefix + "Declare Function OptionalFactory(ByVal amount As Long = 0) As RecoveryWidget\n",
+                    "Dim result As RecoveryWidget = Type<TypeOf(OptionalFactory())>(1,", "", 2],
+                [prefix + "Declare Function OptionalFactory(ByVal amount As Long = 0) As RecoveryWidget\n",
+                    'Dim result As RecoveryWidget = Type<TypeOf(OptionalFactory("1"))>(1,', "", 0],
+                [prefix + "Declare Function NeedsArgument(ByVal amount As Long) As RecoveryWidget\n",
+                    "Dim result As RecoveryWidget = Type<TypeOf(NeedsArgument())>(1,", "", 0],
+                [prefix + "Declare Function PointerFactory() As RecoveryWidget Ptr\n",
+                    "Dim result As RecoveryWidget = Type<TypeOf(PointerFactory())>(1,", "", 0],
+                ['#lang "deprecated"\n' + prefix + "Option NoKeyword TYPEOF\n" +
+                    "Declare Function TYPEOF(ByVal value As RecoveryWidget) As Long\nDeclare Function Factory() As RecoveryWidget\n",
+                    "Dim result As RecoveryWidget = Type<TypeOf(Factory())>(1,", "", 0],
+                [prefix + "Type PointerAlias As RecoveryWidget Ptr\n", "Dim result As RecoveryWidget = Type<PointerAlias>(1,", "", 0],
+                [prefix + "Type ScalarAlias As Long\n", "Dim result As RecoveryWidget = Type<ScalarAlias>(1,", "", 0]
+            ]) {
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(current.uri, new vscode.Range(new vscode.Position(0, 0), current.positionAt(current.getText().length)),
+                    before + statement + "\n" + after);
+                await applyEditAndWaitForDocuments(edit, [current]);
+                const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                    position(current, statement, statement.endsWith(")") ? statement.lastIndexOf(",") + 1 : statement.length));
+                const signatures = help?.signatures.filter((entry) => /\bconstructor\b/i.test(entry.label)) || [];
+                assert.equal(signatures.length, expected, `native incomplete constructor signatures: ${statement}\n${before}`);
+                if (expected) {
+                    assert.equal(help.activeParameter, 1);
+                    assert.ok(signatures.every((entry) => entry.parameters.length === 2 && !/amount As String/i.test(entry.label)),
+                        "private constructor overloads must stay hidden during recovery");
+                }
+                assert.equal(current.isDirty, true);
+                assert.equal(fs.readFileSync(filePath, "utf8"), saved, "Signature Help must not save the broken buffer");
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
     });
     await check("UDT constructor calls show their declared signature", async () => {
         const configuration = vscode.workspace.getConfiguration("freebasic");
@@ -1727,9 +4554,9 @@ async function run() {
             assert.ok(newSignature?.signatures.some((entry) => /Declare\s+Constructor\(ByVal source As Long\)/i.test(entry.label)));
             const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", constructorUri,
                 position(constructorDocument, "New WrappedValue(5)", "New WrappedValue".length));
-            const wrappedValue = completions.items.find((item) => item.label === "WrappedValue");
+            const wrappedValue = completions.items.find((item) => item.label === "WrappedValue" && item.kind !== vscode.CompletionItemKind.Text);
             const snippet = typeof wrappedValue?.insertText === "string" ? wrappedValue.insertText : wrappedValue?.insertText?.value;
-            assert.equal(snippet, "WrappedValue(${1:source})$0");
+            assert.equal(snippet, "WrappedValue", "written constructor arguments must remain outside the completion edit");
 
             const overloadedSource = [
                 "Type OverloadedValue",
@@ -2376,7 +5203,7 @@ async function run() {
             assert.equal(compoundAssignmentDefinition.length, 1,
                 "compound assignment should follow its compiler-selected operator receipt");
             assert.match(operatorDocument.lineAt(compoundAssignmentDefinition[0].range.start.line).text,
-                /^Operator BridgeCompoundValue\.\+\=/i);
+                /^Operator BridgeCompoundValue\.\+=/i);
             const compoundAssignmentReferences = await vscode.commands.executeCommand(
                 "vscode.executeReferenceProvider", operatorUri, compoundAssignmentPosition,
                 { includeDeclaration: true }
@@ -2393,7 +5220,7 @@ async function run() {
             );
             assert.equal(compoundAssignmentHierarchy.length, 1,
                 "compound assignment should prepare its selected operator in Call Hierarchy");
-            assert.match(compoundAssignmentHierarchy[0].detail, /BridgeCompoundValue\.\+\=/i);
+            assert.match(compoundAssignmentHierarchy[0].detail, /BridgeCompoundValue\.\+=/i);
             const compoundAssignmentIncoming = await vscode.commands.executeCommand(
                 "vscode.provideIncomingCalls", compoundAssignmentHierarchy[0]
             );
@@ -2409,7 +5236,7 @@ async function run() {
             assert.equal(compoundAliasDefinition.length, 1,
                 "the documented +=> alias should follow the same compiler-selected operator");
             assert.match(operatorDocument.lineAt(compoundAliasDefinition[0].range.start.line).text,
-                /^Operator BridgeCompoundValue\.\+\=/i);
+                /^Operator BridgeCompoundValue\.\+=/i);
             const wordCompoundLine = "compoundModulo Mod= 2";
             const wordCompoundPosition = position(operatorDocument, wordCompoundLine,
                 "compoundModulo ".length + 1);
@@ -2771,6 +5598,39 @@ async function run() {
             "Function Outer() As Long\n    Return Inner(1 + 2)\nEnd Function",
             source
         ]);
+        if (process.env.FBC_EDITOR_EXECUTABLE) {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+                "compiler.arguments", "diagnostics.run"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-native-selection-"));
+            const filePath = path.join(directory, "main.bas");
+            const nativeSource = "Dim a As Long = 1\nDim b As Long = 2\nDim c As Long = 3\nPrint a + b * c\n";
+            try {
+                fs.writeFileSync(filePath, nativeSource);
+                for (const [name, value] of [["analysis.compilerPath", process.env.FBC_EDITOR_EXECUTABLE],
+                    ["analysis.projectContexts", []], ["analysis.activeContext", null], ["analysis.run", "onDemand"],
+                    ["compiler.arguments", []], ["diagnostics.run", "off"]]) {
+                    await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                }
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                const nativeSelections = await vscode.commands.executeCommand("vscode.executeSelectionRangeProvider", current.uri,
+                    [position(current, "a + b * c", 4), position(current, "a + b * c")]);
+                assert.equal(nativeSelections.length, 2);
+                const spans = nativeSelections.map((selection) => {
+                    const texts = [];
+                    for (let range = selection; range; range = range.parent) texts.push(current.getText(range.range));
+                    return texts;
+                });
+                assert.ok(spans[0].includes("b * c"), "the compiler-owned multiplication must be selectable");
+                assert.ok(spans.every((texts) => texts.includes("a + b * c")), "both carets must retain the native containing sum");
+                assert.equal(current.isDirty, false);
+                assert.equal(fs.readFileSync(filePath, "utf8"), nativeSource);
+            } finally {
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                fs.rmSync(directory, { recursive: true, force: true });
+            }
+        }
     });
     await check("expand selection includes apostrophe and block comment groups", async () => {
         const source = "' first comment\n' second comment\n\n/' outer block\n    nested text\n'/\nPrint 1\n";
@@ -2791,6 +5651,148 @@ async function run() {
         };
         assert.ok(textsFor(selections[0]).includes("' first comment\n' second comment"));
         assert.ok(textsFor(selections[1]).includes("/' outer block\n    nested text\n'/"));
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("compiler-proven unreachable code is hinted without inlays and clears after edits", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic"), editorConfiguration = vscode.workspace.getConfiguration("editor");
+        const settings = ["analysis.compilerPath", "compiler.path", "compiler.arguments", "analysis.run", "diagnostics.run", "analysis.projectContexts"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const previousInlays = editorConfiguration.get("inlayHints.enabled");
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-unreachable-code-"));
+        const source = ["#if 0", "Print (", "#endif", "Sub FlowProbe()", "    Goto doneLabel", "    /' \u{1f600} '/ Print \"unreachable\"", "doneLabel:",
+            "    Print \"reachable\"", "End Sub", "FlowProbe()", ""].join("\n");
+        try {
+            await editorConfiguration.update("inlayHints.enabled", "off", vscode.ConfigurationTarget.Global);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"], ["analysis.projectContexts", []]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            for (const bridge of [false, true]) {
+                const filePath = path.join(directory, bridge ? "bridge.bas" : "stock.bas");
+                fs.writeFileSync(filePath, source);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                await vscode.window.showTextDocument(current);
+                // Semantic highlighting requests the existing binding-capable
+                // snapshot. The hint itself never starts another analysis.
+                await vscode.commands.executeCommand("vscode.provideDocumentSemanticTokens", current.uri);
+                const diagnostics = () => vscode.languages.getDiagnostics(current.uri).filter((entry) => entry.code === "unreachable-code");
+                const inactive = () => vscode.languages.getDiagnostics(current.uri).filter((entry) => entry.code === "inactive-code");
+                const brackets = () => vscode.languages.getDiagnostics(current.uri).filter((entry) => entry.source === "FreeBASIC brackets");
+                const deadline = Date.now() + DOCUMENT_CHANGE_TIMEOUT_MS;
+                while ((!diagnostics().length || !inactive().length || brackets().length) && Date.now() < deadline) {
+                    await new Promise((resolve) => setTimeout(resolve, 25));
+                }
+                assert.equal(diagnostics().length, 1, `bridge=${bridge}: hint only the unreachable native token`);
+                assert.equal(inactive().length, 1, "retain inactive-branch fading");
+                assert.ok(inactive()[0].tags.includes(vscode.DiagnosticTag.Unnecessary));
+                assert.equal(brackets().length, 0, "the inactive opener must remain excluded from bracket checks");
+                const diagnostic = diagnostics()[0];
+                assert.equal(diagnostic.severity, vscode.DiagnosticSeverity.Hint);
+                assert.ok(diagnostic.tags.includes(vscode.DiagnosticTag.Unnecessary));
+                assert.equal(diagnostic.range.start.line, 5);
+                assert.equal(diagnostic.range.start.character, source.split("\n")[5].indexOf("Print"));
+                assert.equal(current.getText(diagnostic.range), "Print");
+                assert.match(diagnostic.message, /no reachable path/);
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(current.uri, new vscode.Range(position(current, "Goto doneLabel"), position(current, "Goto doneLabel", "Goto doneLabel".length)), "Print 0");
+                await applyEditAndWaitForDocuments(edit, [current]);
+                assert.equal(diagnostics().length, 0, "an edit immediately clears cached reachability");
+                assert.equal(fs.readFileSync(filePath, "utf8"), source, "the native hint must not save the edited buffer");
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await editorConfiguration.update("inlayHints.enabled", previousInlays, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("native folding uses external escape and REM options without source-only guesses", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "compiler.path", "compiler.arguments", "analysis.run", "diagnostics.run", "analysis.projectContexts", "analysis.activeContext"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-lexical-folds-"));
+        const policyPath = path.join(directory, "options.bi");
+        const source = ["Sub FoldProbe()", String.raw`Print "inside \" /' still quoted"`, "' first comment", "' second comment",
+            "REM = 1 /' actual block", "' #region fake", "' fake content", "' #endregion", "'/", "Print 1", "End Sub", "FoldProbe()", ""].join("\r\n");
+        try {
+            fs.writeFileSync(policyPath, "Option Escape\nOption NoKeyword REM\nDim Shared REM As Long\n");
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", ["-lang", "deprecated", "-include", policyPath]],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"], ["analysis.projectContexts", []], ["analysis.activeContext", null]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            for (const bridge of [false, true]) {
+                const filePath = path.join(directory, bridge ? "bridge.bas" : "stock.bas");
+                fs.writeFileSync(filePath, source);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                await vscode.commands.executeCommand("vscode.provideDocumentSemanticTokens", current.uri);
+                for (let repeat = 0; repeat < 2; repeat++) {
+                    const ranges = await vscode.commands.executeCommand("vscode.executeFoldingRangeProvider", current.uri);
+                    assert.ok(ranges.some((fold) => fold.start === 0 && fold.end === 10), "keep the native procedure boundary");
+                    assert.deepEqual(ranges.filter((fold) => fold.kind === vscode.FoldingRangeKind.Comment).map((fold) => [fold.start, fold.end]),
+                        [[2, 3], [4, 8]], `bridge=${bridge}: strings and REM identifiers cannot invent comment folds`);
+                    assert.equal(ranges.some((fold) => fold.kind === vscode.FoldingRangeKind.Region), false, "region text inside a real block comment is not a region");
+                }
+                assert.equal(current.getText(), source);
+                assert.equal(fs.readFileSync(filePath, "utf8"), source);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("cached native block ranges ignore inactive terminators in folding and selection", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "compiler.path", "compiler.arguments", "analysis.run", "diagnostics.run", "analysis.projectContexts"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-native-folds-"));
+        const header = "Type IncludedBlock\nnumber As Long\nEnd Type\n";
+        const source = ['#include once "blocks.bi"', '#include once "blocks.bi"', "Sub Kept()", "#if 0", "End Sub", "#endif",
+            "' #region notes", "' first note", "' second note", "' #endregion", "If 1 Then", "Print 1", "End If", "End Sub ' \u{1f600}", "Kept()", ""].join("\n");
+        try {
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.run", "onDemand"], ["diagnostics.run", "off"], ["analysis.projectContexts", []]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            for (const bridge of [false, true]) {
+                const backendDirectory = path.join(directory, bridge ? "bridge" : "stock");
+                fs.mkdirSync(backendDirectory);
+                const filePath = path.join(backendDirectory, "main.bas"), headerPath = path.join(backendDirectory, "blocks.bi");
+                fs.writeFileSync(filePath, source);
+                fs.writeFileSync(headerPath, header);
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                await vscode.window.showTextDocument(current);
+                const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri, position(current, "Sub Kept", 5));
+                assert.ok(hovers.length, "hover supplies the cached analysis before folding");
+                const ranges = await vscode.commands.executeCommand("vscode.executeFoldingRangeProvider", current.uri);
+                assert.ok(ranges.some((fold) => fold.start === 2 && fold.end === 13), `bridge=${bridge}: keep the real procedure body`);
+                assert.equal(ranges.some((fold) => fold.start === 2 && fold.end === 4), false, "ignore the inactive END SUB");
+                assert.ok(ranges.some((fold) => fold.start === 10 && fold.end === 12), "retain the native IF body");
+                for (const [start, end, kind] of [[0, 1, vscode.FoldingRangeKind.Imports], [3, 5, vscode.FoldingRangeKind.Region],
+                    [6, 9, vscode.FoldingRangeKind.Region], [7, 8, vscode.FoldingRangeKind.Comment]]) {
+                    assert.ok(ranges.some((fold) => fold.start === start && fold.end === end && fold.kind === kind),
+                        `retain source fold ${start}:${end}:${kind}`);
+                }
+                assert.equal(ranges.some((fold) => fold.start === 0 && fold.end === 2), false, "header block coordinates cannot leak into this file");
+                const selections = await vscode.commands.executeCommand("vscode.executeSelectionRangeProvider", current.uri,
+                    [position(current, "Sub Kept", 5), position(current, "Print 1", 6)]);
+                assert.equal(selections.length, 2);
+                for (const selection of selections) {
+                    const selected = [];
+                    for (let range = selection; range; range = range.parent) selected.push(current.getText(range.range));
+                    assert.ok(selected.includes(source.split("\n").slice(2, 14).join("\n")), "select the full active procedure and its Unicode closing comment");
+                    assert.equal(selected.includes(source.split("\n").slice(2, 5).join("\n")), false, "do not offer a procedure closed by inactive code");
+                }
+                assert.equal(current.getText(), source);
+                assert.equal(fs.readFileSync(filePath, "utf8"), source);
+                assert.equal(fs.readFileSync(headerPath, "utf8"), header);
+            }
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
     });
     await check("multiline block comments receive comment folding ranges", async () => {
         const source = "Print 1\n/' outer comment\n    /' nested comment '/\nouter comment ends '/ Print 2\n";
@@ -2869,15 +5871,226 @@ async function run() {
             selectedExpected[3] = `\t${selectedExpected[3]}`;
             assert.equal(selected.getText(), selectedExpected.join("\r\n"));
             assert.equal(selected.eol, vscode.EndOfLine.CRLF);
+            if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) {
+                const configuration = vscode.workspace.getConfiguration("freebasic");
+                const settings = ["analysis.compilerPath", "compiler.path", "compiler.arguments", "analysis.run", "diagnostics.run", "analysis.projectContexts", "analysis.activeContext"];
+                const previous = settings.map((name) => [name, configuration.get(name)]);
+                const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-native-format-"));
+                const nativeLines = ["Sub Kept()", "#if 0", "  End Sub", " If ignored Then ' \u{1f600}", "#endif", "If 1 Then", "Print 1", "End If", "End Sub", "Kept()", ""];
+                const nativeSource = nativeLines.join("\r\n");
+                const nativeExpected = [...nativeLines];
+                for (const line of [1, 4, 5, 7]) nativeExpected[line] = `  ${nativeExpected[line]}`;
+                nativeExpected[6] = `    ${nativeExpected[6]}`;
+                try {
+                    for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                        ["analysis.run", "onDemand"], ["diagnostics.run", "off"], ["analysis.projectContexts", []], ["analysis.activeContext", null]]) {
+                        await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                    }
+                    for (const bridge of [false, true]) {
+                        const filePath = path.join(directory, bridge ? "bridge.bas" : "stock.bas");
+                        fs.writeFileSync(filePath, nativeSource);
+                        await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                        const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                        await vscode.commands.executeCommand("vscode.provideDocumentSemanticTokens", current.uri);
+                        const rangeEdits = await vscode.commands.executeCommand("vscode.executeFormatRangeProvider", current.uri,
+                            new vscode.Range(6, 0, 7, 0), { tabSize: 2, insertSpaces: true });
+                        assert.deepEqual(rangeEdits.map((edit) => [edit.range.start.line, edit.newText]), [[6, "    "]],
+                            "selection formatting must use the active enclosing blocks");
+                        const nativeEdits = await vscode.commands.executeCommand("vscode.executeFormatDocumentProvider", current.uri,
+                            { tabSize: 2, insertSpaces: true });
+                        assert.equal(nativeEdits.some((edit) => [2, 3].includes(edit.range.start.line)), false, "inactive source bytes remain untouched");
+                        const apply = new vscode.WorkspaceEdit();
+                        apply.set(current.uri, nativeEdits);
+                        await applyEditAndWaitForDocuments(apply, [current]);
+                        assert.equal(current.getText(), nativeExpected.join("\r\n"), `bridge=${bridge}: inactive block keywords must not affect indentation`);
+                        const repeat = await vscode.commands.executeCommand("vscode.executeFormatDocumentProvider", current.uri, { tabSize: 2, insertSpaces: true });
+                        assert.ok(repeat == null || repeat.length === 0, "a repeat without native facts must not undo the formatted result");
+                        assert.equal(fs.readFileSync(filePath, "utf8"), nativeSource);
+                        for (const rem of [false, true]) {
+                            const optionPath = path.join(directory, rem ? "rem-options.bi" : "escape-options.bi");
+                            fs.writeFileSync(optionPath, rem ? "Option NoKeyword REM\nDim Shared REM As Long\n" : "Option Escape\n");
+                            await configuration.update("compiler.arguments", ["-lang", rem ? "deprecated" : "fblite", "-include", optionPath], vscode.ConfigurationTarget.Global);
+                            const lexicalLines = rem
+                                ? ["Sub RemProbe()", "If 1 Then", "REM = 1 : End If", "Print 2", "End Sub", "RemProbe()", ""]
+                                : ["Sub EscapeProbe()", String.raw`Print "inside \" /' still quoted"`, "' keep comment", "If 1 Then", "Print 1", "End If", "End Sub", "EscapeProbe()", ""];
+                            const lexicalSource = lexicalLines.join("\r\n"), expected = [...lexicalLines];
+                            for (const line of rem ? [1, 3] : [1, 2, 3, 5]) expected[line] = "  " + expected[line];
+                            if (!rem) expected[4] = "    " + expected[4];
+                            const lexicalPath = path.join(directory, `${bridge ? "bridge" : "stock"}-${rem ? "rem" : "escape"}.bas`);
+                            fs.writeFileSync(lexicalPath, lexicalSource);
+                            const lexicalDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(lexicalPath));
+                            await vscode.commands.executeCommand("vscode.provideDocumentSemanticTokens", lexicalDocument.uri);
+                            const lexicalEdits = await vscode.commands.executeCommand("vscode.executeFormatDocumentProvider", lexicalDocument.uri, { tabSize: 2, insertSpaces: true });
+                            const applyLexical = new vscode.WorkspaceEdit();
+                            applyLexical.set(lexicalDocument.uri, lexicalEdits);
+                            await applyEditAndWaitForDocuments(applyLexical, [lexicalDocument]);
+                            assert.equal(lexicalDocument.getText(), expected.join("\r\n"), `bridge=${bridge}, rem=${rem}: external lexical options must reach formatting`);
+                            const repeated = await vscode.commands.executeCommand("vscode.executeFormatDocumentProvider", lexicalDocument.uri, { tabSize: 2, insertSpaces: true });
+                            assert.ok(repeated == null || repeated.length === 0);
+                            assert.equal(fs.readFileSync(lexicalPath, "utf8"), lexicalSource);
+                        }
+                        await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+                    }
+                } finally {
+                    for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                    fs.rmSync(directory, { recursive: true, force: true });
+                }
+            }
         } finally {
             await vscode.window.showTextDocument(document);
         }
     });
 
     if (process.env.FBC_EDITOR_EXECUTABLE) {
+        await check("native call hierarchy distinguishes unevaluated queries from runtime calls", async () => {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+                "compiler.path", "compiler.arguments", "diagnostics.run"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-unevaluated-hierarchy-"));
+            const implicitPath = path.join(directory, "implicit.bas"), namedPath = path.join(directory, "named.bas");
+            let current;
+            try {
+                const implicit = ["Type QueryBox", "    value As Long", "    Declare Constructor()",
+                    "    Declare Operator Cast() As Long", "    Declare Operator [](ByVal index As Long) As Long", "End Type",
+                    "Sub QueryOnly()", "    Dim converted As TypeOf(CLng(Type<QueryBox>()))", "    Dim instance As QueryBox = Any",
+                    "    Dim indexed As TypeOf(instance[0])", "End Sub", "Sub RuntimeCalls()", "    Dim instance As QueryBox",
+                    "    Print CLng(instance)", "    Print instance[0]", "End Sub", ""].join("\n");
+                fs.writeFileSync(implicitPath, implicit);
+                current = await vscode.workspace.openTextDocument(vscode.Uri.file(implicitPath));
+                await vscode.window.showTextDocument(current);
+                await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+                await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+                await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+                const hierarchy = async (spelling, prefix) => {
+                    const items = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri,
+                        position(current, spelling, prefix.length));
+                    assert.equal(items?.length, 1, spelling);
+                    return items[0];
+                };
+                const lines = (calls) => calls?.flatMap((call) => call.fromRanges.map((range) => range.start.line)).sort((a, b) => a - b);
+                for (const compilerPath of ["", process.env.FBC_EDITOR_EXECUTABLE]) {
+                    await configuration.update("analysis.compilerPath", compilerPath, vscode.ConfigurationTarget.Global);
+                    assert.equal(await vscode.commands.executeCommand("freebasic.analyzeModule"), true);
+                    const queryOnly = await hierarchy("Sub QueryOnly", "Sub ");
+                    assert.deepEqual(await vscode.commands.executeCommand("vscode.provideOutgoingCalls", queryOnly), []);
+                    const runtime = await hierarchy("Sub RuntimeCalls", "Sub ");
+                    assert.deepEqual(lines(await vscode.commands.executeCommand("vscode.provideOutgoingCalls", runtime)), [12, 13, 14]);
+                    const constructor = await hierarchy("Declare Constructor", "Declare ");
+                    assert.deepEqual(lines(await vscode.commands.executeCommand("vscode.provideIncomingCalls", constructor)), [12]);
+                }
+                const named = ["Declare Function Factory() As Long", "Declare Function TextFactory() As String",
+                    "#define FactoryType(name) TypeOf(name())", "Sub Caller()", "    Dim first As TypeOf(Factory())",
+                    "    Print SizeOf(Factory())", "    Dim nested As TypeOf(CLng(SizeOf(Factory())))",
+                    "    Dim expanded As FactoryType(Factory)", "    Print Factory()", "    Print Len(TextFactory())",
+                    "#define DualUse(name) Dim mixed As TypeOf(name()) : Print name()", "    DualUse(Factory)", "End Sub",
+                    "#if SizeOf(Integer) > 0", "#assert TypeOf(CLng(1)) = TypeOf(Long)", "#endif", ""].join("\n");
+                fs.writeFileSync(namedPath, named);
+                current = await vscode.workspace.openTextDocument(vscode.Uri.file(namedPath));
+                await vscode.window.showTextDocument(current);
+                const changes = new vscode.WorkspaceEdit();
+                changes.insert(current.uri, current.positionAt(named.length), "' unsaved native snapshot\n");
+                await applyEditAndWaitForDocuments(changes, [current]);
+                assert.equal(current.isDirty, true);
+                assert.equal(await vscode.commands.executeCommand("freebasic.analyzeModule"), true);
+                const caller = await hierarchy("Sub Caller", "Sub ");
+                assert.deepEqual(lines(await vscode.commands.executeCommand("vscode.provideOutgoingCalls", caller)), [8, 9, 11]);
+                const factory = await hierarchy("Function Factory", "Function ");
+                assert.deepEqual(lines(await vscode.commands.executeCommand("vscode.provideIncomingCalls", factory)), [8, 11]);
+                const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", current.uri,
+                    position(current, "Function Factory", "Function ".length));
+                assert.deepEqual([...new Set(references.map((entry) => entry.range.start.line))].sort((a, b) => a - b), [0, 4, 5, 6, 7, 8, 11]);
+                assert.equal(fs.readFileSync(namedPath, "utf8"), named, "analysis must not save the overlay");
+            } finally {
+                if (current?.isDirty) {
+                    await vscode.window.showTextDocument(current);
+                    await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+                }
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                await vscode.window.showTextDocument(document);
+                fs.rmSync(directory, { recursive: true, force: true });
+            }
+        });
+        await check("native call hierarchy retains macro calls across configured modules", async () => {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+                "compiler.path", "compiler.arguments", "diagnostics.run"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-macro-call-hierarchy-"));
+            const sourcePath = path.join(directory, "caller.bas"), otherPath = path.join(directory, "other.bas");
+            let current;
+            try {
+                const header = "Declare Function Work Overload(ByVal value As Long) As Long\n" +
+                    "Declare Function Work Overload(ByVal value As Double) As Long\nDeclare Function Other(ByVal value As Long) As Long\n";
+                const source = ['#include "api.bi"', "#define Invoke(name, value) name(value)",
+                    "#define Relay(name, value) Invoke(name, value)", "#define FixedCall() Work(CLng(1))",
+                    "#define Pair(first, second) first(CLng(1)) + second(CLng(2))", "Sub Caller()",
+                    '    Print "é😀" : Print Invoke(Work, CLng(1))', "    Print Relay(Work, CDbl(1))", "    Print FixedCall()",
+                    "    Print Pair(Work, Other)", "    Dim query As TypeOf(Invoke(Work, CLng(2)))", "#if 0",
+                    "    Print Invoke(Work, CLng(3))", "#endif", "    Print Work(CLng(9))", "End Sub", ""].join("\n");
+                fs.writeFileSync(path.join(directory, "api.bi"), header);
+                fs.writeFileSync(sourcePath, source);
+                fs.writeFileSync(otherPath, '#include "api.bi"\n#define Remote(name) name(CLng(1))\nPrint Remote(Work)\n' +
+                    "#define Glue(prefix, suffix) prefix##suffix(CLng(1))\nPrint Glue(Wo, rk)\n");
+                current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+                await vscode.window.showTextDocument(current);
+                await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+                await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [{ name: "macro-calls", modules: [sourcePath, otherPath] }],
+                    vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.activeContext", { name: "macro-calls", module: sourcePath }, vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+                await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+                const prepare = async (spelling, prefix) => {
+                    const items = await vscode.commands.executeCommand("vscode.prepareCallHierarchy", current.uri,
+                        position(current, spelling, prefix.length));
+                    assert.equal(items?.length, 1, spelling);
+                    return items[0];
+                };
+                const outgoing = async () => {
+                    const calls = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", await prepare("Sub Caller", "Sub "));
+                    return calls?.map((call) => [call.to.selectionRange.start.line, call.fromRanges.map((range) => range.start.line)])
+                        .sort((first, second) => first[0] - second[0]);
+                };
+                const incoming = async () => {
+                    const calls = await vscode.commands.executeCommand("vscode.provideIncomingCalls", await prepare("Print Work(CLng(9))", "Print "));
+                    return calls?.map((call) => [path.basename(call.from.uri.fsPath), call.fromRanges.map((range) => range.start.line)]);
+                };
+                for (const compilerPath of ["", process.env.FBC_EDITOR_EXECUTABLE]) {
+                    await configuration.update("analysis.compilerPath", compilerPath, vscode.ConfigurationTarget.Global);
+                    assert.equal(await vscode.commands.executeCommand("freebasic.analyzeModule"), true);
+                    assert.deepEqual(await incoming(), [["caller.bas", [6, 8, 9, 14]], ["other.bas", [2, 4]]]);
+                    assert.deepEqual(await outgoing(), [[0, [6, 8, 9, 14]], [1, [7]], [2, [9]]]);
+                    assert.equal(vscode.workspace.textDocuments.some((entry) => entry.uri.fsPath === otherPath), false,
+                        "closed macro callers must not need their editors opened");
+                    assert.equal(vscode.window.activeTextEditor.document.uri.fsPath, sourcePath);
+                }
+                const changed = source.replace("#define FixedCall() Work(CLng(1))", "#define FixedCall() Work(CDbl(1))");
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(current.uri, new vscode.Range(current.positionAt(0), current.positionAt(source.length)), changed);
+                await applyEditAndWaitForDocuments(edit, [current]);
+                assert.equal(current.isDirty, true);
+                assert.equal(await vscode.commands.executeCommand("freebasic.analyzeModule"), true);
+                assert.deepEqual(await incoming(), [["caller.bas", [6, 9, 14]], ["other.bas", [2, 4]]]);
+                assert.deepEqual(await outgoing(), [[0, [6, 9, 14]], [1, [7, 8]], [2, [9]]]);
+                assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+            } finally {
+                if (current?.isDirty) {
+                    await vscode.window.showTextDocument(current);
+                    await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+                }
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                await vscode.window.showTextDocument(document);
+                fs.rmSync(directory, { recursive: true, force: true });
+            }
+        });
         await check("native call hierarchy follows compiler-selected procedure bindings", async () => {
             const configuration = vscode.workspace.getConfiguration("freebasic");
             const previousCompiler = configuration.get("analysis.compilerPath", "");
+            const previousArguments = configuration.get("compiler.arguments", []);
             const uri = vscode.Uri.file(path.join(__dirname, "workspace/compiler-call-hierarchy.bas"));
             const document = await vscode.workspace.openTextDocument(uri);
             try {
@@ -2893,8 +6106,8 @@ async function run() {
                 const leafCallers = await vscode.commands.executeCommand("vscode.provideIncomingCalls", leaf[0]);
                 assert.deepEqual(leafCallers.map((call) => call.from.name).sort(), ["MacroCallerValue", "MiddleValue", "RootValue"]);
                 const macroCallerEdge = leafCallers.find((call) => call.from.name === "MacroCallerValue");
-                assert.equal(document.getText(macroCallerEdge.fromRanges[0]), "LeafValue",
-                    "the macro-expanded edge should map to its physical callee argument");
+                assert.equal(document.getText(macroCallerEdge.fromRanges[0]), "InvokeValue(LeafValue, value)",
+                    "the complete project graph reports the physical macro invocation, not an editable callee spelling");
 
                 const root = await vscode.commands.executeCommand(
                     "vscode.prepareCallHierarchy", uri, position(document, "Function RootValue", "Function ".length + 2)
@@ -2904,6 +6117,18 @@ async function run() {
                 const rootCalls = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", root[0]);
                 assert.deepEqual(rootCalls.map((call) => call.to.name).sort(), ["LeafValue", "MiddleValue"],
                     JSON.stringify(rootCalls.map((call) => ({ name: call.to.name, ranges: call.fromRanges.map((range) => [range.start.line, range.start.character]) }))));
+
+                // Retained tree items must reacquire native facts after the
+                // selected compiler context retires their original snapshot.
+                await configuration.update("compiler.arguments", [...previousArguments, "-d", "__FB_VSCODE_HIERARCHY_REFRESH__=1"],
+                    vscode.ConfigurationTarget.Global);
+                const refreshedRootCalls = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", root[0]);
+                assert.deepEqual(refreshedRootCalls.map((call) => call.to.name).sort(), ["LeafValue", "MiddleValue"]);
+                const refreshedLeafCallers = await vscode.commands.executeCommand("vscode.provideIncomingCalls", leaf[0]);
+                assert.deepEqual(refreshedLeafCallers.map((call) => call.from.name).sort(), ["MacroCallerValue", "MiddleValue", "RootValue"]);
+                assert.equal(document.getText(refreshedLeafCallers.find((call) => call.from.name === "MacroCallerValue").fromRanges[0]),
+                    "InvokeValue(LeafValue, value)");
+
                 const rootCallers = await vscode.commands.executeCommand("vscode.provideIncomingCalls", root[0]);
                 const moduleCaller = rootCallers.find((call) => call.from.detail === "Module-level calls");
                 assert.ok(moduleCaller, "the module-level RootValue call should appear as an incoming caller");
@@ -2951,6 +6176,7 @@ async function run() {
                 const barePropertyCalls = await vscode.commands.executeCommand("vscode.provideOutgoingCalls", barePropertyCaller[0]);
                 assert.deepEqual(barePropertyCalls.map((call) => call.to.name), ["BareValue"]);
             } finally {
+                await configuration.update("compiler.arguments", previousArguments, vscode.ConfigurationTarget.Global);
                 await configuration.update("analysis.compilerPath", previousCompiler, vscode.ConfigurationTarget.Global);
             }
         });
@@ -3066,6 +6292,396 @@ async function run() {
                 await configuration.update("analysis.compilerPath", previousCompiler, vscode.ConfigurationTarget.Global);
             }
         });
+        await check("guarded type completion follows compiler configuration without text edits", async () => {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+                "compiler.path", "compiler.arguments", "diagnostics.run"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-guarded-type-completion-"));
+            const sourcePath = path.join(directory, "main.bas");
+            const source = fs.readFileSync(path.join(__dirname, "../fixtures/guarded-type-completions.bas"), "utf8");
+            let current;
+            try {
+                fs.writeFileSync(sourcePath, source);
+                current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+                await vscode.window.showTextDocument(current);
+                await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+                await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+                for (const compilerPath of ["", process.env.FBC_EDITOR_EXECUTABLE]) {
+                    await configuration.update("analysis.compilerPath", compilerPath, vscode.ConfigurationTarget.Global);
+                    if (compilerPath) {
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.insert(current.uri, current.positionAt(current.getText().length), "' bridge overlay\n");
+                        await applyEditAndWaitForDocuments(edit, [current]);
+                    }
+                    const version = current.version;
+                    for (const first of [false, true, false]) {
+                        await configuration.update("compiler.arguments", first ? ["-d", "FIRST_TYPE"] : [], vscode.ConfigurationTarget.Global);
+                        const selected = position(current, "Dim selected As REM", "Dim selected As RE".length);
+                        const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", current.uri, selected);
+                        assert.ok(completions.items.some((item) => item.label === "REM" && item.kind === vscode.CompletionItemKind.Struct),
+                            `${compilerPath ? "bridge" : "stock"}, FIRST_TYPE=${first}`);
+                        const definitions = await vscode.commands.executeCommand("vscode.executeDefinitionProvider", current.uri, selected);
+                        const offset = first ? source.indexOf("Type REM") : source.lastIndexOf("Type REM");
+                        const line = source.slice(0, offset).split("\n").length - 1;
+                        assert.ok(definitions.some((item) => item.uri.fsPath === sourcePath && item.range.start.line === line),
+                            "completion and navigation must follow the active native declaration");
+                        assert.equal(current.version, version, "a compiler context change must not edit source");
+                    }
+                }
+                assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+            } finally {
+                if (current?.isDirty) {
+                    await vscode.window.showTextDocument(current);
+                    await vscode.commands.executeCommand("workbench.action.files.revert");
+                }
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                await vscode.window.showTextDocument(document);
+                fs.rmSync(directory, { recursive: true, force: true });
+            }
+        });
+        await check("native keyword type completion retains binding-backed candidates", async () => {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+                "compiler.path", "compiler.arguments", "diagnostics.run"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-keyword-type-completion-"));
+            const sourcePath = path.join(directory, "main.bas");
+            const source = fs.readFileSync(path.join(__dirname, "../fixtures/stock-type-completions.bas"), "utf8");
+            let current;
+            try {
+                fs.writeFileSync(sourcePath, source);
+                current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+                await vscode.window.showTextDocument(current);
+                await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+                await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+                await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+                for (const compilerPath of ["", process.env.FBC_EDITOR_EXECUTABLE]) {
+                    await configuration.update("analysis.compilerPath", compilerPath, vscode.ConfigurationTarget.Global);
+                    if (compilerPath) {
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.insert(current.uri, current.positionAt(current.getText().length), "' bridge overlay\n");
+                        await applyEditAndWaitForDocuments(edit, [current]);
+                    }
+                    for (const [spelling, prefix, name, kind] of [
+                        ["Dim directValue As REM", "Dim directValue As RE", "REM", vscode.CompletionItemKind.Struct],
+                        ["Dim aliasValue As IF", "Dim aliasValue As IF", "IF", vscode.CompletionItemKind.Struct],
+                        ["Dim enumValue As WHILE", "Dim enumValue As WH", "WHILE", vscode.CompletionItemKind.Enum],
+                        ["Dim qualifiedValue As PRINT.Payload", "Dim qualifiedValue As PR", "PRINT", vscode.CompletionItemKind.Module],
+                        ["Dim qualifiedValue As PRINT.Payload", "Dim qualifiedValue As PRINT.", "Payload", vscode.CompletionItemKind.Struct],
+                        ["Dim qualifiedValue As PRINT.Payload", "Dim qualifiedValue As PRINT.Pay", "Payload", vscode.CompletionItemKind.Struct]
+                    ]) {
+                        const result = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", current.uri,
+                            position(current, spelling, prefix.length));
+                        const item = result.items.find((candidate) => candidate.label === name && candidate.kind === kind);
+                        assert.ok(item, `${prefix} (${compilerPath ? "bridge" : "stock"})`);
+                        const insertion = typeof item.insertText === "string" ? item.insertText : item.insertText?.value;
+                        assert.equal(insertion, name, "type slots must remain name-only");
+                        assert.ok(!result.items.some((candidate) => candidate.label === "directValue" &&
+                            candidate.kind === vscode.CompletionItemKind.Variable), "type slots must not mix in values");
+                    }
+                }
+                assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+            } finally {
+                if (current?.isDirty) {
+                    await vscode.window.showTextDocument(current);
+                    await vscode.commands.executeCommand("workbench.action.files.revert");
+                }
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                await vscode.window.showTextDocument(document);
+                fs.rmSync(directory, { recursive: true, force: true });
+            }
+        });
+        await check("type-position completion filters native and source candidates", async () => {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+                "compiler.path", "compiler.arguments", "diagnostics.run"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-type-completion-"));
+            const sourcePath = path.join(directory, "main.bas");
+            const source = fs.readFileSync(path.join(__dirname, "../fixtures/type-completions.bas"), "utf8");
+            let current;
+            try {
+                fs.writeFileSync(sourcePath, source);
+                current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+                await vscode.window.showTextDocument(current);
+                await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+                await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+                await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+                for (const compilerPath of ["", process.env.FBC_EDITOR_EXECUTABLE]) {
+                    await configuration.update("analysis.compilerPath", compilerPath, vscode.ConfigurationTarget.Global);
+                    if (compilerPath) {
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.insert(current.uri, current.positionAt(current.getText().length), "' bridge overlay\n");
+                        await applyEditAndWaitForDocuments(edit, [current]);
+                    }
+                    for (const [spelling, prefix, expected] of [
+                        ["Dim selected As SampleType", "Dim selected As Samp", "SampleType"],
+                        ["Dim qualified As TypeSpace.SampleAlias", "Dim qualified As TypeSpace.Sam", "SampleAlias"],
+                        ["Dim continued As _\n    SampleAlias", "Dim continued As _\n    Samp", "SampleAlias"],
+                        ["Declare Sub AcceptType(ByVal value As SampleType)", "Declare Sub AcceptType(ByVal value As Samp", "SampleType"],
+                        ["Declare Function SupplyType() As SampleAlias", "Declare Function SupplyType() As Samp", "SampleAlias"],
+                        ["Type GlobalAlias As SampleType", "Type GlobalAlias As Samp", "SampleType"],
+                        ["Type DerivedType Extends Object", "Type DerivedType Extends Ob", "OBJECT"],
+                        ["Dim macroValue As TypeMacro(SampleType)", "Dim macroValue As TypeMa", "TypeMacro"]
+                    ]) {
+                        const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", current.uri,
+                            position(current, spelling, prefix.length));
+                        const items = completions.items.filter((item) => item.kind !== vscode.CompletionItemKind.Text);
+                        const item = items.find((candidate) => String(candidate.label).toLowerCase() === expected.toLowerCase());
+                        assert.ok(item, `${spelling} (${compilerPath ? "bridge" : "stock/source"})`);
+                        const insertion = typeof item.insertText === "string" ? item.insertText : item.insertText?.value;
+                        assert.equal(insertion.toLowerCase(), expected.toLowerCase(), "type names must not insert constructor arguments");
+                        assert.ok(items.every((candidate) => !["ordinaryValue", "BuildValue", "unrelatedVariable", "unrelatedFactory", "SIN", "TRUE", "PRINT"]
+                            .some((name) => name.toLowerCase() === String(candidate.label).toLowerCase())), spelling);
+                    }
+                    for (const [spelling, prefix, expected] of [["Typeof(ordinaryValue)", "Typeof(ordinaryVa", "ordinaryValue"],
+                        ["String * lengthValue", "String * lengthVa", "lengthValue"],
+                        ["Long = BuildValue(1)", "Long = BuildVa", "BuildValue"],
+                        ["As Function Cdecl", "As Function Cd", "CDECL"]]) {
+                        const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", current.uri,
+                            position(current, spelling, prefix.length));
+                        assert.ok(completions.items.some((item) => item.label === expected && item.kind !== vscode.CompletionItemKind.Text),
+                            `type filtering must leave expression completion intact (${compilerPath ? "bridge" : "stock/source"}): ` + spelling);
+                    }
+                }
+                const edit = new vscode.WorkspaceEdit();
+                edit.insert(current.uri, current.positionAt(current.getText().length), "\nDim unfinished As TypeSpace.Samp");
+                await applyEditAndWaitForDocuments(edit, [current]);
+                const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", current.uri,
+                    current.positionAt(current.getText().length));
+                assert.ok(completions.items.some((item) => item.label === "SampleType" && item.kind === vscode.CompletionItemKind.Struct),
+                    "native namespace completion must survive an unfinished type name");
+                assert.ok(!completions.items.some((item) => item.label === "unrelatedFactory" && item.kind === vscode.CompletionItemKind.Function));
+                assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+            } finally {
+                if (current?.isDirty) {
+                    await vscode.window.showTextDocument(current);
+                    await vscode.commands.executeCommand("workbench.action.files.revert");
+                }
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                await vscode.window.showTextDocument(document);
+                fs.rmSync(directory, { recursive: true, force: true });
+            }
+        });
+        await check("native procedure pointer Signature Help uses callable types", async () => {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run",
+                "compiler.path", "compiler.arguments", "diagnostics.run"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fb-callback-signatures-"));
+            const sourcePath = path.join(directory, "main.bas");
+            const source = [
+                "Declare Function CachedChoice Overload(ByVal amount As Long, ByVal scale As Double) As Double",
+                "Declare Function CachedChoice Overload(ByVal amount As Double, ByVal scale As Double) As Double",
+                fs.readFileSync(path.join(__dirname, "../fixtures/procedure-pointer-signatures.bas"), "utf8"),
+                fs.readFileSync(path.join(__dirname, "../fixtures/array-index-signatures.bas"), "utf8"),
+                "Print CachedChoice(CLng(1), 2)", "Print CachedChoice(CDbl(1), 2)", ""
+            ].join("\n");
+            let current;
+            try {
+                fs.writeFileSync(sourcePath, source);
+                current = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+                await vscode.window.showTextDocument(current);
+                await configuration.update("compiler.path", process.env.FBC_EXECUTABLE, vscode.ConfigurationTarget.Global);
+                await configuration.update("compiler.arguments", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.projectContexts", [], vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.activeContext", null, vscode.ConfigurationTarget.Global);
+                await configuration.update("analysis.run", "onDemand", vscode.ConfigurationTarget.Global);
+                await configuration.update("diagnostics.run", "off", vscode.ConfigurationTarget.Global);
+                for (const compilerPath of ["", process.env.FBC_EDITOR_EXECUTABLE]) {
+                    await configuration.update("analysis.compilerPath", compilerPath, vscode.ConfigurationTarget.Global);
+                    if (compilerPath) {
+                        const changes = new vscode.WorkspaceEdit();
+                        changes.insert(current.uri, current.positionAt(current.getText().length), "' bridge overlay\n");
+                        assert.equal(await vscode.workspace.applyEdit(changes), true);
+                    }
+                    assert.equal(current.isDirty, Boolean(compilerPath));
+                    for (const [reference, prefix, name] of [["Return @Compute", "Return @Com", "Compute"],
+                        ["@CallbackScope.ComputeScoped", "@CallbackScope.Comp", "ComputeScoped"],
+                        ["@.CallbackScope.ComputeScoped", "@.CallbackScope.Comp", "ComputeScoped"],
+                        ["@.Compute", "@.Com", "Compute"],
+                        ["@..CallbackScope.ComputeScoped", "@..CallbackScope.Comp", "ComputeScoped"]]) {
+                        const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", current.uri,
+                            position(current, reference, prefix.length));
+                        const item = completions.items.find((candidate) => candidate.label === name &&
+                            candidate.kind === vscode.CompletionItemKind.Function);
+                        assert.ok(item, `${reference} (${compilerPath ? "bridge" : "stock"})`);
+                        const insertion = typeof item.insertText === "string" ? item.insertText : item.insertText?.value;
+                        assert.equal(insertion, name, "a procedure address must not acquire call arguments");
+                        assert.equal(current.getText(item.range), name, "replace only the complete terminal identifier");
+                        assert.ok(item.documentation, "address completion must retain declaration details");
+                    }
+                    for (const call of ["injected(1,", "callback(1,", "inferred(1,", "produced(1,", "handlersValue.invoke(1,",
+                        "callbackArray(0)(1,", "callbackValues(0)(1,", "GetCallback(1)(1,", "(*callbackPointer)(1,", "(callback)(1,"]) {
+                        const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                            position(current, call, call.length));
+                        assert.equal(help?.signatures.length, 1, `${call} (${compilerPath ? "bridge" : "stock"})`);
+                        assert.match(help.signatures[0].label, /^Function .*\(as long, as double\) as double$/i);
+                        assert.deepEqual(help.signatures[0].parameters.map((parameter) =>
+                            help.signatures[0].label.slice(...parameter.label)), ["as long", "as double"]);
+                        assert.ok(help.signatures[0].parameters[1].label[0] > help.signatures[0].parameters[0].label[1]);
+                        assert.equal(help.activeParameter, 1);
+                    }
+                    for (const name of ["callbackArray", "callbackValues"]) {
+                        const array = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                            position(current, `Print ${name}(0)`, `Print ${name}(`.length));
+                        assert.equal(array?.signatures.length, 1);
+                        assert.match(array.signatures[0].label, new RegExp(`^Array ${name}\\(`),
+                            "indexing an array of callbacks is not a callback invocation: " + name);
+                    }
+                    for (const [call, prefix, labels, active] of [
+                        ["matrix(0, 2)", "matrix(0,", ["index1: -1 To 4", "index2: 1 To 3"], 1],
+                        ["holder.values(0)", "holder.values(", ["index1: -2 To 2"], 0],
+                        ["GetHolder().values(0)", "GetHolder().values(", ["index1: -2 To 2"], 0],
+                        ["holders(0).values(0)", "holders(0).values(", ["index1: -2 To 2"], 0],
+                        ["(*holderPointer).values(0)", "(*holderPointer).values(", ["index1: -2 To 2"], 0],
+                        ["GetHolder().callbacks(0)(1)", "GetHolder().callbacks(", ["index1: -1 To 1"], 0],
+                        ["dynamicValues(0, 2)", "dynamicValues(0,", ["index1", "index2"], 1],
+                        ["Print values(0, 2)", "Print values(0,", ["indices..."], 0]
+                    ]) {
+                        const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                            position(current, call, prefix.length));
+                        assert.equal(help?.signatures.length, 1, call);
+                        assert.match(help.signatures[0].label, /^Array /);
+                        const actual = help.signatures[0].parameters.map((parameter) => help.signatures[0].label.slice(...parameter.label));
+                        const expected = compilerPath && actual.every((label) => /^index\d+$/.test(label))
+                            ? labels.map((_, index) => `index${index + 1}`) : labels;
+                        assert.deepEqual(actual, expected, `${call} (${compilerPath ? "bridge" : "stock"}): ${help.signatures[0].label}`);
+                        assert.equal(help.activeParameter, active, call);
+                        assert.ok(help.signatures[0].parameters.every((parameter) => parameter.documentation), call);
+                    }
+                    const elementCall = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, "GetHolder().callbacks(0)(1)", "GetHolder().callbacks(0)(".length));
+                    assert.equal(elementCall?.signatures.length, 1);
+                    assert.match(elementCall.signatures[0].label, /^Function .*\(as long\) as double$/i,
+                        "the second argument list invokes the selected callback element rather than indexing the array");
+                    const action = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, "action(resultValue)", "action(".length));
+                    assert.match(action?.signatures[0]?.label || "", /^Sub action\(byref as long\)$/i);
+                    assert.equal(action.activeParameter, 0);
+                    for (const [call, type] of [["CachedChoice(CLng(1),", "Long"], ["CachedChoice(CDbl(1),", "Double"]]) {
+                        const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                            position(current, call, call.length));
+                        assert.equal(help?.signatures.length, 2, "cached native bindings must retain the overload dropdown");
+                        assert.match(help.signatures[help.activeSignature].label, new RegExp(`amount As ${type}\\b`, "i"));
+                        assert.equal(help.activeParameter, 1);
+                    }
+                }
+                for (const statement of ["Print callback(1, )", "Print callback(1,"]) {
+                    const text = source.replace("Print callback(1, 2)", statement);
+                    const changes = new vscode.WorkspaceEdit();
+                    changes.replace(current.uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)), text);
+                    assert.equal(await vscode.workspace.applyEdit(changes), true);
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, statement, statement.indexOf(",") + 1));
+                    assert.equal(help?.signatures.length, 1, statement);
+                    assert.equal(help.activeParameter, 1);
+                }
+                for (const [complete, statement] of [
+                    ["Print callbackArray(0)(1, 2)", "Print callbackArray(0)(1, )"],
+                    ["Print callbackArray(0)(1, 2)", "Print callbackArray(0)(1,"],
+                    ["Print GetCallback(1)(1, 2)", "Print GetCallback(1)(1, )"],
+                    ["Print (*callbackPointer)(1, 2)", "Print (*callbackPointer)(1, )"]
+                ]) {
+                    const text = source.replace(complete, statement);
+                    const changes = new vscode.WorkspaceEdit();
+                    changes.replace(current.uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)), text);
+                    await applyEditAndWaitForDocuments(changes, [current]);
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, statement, statement.lastIndexOf(",") + 1));
+                    assert.equal(help?.signatures.length, 1, statement);
+                    assert.equal(help.signatures[0].parameters.length, 2);
+                    assert.equal(help.activeParameter, 1);
+                }
+                const fieldSource = source + ["Type RecoveryHandlers", "invoke As CallbackType", "Private:",
+                    "hidden As CallbackType", "End Type", "Declare Function MakeHandlers() As RecoveryHandlers",
+                    "Declare Function MakeHandlersPointer() As RecoveryHandlers Ptr",
+                    "Dim handlerArray(0 To 1) As RecoveryHandlers", ""].join("\n");
+                for (const receiver of ["MakeHandlers().invoke", "MakeHandlersPointer()->invoke", "handlerArray(0).invoke",
+                    "(handlersValue.invoke)", "MakeHandlers().hidden"]) {
+                    const statement = `Print ${receiver}(1,`;
+                    const changes = new vscode.WorkspaceEdit();
+                    changes.replace(current.uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)),
+                        fieldSource + statement + "\n");
+                    await applyEditAndWaitForDocuments(changes, [current]);
+                    assert.equal(current.isDirty, true);
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, statement, statement.length));
+                    if (receiver.endsWith(".hidden")) {
+                        assert.equal(help?.signatures.length || 0, 0, "a surviving receiver does not grant private field access");
+                        continue;
+                    }
+                    assert.equal(help?.signatures.length, 1, statement);
+                    assert.deepEqual(help.signatures[0].parameters.map((parameter) =>
+                        help.signatures[0].label.slice(...parameter.label)), ["as long", "as double"]);
+                    assert.equal(help.activeParameter, 1);
+                }
+                for (const field of ["values", "callbacks"]) {
+                    const changes = new vscode.WorkspaceEdit();
+                    changes.replace(current.uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)),
+                        source + `Print GetHolder().${field}(`);
+                    await applyEditAndWaitForDocuments(changes, [current]);
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        current.positionAt(current.getText().length));
+                    assert.equal(help?.signatures.length, 1, `unfinished ${field} indexing`);
+                    assert.match(help.signatures[0].label, new RegExp(`^Array ${field}\\(`));
+                    assert.equal(help.signatures[0].parameters.length, 1);
+                }
+                const declarations = [
+                    "Declare Function Recoverable Overload(ByVal amount As Long, ByVal scale As Double) As Double",
+                    "Declare Function Recoverable Overload(ByVal amount As Double, ByVal scale As Double) As Double",
+                    "Declare Sub Apply Overload(ByVal amount As Long, ByVal scale As Double)",
+                    "Declare Sub Apply Overload(ByVal amount As Double, ByVal scale As Double)",
+                    "Type VisibleService", "    value As Long",
+                    "Declare Function Measure Overload(ByVal amount As Long, ByVal scale As Double) As Double",
+                    "Declare Function Measure Overload(ByVal amount As Double, ByVal scale As Double) As Double",
+                    "Declare Sub Apply Overload(ByVal amount As Long, ByVal scale As Double)",
+                    "Declare Sub Apply Overload(ByVal amount As Double, ByVal scale As Double)",
+                    "Private:", "Declare Function Measure Overload(ByVal amount As String, ByVal scale As Double) As Double",
+                    "End Type", "Dim service As VisibleService", ""
+                ].join("\n");
+                for (const [statement, count, selectedType] of [["Print Recoverable(1, )", 2], ["Print Recoverable(1,", 2],
+                    ["Apply 1,", 2], ["Print service.Measure(1, )", 2],
+                    ["Print Recoverable(CLng(1), 2)", 2, "Long"], ["Print Recoverable(CDbl(1), 2)", 2, "Double"],
+                    ["Print service.Measure(CLng(1), 2)", 2, "Long"], ["Print service.Measure(CDbl(1), 2)", 2, "Double"],
+                    ["Apply CLng(1), 2", 2, "Long"], ["Apply CDbl(1), 2", 2, "Double"],
+                    ["service.Apply CDbl(1), 2", 2, "Double"], ["service . Apply CDbl(1), 2", 2, "Double"],
+                    ["Apply CDbl(1), _\n    2", 2, "Double"],
+                    ["If 1 Then Apply CLng(1), 2 Else Apply CDbl(1), 2", 2, "Long"]]) {
+                    const text = declarations + source.replace("Print callback(1, 2)", statement);
+                    const changes = new vscode.WorkspaceEdit();
+                    changes.replace(current.uri, new vscode.Range(current.positionAt(0), current.positionAt(current.getText().length)), text);
+                    assert.equal(await vscode.workspace.applyEdit(changes), true);
+                    const help = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", current.uri,
+                        position(current, statement, statement.indexOf(",") + 1));
+                    assert.equal(help?.signatures.length, count, statement);
+                    assert.equal(help.activeParameter, 1);
+                    if (selectedType) assert.match(help.signatures[help.activeSignature].label,
+                        new RegExp(`amount As ${selectedType}\\b`, "i"), "FBC must choose the active overload: " + statement);
+                    assert.ok(help.signatures.every((signature) => !/amount As String/i.test(signature.label)),
+                        "recovery must not reveal a private method overload");
+                }
+                assert.equal(fs.readFileSync(sourcePath, "utf8"), source);
+            } finally {
+                if (current?.isDirty) {
+                    await vscode.window.showTextDocument(current);
+                    await vscode.commands.executeCommand("workbench.action.files.revert");
+                }
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                await vscode.window.showTextDocument(document);
+                fs.rmSync(directory, { recursive: true, force: true });
+            }
+        });
         await check("compiler signature help shows written optional defaults", async () => {
             const configuration = vscode.workspace.getConfiguration("freebasic");
             const previousCompiler = configuration.get("analysis.compilerPath", "");
@@ -3082,10 +6698,15 @@ async function run() {
                 assert.match(signature.signatures[0].parameters[1].label, /As Double\s*=\s*1\.5/i);
                 const completionPosition = document.positionAt(document.getText().indexOf(call) + "Apply".length);
                 const completions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri, completionPosition);
-                const applyScale = completions.items.find((item) => item.label === "ApplyScale");
+                const applyScale = completions.items.find((item) => item.label === "ApplyScale" && item.kind !== vscode.CompletionItemKind.Text);
                 const applyScaleSnippet = typeof applyScale?.insertText === "string" ? applyScale.insertText : applyScale?.insertText?.value;
-                assert.equal(applyScaleSnippet, "ApplyScale(${1:value})$0",
-                    "completion should prompt for the required argument without inserting the optional defaulted argument");
+                assert.equal(applyScaleSnippet, "ApplyScale", "written optional arguments must not be duplicated by completion");
+                const freshCompletions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", uri,
+                    document.positionAt(document.getText().length));
+                const freshApplyScale = freshCompletions.items.find((item) => item.label === "ApplyScale");
+                const freshSnippet = typeof freshApplyScale?.insertText === "string" ? freshApplyScale.insertText : freshApplyScale?.insertText?.value;
+                assert.equal(freshSnippet, "ApplyScale(${1:value})$0",
+                    "fresh completion should prompt only for the required argument");
             } finally {
                 await configuration.update("analysis.compilerPath", previousCompiler, vscode.ConfigurationTarget.Global);
             }
@@ -3250,6 +6871,40 @@ async function run() {
                 assert.equal(definition.range.end.line, position(symbolDocument, "End Function").line);
             } finally {
                 await configuration.update("analysis.compilerPath", "", vscode.ConfigurationTarget.Global);
+            }
+        });
+        await check("native workspace symbols follow the selected build across closed modules", async () => {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "compiler.arguments", "index.workspaceConcurrency"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-workspace-builds-"));
+            const first = path.join(directory, "first.bas"), second = path.join(directory, "second.bas");
+            const source = (suffix) => ["Namespace BuildSearch", "#ifdef ALTERNATE", `Sub Alternate${suffix}()`, "#else",
+                `Sub Normal${suffix}()`, "#endif", "End Sub", "End Namespace", ""].join("\n");
+            try {
+                fs.writeFileSync(first, source("First"));
+                fs.writeFileSync(second, source("Second"));
+                for (const [name, value] of [["analysis.compilerPath", process.env.FBC_EDITOR_EXECUTABLE], ["compiler.arguments", []],
+                    ["index.workspaceConcurrency", 1], ["analysis.projectContexts", [{ name: "normal", modules: [first, second] },
+                        { name: "alternate", modules: [first, second], arguments: ["-d", "ALTERNATE"] }]]]) {
+                    await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                }
+                for (const [active, expected] of [[{ name: "normal", module: first }, ["NormalFirst", "NormalSecond"]],
+                    [{ name: "alternate", module: first }, ["AlternateFirst", "AlternateSecond"]],
+                    [null, ["NormalFirst", "NormalSecond", "AlternateFirst", "AlternateSecond"]],
+                    [{ name: "normal", module: second }, ["NormalFirst", "NormalSecond"]]]) {
+                    await configuration.update("analysis.activeContext", active, vscode.ConfigurationTarget.Global);
+                    const symbols = await vscode.commands.executeCommand("vscode.executeWorkspaceSymbolProvider", "BuildSearch.");
+                    assert.deepEqual(symbols.map((symbol) => symbol.name).sort(), expected.sort(), JSON.stringify(active));
+                    assert.ok(symbols.every((symbol) => [first, second].includes(symbol.location.uri.fsPath)));
+                    assert.equal(vscode.workspace.textDocuments.some((document) => [first, second].includes(document.uri.fsPath)), false,
+                        "workspace search must not open the configured modules");
+                }
+                assert.equal(fs.readFileSync(first, "utf8"), source("First"));
+                assert.equal(fs.readFileSync(second, "utf8"), source("Second"));
+            } finally {
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                fs.rmSync(directory, { recursive: true, force: true });
             }
         });
         await check("native workspace symbols find declarations in closed configured modules", async () => {
@@ -3898,7 +7553,7 @@ Print "inside \" ignored" : escapedInstance.value = 1
             const replaceBuffer = async (text) => {
                 const edit = new vscode.WorkspaceEdit();
                 edit.replace(recoveryUri, new vscode.Range(recoveryDocument.positionAt(0), recoveryDocument.positionAt(recoveryDocument.getText().length)), text);
-                assert.equal(await vscode.workspace.applyEdit(edit), true);
+                await applyEditAndWaitForDocuments(edit, [recoveryDocument]);
             };
             try {
                 await replaceBuffer(partial);
@@ -4029,11 +7684,12 @@ Print "inside \" ignored" : escapedInstance.value = 1
                 assert.ok(completions.items.some((item) => item.label === "value"));
                 const constructorCallCompletions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", constructorUri,
                     position(constructorDocument, "New WrappedValue(5)", "New WrappedValue".length));
-                const constructorItem = constructorCallCompletions.items.find((item) => item.label === "WrappedValue");
+                const constructorItem = constructorCallCompletions.items.find((item) => item.label === "WrappedValue" &&
+                    item.kind !== vscode.CompletionItemKind.Text);
                 const constructorSnippet = typeof constructorItem?.insertText === "string"
                     ? constructorItem.insertText : constructorItem?.insertText?.value;
-                assert.equal(constructorSnippet, "WrappedValue(${1:source})$0",
-                    "native type completion after NEW should insert the unique constructor's parameter placeholder");
+                assert.equal(constructorSnippet, "WrappedValue",
+                    "native constructor completion must preserve its written argument list");
             } finally {
                 await configuration.update("analysis.compilerPath", "", vscode.ConfigurationTarget.Global);
                 await vscode.window.showTextDocument(document);
@@ -4087,6 +7743,54 @@ Print "inside \" ignored" : escapedInstance.value = 1
                 await vscode.window.showTextDocument(document);
             }
         });
+        await check("custom FreeBASIC header language modes feed unsaved native types and explicit contexts", async () => {
+            const configuration = vscode.workspace.getConfiguration("freebasic");
+            const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run", "compiler.arguments", "diagnostics.run"];
+            const previous = settings.map((name) => [name, configuration.get(name)]);
+            const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-custom-header-"));
+            const filePath = path.join(directory, "main.bas"), headerPath = path.join(directory, "types.inc");
+            const source = '#include "types.inc"\nDim nativeValue As ModeHeaderValue\nPrint nativeValue\n';
+            const diskHeader = "Type ModeHeaderValue As Long\n";
+            let header;
+            try {
+                fs.writeFileSync(filePath, source);
+                fs.writeFileSync(headerPath, diskHeader);
+                for (const [name, value] of [["analysis.compilerPath", process.env.FBC_EDITOR_EXECUTABLE], ["compiler.arguments", []],
+                    ["analysis.run", "onDemand"], ["diagnostics.run", "off"], ["analysis.projectContexts", [{ name: "custom", modules: [filePath] }]],
+                    ["analysis.activeContext", { name: "custom", module: filePath }]]) {
+                    await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                }
+                header = await vscode.languages.setTextDocumentLanguage(await vscode.workspace.openTextDocument(vscode.Uri.file(headerPath)), "freebasic");
+                await vscode.window.showTextDocument(header);
+                const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                const typeText = async () => {
+                    const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri, position(current, "Print nativeValue", 7));
+                    return hovers.flatMap((hover) => hover.contents.map((content) => content.value)).join("\n");
+                };
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(header.uri, new vscode.Range(position(header, "Long"), position(header, "Long", 4)), "Double");
+                await applyEditAndWaitForDocuments(edit, [header]);
+                assert.equal(await vscode.commands.executeCommand("freebasic.analyzeModule"), true, "an explicit custom-header request uses its selected module");
+                assert.match(await typeText(), /compiler type.*double/i, "the root must use the unsaved custom-header type");
+                assert.equal(header.isDirty, true);
+                const restore = new vscode.WorkspaceEdit();
+                restore.replace(header.uri, new vscode.Range(position(header, "Double"), position(header, "Double", 6)), "Long");
+                await applyEditAndWaitForDocuments(restore, [header]);
+                assert.equal(await vscode.commands.executeCommand("freebasic.analyzeModule"), true);
+                assert.match(await typeText(), /compiler type.*long/i, "a second header edit must replace the captured type");
+                assert.equal(fs.readFileSync(filePath, "utf8"), source);
+                assert.equal(fs.readFileSync(headerPath, "utf8"), diskHeader);
+            } finally {
+                if (header && !header.isClosed && header.getText() !== diskHeader) {
+                    const restore = new vscode.WorkspaceEdit();
+                    restore.replace(header.uri, new vscode.Range(header.positionAt(0), header.positionAt(header.getText().length)), diskHeader);
+                    await applyEditAndWaitForDocuments(restore, [header]);
+                }
+                for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+                await vscode.window.showTextDocument(document);
+                fs.rmSync(directory, { recursive: true, force: true });
+            }
+        });
         await check("unsaved modules and headers feed native expression types without disk writes", async () => {
             const configuration = vscode.workspace.getConfiguration("freebasic");
             await configuration.update("analysis.compilerPath", process.env.FBC_EDITOR_EXECUTABLE, vscode.ConfigurationTarget.Global);
@@ -4128,14 +7832,15 @@ Print "inside \" ignored" : escapedInstance.value = 1
                 const partialSource = `${compilerDocument.getText()}Print (\n`;
                 const partialEdit = new vscode.WorkspaceEdit();
                 partialEdit.replace(compilerUri, new vscode.Range(compilerDocument.positionAt(0), compilerDocument.positionAt(compilerDocument.getText().length)), partialSource);
-                assert.equal(await vscode.workspace.applyEdit(partialEdit), true);
+                await applyEditAndWaitForDocuments(partialEdit, [compilerDocument]);
                 assert.equal(await vscode.commands.executeCommand("freebasic.analyzeModule"), true);
                 const partialDiagnostics = vscode.languages.getDiagnostics(compilerUri).filter((diagnostic) => diagnostic.source === "fbc (buffer)");
                 assert.ok(partialDiagnostics.length, "the intentionally incomplete root module must retain its parser diagnostic");
                 const partialDirectiveHover = await vscode.commands.executeCommand("vscode.executeHoverProvider", headerUri, position(header, "#if 1 + 2 = 3", 4));
-                assert.match(partialDirectiveHover.flatMap((hover) => hover.contents.map((content) => content.value)).join("\n"),
+                const partialDirectiveText = partialDirectiveHover.flatMap((hover) => hover.contents.map((content) => content.value)).join("\n");
+                assert.match(partialDirectiveText,
                     /Compiler recovery type \(provisional\): `integer`/i,
-                    "compiler-typed unsaved header directives should survive an unrelated root-buffer syntax error");
+                    "compiler-typed unsaved header directives should survive an unrelated root-buffer syntax error: " + JSON.stringify(partialDirectiveText));
                 assert.equal(fs.readFileSync(compilerUri.fsPath, "utf8"), sourceBefore);
                 assert.equal(fs.readFileSync(headerUri.fsPath, "utf8"), headerBefore);
             } finally {
@@ -4700,8 +8405,10 @@ Print "inside \" ignored" : escapedInstance.value = 1
                 assert.match(compilerDocument.lineAt(implementations[0].range.start.line).text, /Function Choices\.SelectValue\(ByVal value As Double\) As Long/i);
                 const signaturePosition = position(compilerDocument, call, call.lastIndexOf("SelectValue") + "SelectValue(".length);
                 const signature = await vscode.commands.executeCommand("vscode.executeSignatureHelpProvider", compilerUri, signaturePosition);
-                assert.equal(signature.signatures.length, 1);
-                assert.match(signature.signatures[0].parameters[0].label, /As Double/i);
+                assert.equal(signature.signatures.length, 2, "accessible overload alternatives should remain visible");
+                assert.match(signature.signatures[signature.activeSignature].parameters[0].label, /As Double/i,
+                    "the active signature must still follow FBC's selected overload");
+                assert.ok(signature.signatures.some((entry) => /As Long/i.test(entry.parameters[0].label)));
                 const references = await vscode.commands.executeCommand("vscode.executeReferenceProvider", compilerUri, floatingPosition);
                 assert.equal(references.length, 8, "Six calls plus matching prototype and body");
                 assert.equal(references.some((entry) => entry.uri.toString() === compilerUri.toString() && entry.range.contains(integerPosition)), false);
@@ -4715,6 +8422,15 @@ Print "inside \" ignored" : escapedInstance.value = 1
                 const expandedTargets = await vscode.commands.executeCommand("vscode.executeDefinitionProvider", expanded.uri, position(expanded, expandedCall[0], 1));
                 assert.equal(expandedTargets.length, 1);
                 assert.equal(expandedTargets[0].range.start.line, definitions[0].range.start.line);
+                const expandedPoint = position(expanded, expandedCall[0], 1);
+                const expandedHighlights = await vscode.commands.executeCommand("vscode.executeDocumentHighlights", expanded.uri, expandedPoint);
+                assert.ok(expandedHighlights.some((entry) => entry.range.contains(expandedPoint)),
+                    "the preprocessed view should highlight its own compiler-selected call token");
+                const otherExpandedCall = expanded.getText().match(/SelectValue\s*\(\s*CLng\s*\(\s*1\s*\)\s*\)/i);
+                assert.ok(otherExpandedCall);
+                const otherExpandedPoint = position(expanded, otherExpandedCall[0], 1);
+                assert.equal(expandedHighlights.some((entry) => entry.range.contains(otherExpandedPoint)), false,
+                    "expanded highlights must exclude the sibling overload");
                 const overloadCompletions = await vscode.commands.executeCommand(
                     "vscode.executeCompletionItemProvider", compilerUri, position(compilerDocument, call, call.indexOf("SelectValue") + 2)
                 );
@@ -4725,12 +8441,19 @@ Print "inside \" ignored" : escapedInstance.value = 1
                 const macroCompletions = await vscode.commands.executeCommand(
                     "vscode.executeCompletionItemProvider", compilerUri, position(compilerDocument, macroCall, "Print SELECT_".length)
                 );
-                const generatedMacro = macroCompletions.items.find((item) => item.label === "SELECT_GENERATED");
+                const generatedMacro = macroCompletions.items.find((item) => item.label === "SELECT_GENERATED" &&
+                    item.kind !== vscode.CompletionItemKind.Text);
                 const generatedMacroSnippet = typeof generatedMacro?.insertText === "string"
                     ? generatedMacro.insertText
                     : generatedMacro?.insertText?.value;
-                assert.equal(generatedMacroSnippet, "SELECT_GENERATED(${1:value})$0",
-                    "a unique function-like macro should complete with its argument placeholder");
+                assert.equal(generatedMacroSnippet, "SELECT_GENERATED",
+                    "a function-like macro completion must preserve written arguments");
+                const freshMacroCompletions = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", compilerUri,
+                    compilerDocument.positionAt(compilerDocument.getText().length));
+                const freshMacro = freshMacroCompletions.items.find((item) => item.label === "SELECT_GENERATED");
+                const freshMacroSnippet = typeof freshMacro?.insertText === "string" ? freshMacro.insertText : freshMacro?.insertText?.value;
+                assert.equal(freshMacroSnippet, "SELECT_GENERATED(${1:value})$0",
+                    "a fresh unique function-like macro still offers its parameter placeholder");
                 const members = await vscode.commands.executeCommand("vscode.executeCompletionItemProvider", compilerUri, position(compilerDocument, "MakeResult(CDbl(1)).floatingValue", "MakeResult(CDbl(1)).".length));
                 assert.ok(members.items.some((item) => item.label === "floatingValue"));
                 assert.equal(members.items.some((item) => item.label === "integerValue"), false);
@@ -4740,18 +8463,23 @@ Print "inside \" ignored" : escapedInstance.value = 1
                 const indexedPropertyCompletions = await vscode.commands.executeCommand(
                     "vscode.executeCompletionItemProvider", compilerUri, position(compilerDocument, "instance.IndexedValue(2)", "instance.".length)
                 );
-                const indexedProperty = indexedPropertyCompletions.items.find((item) => item.label === "IndexedValue");
+                const indexedProperty = indexedPropertyCompletions.items.find((item) => item.label === "IndexedValue" &&
+                    item.kind !== vscode.CompletionItemKind.Text);
                 const indexedPropertySnippet = typeof indexedProperty?.insertText === "string"
                     ? indexedProperty.insertText
                     : indexedProperty?.insertText?.value;
-                assert.equal(indexedPropertySnippet, "IndexedValue(${1:index})$0",
-                    "an indexed property getter should prompt for its required index");
+                assert.equal(indexedPropertySnippet, "IndexedValue",
+                    "an indexed property completion must preserve its written index");
                 const accessorCompletions = await vscode.commands.executeCommand(
                     "vscode.executeCompletionItemProvider", compilerUri, position(compilerDocument, "instance.CurrentValue =", "instance.".length)
                 );
                 const currentValue = accessorCompletions.items.find((item) => item.label === "CurrentValue");
                 assert.equal(currentValue.insertText, "CurrentValue",
                     "a property with getter and setter forms should not guess a completion snippet");
+                const freshIndex = accessorCompletions.items.find((item) => item.label === "IndexedValue");
+                const freshIndexSnippet = typeof freshIndex?.insertText === "string" ? freshIndex.insertText : freshIndex?.insertText?.value;
+                assert.equal(freshIndexSnippet, "IndexedValue(${1:index})$0",
+                    "a fresh indexed getter still prompts for its required index");
             } finally {
                 await configuration.update("analysis.compilerPath", "", vscode.ConfigurationTarget.Global);
                 await vscode.window.showTextDocument(document);
@@ -5417,12 +9145,12 @@ Print "inside \" ignored" : escapedInstance.value = 1
                 );
                 assert.equal(definitions.length, 1);
                 assert.match(document.lineAt(definitions[0].range.start.line).text,
-                    /^Operator BridgeCompoundValue\.\+\=/i);
+                    /^Operator BridgeCompoundValue\.\+=/i);
                 const hierarchy = await vscode.commands.executeCommand(
                     "vscode.prepareCallHierarchy", uri, operatorPosition
                 );
                 assert.equal(hierarchy.length, 1);
-                assert.match(hierarchy[0].detail, /BridgeCompoundValue\.\+\=/i);
+                assert.match(hierarchy[0].detail, /BridgeCompoundValue\.\+=/i);
                 const incoming = await vscode.commands.executeCommand("vscode.provideIncomingCalls", hierarchy[0]);
                 assert.ok(incoming.flatMap((caller) => caller.fromRanges).some((range) =>
                     range.start.line === operatorPosition.line
@@ -5604,6 +9332,7 @@ Print "inside \" ignored" : escapedInstance.value = 1
             ].join("\n");
             const source = '#include "values.bi"\nType ReturnedValue\n    fieldValue As Long\nEnd Type\nDeclare Function getRecord() As ReturnedValue\nDeclare Function chooseLocal Overload (ByVal value As Integer) As IntegerResult\nDeclare Function chooseLocal Overload (ByVal value As Double) As DoubleResult\n#if 1\nType ConditionalValue\n    fieldValue As Long\nEnd Type\n#else\nType ConditionalValue\n    inactiveField As Double\nEnd Type\n#endif\nDeclare Function getConditionalValue() As ConditionalValue\n#if 0\nDim inactiveValue = 1\n#endif\nConst inferredSidecarValue = 1 + 2\nDim indexerInstance As OverloadedIndexer\n#if 1\nDim indexChoice As Long\n#else\nDim indexChoice As Double\n#endif\nDim leftPacket As PacketValue\nDim castableInstance As CastableValue\nDim firstAssignable As AssignableValue\nDim secondAssignable As AssignableValue\nfirstAssignable = secondAssignable\nPrint getRecord().fieldValue\nPrint chooseResult(CDbl(1)).doubleValue\nPrint chooseResult(CLng(1)).integerValue\nPrint chooseLocal(CDbl(3)).doubleValue\nPrint chooseLocal(CLng(4)).integerValue\nPrint chooseSameResult(CDbl(6))\nPrint chooseSameResult(CLng(7))\nPrint indexerInstance[CLng(2)]\nPrint indexerInstance[CDbl(2)]\nPrint indexerInstance[indexChoice]\nPrint (leftPacket + CLng(1)).value\nPrint (leftPacket + CDbl(1)).value\nPrint CLng(castableInstance)\nPrint getConditionalValue().fieldValue\nPrint getValue() + 1\n' +
                 "Print Abs(castableInstance)\n" +
+                "Print indexerInstance[indexerInstance[CDbl(9)]]\n" +
                 "Function packetOperatorCaller() As PacketValue\n    Dim localPacket As PacketValue\n    Return localPacket + CDbl(8)\nEnd Function\n";
             const allocationUses = "Dim allocatedChoice As AllocatedValue Ptr = New AllocatedValue\n" +
                 "Delete allocatedChoice\n" +
@@ -5841,6 +9570,23 @@ Print "inside \" ignored" : escapedInstance.value = 1
                 assert.equal(indexSignature.signatures.length, 2);
                 assert.match(indexSignature.signatures[indexSignature.activeSignature].label, /ByVal index As Double/i,
                     "stock FBC expression symbols should select same-result index overloads");
+                const nestedIndexCall = "indexerInstance[indexerInstance[CDbl(9)]]";
+                const nestedInner = nestedIndexCall.indexOf("[", nestedIndexCall.indexOf("[") + 1);
+                const nestedSignature = await vscode.commands.executeCommand(
+                    "vscode.executeSignatureHelpProvider", sourceUri,
+                    position(sourceDocument, nestedIndexCall, nestedInner + 1)
+                );
+                assert.equal(nestedSignature.signatures.length, 2);
+                assert.match(nestedSignature.signatures[nestedSignature.activeSignature].label, /ByVal index As Double/i,
+                    "the innermost receipt must select Double while the surrounding indexer selects Long");
+                for (const [closing, type] of [[nestedIndexCall.length - 2, "Double"], [nestedIndexCall.length - 1, "Long"]]) {
+                    const nestedDefinitions = await vscode.commands.executeCommand(
+                        "vscode.executeDefinitionProvider", sourceUri, position(sourceDocument, nestedIndexCall, closing)
+                    );
+                    assert.equal(nestedDefinitions.length, 1);
+                    assert.match(headerDocument.lineAt(nestedDefinitions[0].range.start.line).text,
+                        new RegExp("^Operator OverloadedIndexer\\.\\[\\]\\(ByVal index As " + type + "\\)", "i"));
+                }
                 const indexDefinition = await vscode.commands.executeCommand(
                     "vscode.executeDefinitionProvider", sourceUri, doubleIndexPosition
                 );

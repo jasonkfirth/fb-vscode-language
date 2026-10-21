@@ -36,6 +36,8 @@ const { loadGrammarSource } = require("./lib/grammar-data");
 const { FreeBasicWorkspaceIndex } = require("./lib/workspace-index");
 
 const LANGUAGE_ID = "freebasic";
+/* Keep compiler-derived hint diagnostics small even in generated modules. */
+const MAX_SOURCE_CODE_DIAGNOSTICS = 500;
 
 let compilerService = null;
 let workspaceIndex = null;
@@ -50,16 +52,17 @@ function activate(context) {
     const diagnosticCollection = vscode.languages.createDiagnosticCollection(LANGUAGE_ID);
     const bracketDiagnostics = vscode.languages.createDiagnosticCollection("freebasic-brackets");
     const inactiveCodeDiagnostics = vscode.languages.createDiagnosticCollection("freebasic-inactive-code");
+    const unreachableCodeDiagnostics = vscode.languages.createDiagnosticCollection("freebasic-unreachable-code");
 
     const updateSourceDiagnostics = (document) => {
         if (document.languageId !== LANGUAGE_ID) return;
 
         const text = document.getText();
         const version = document.version;
-        const isCurrentDocument = () => document.version === version &&
-            vscode.workspace.textDocuments.some((open) => open.uri.toString() === document.uri.toString());
+        const isCurrentDocument = () => !document.isClosed && document.version === version &&
+            vscode.workspace.textDocuments.some((open) => open === document);
         const publish = (ignoredRanges = [], remIdentifierOffsets = [], remKeywordDisabledLineOffsets = [],
-            defaultEscapedStringRanges = []) => {
+            defaultEscapedStringRanges = [], unreachableRanges = []) => {
             if (!isCurrentDocument()) return;
             const offsetAdjustment = text.startsWith("\uFEFF") ? 1 : 0;
             const ranges = offsetAdjustment
@@ -82,7 +85,7 @@ function activate(context) {
             });
             bracketDiagnostics.set(document.uri, bracketProblems);
             const inactiveDiagnostics = [];
-            for (const range of ranges.slice(0, 500)) {
+            for (const range of ranges.slice(0, MAX_SOURCE_CODE_DIAGNOSTICS)) {
                 const start = range.start;
                 const end = range.end;
                 if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > text.length) continue;
@@ -98,24 +101,43 @@ function activate(context) {
             }
             if (inactiveDiagnostics.length) inactiveCodeDiagnostics.set(document.uri, inactiveDiagnostics);
             else inactiveCodeDiagnostics.delete(document.uri);
+            const unreachableDiagnostics = [];
+            for (const range of unreachableRanges.slice(0, MAX_SOURCE_CODE_DIAGNOSTICS)) {
+                const start = range.start + offsetAdjustment, end = range.end + offsetAdjustment;
+                if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > text.length) continue;
+                const diagnostic = new vscode.Diagnostic(
+                    new vscode.Range(document.positionAt(start), document.positionAt(end)),
+                    "The compiler's control-flow graph finds no reachable path to this statement in the selected build.",
+                    vscode.DiagnosticSeverity.Hint
+                );
+                diagnostic.source = "FreeBASIC compiler";
+                diagnostic.code = "unreachable-code";
+                diagnostic.tags = [vscode.DiagnosticTag.Unnecessary];
+                unreachableDiagnostics.push(diagnostic);
+            }
+            if (unreachableDiagnostics.length) unreachableCodeDiagnostics.set(document.uri, unreachableDiagnostics);
+            else unreachableCodeDiagnostics.delete(document.uri);
         };
 
         publish();
         const model = compilerAnalysis?.getModel(document.uri);
         if (!model) return;
         if (model.remote) {
-            Promise.all([
-                model.query("compilerInactiveSourceRanges", document.uri),
-                model.query("compilerBracketMaskOverrides", document.uri)
-            ]).then(([ranges, overrides]) => {
-                if (Array.isArray(ranges)) {
-                    publish(ranges,
-                        Array.isArray(overrides?.remIdentifierOffsets) ? overrides.remIdentifierOffsets : [],
-                        Array.isArray(overrides?.remKeywordDisabledLineOffsets)
-                            ? overrides.remKeywordDisabledLineOffsets : [],
-                        Array.isArray(overrides?.defaultEscapedStringRanges)
-                            ? overrides.defaultEscapedStringRanges : []);
-                } else if (isCurrentDocument()) publish();
+            // Included open headers refresh together. A single read prevents
+            // these background facts from filling the bounded worker queue
+            // before an explicit navigation or hierarchy request can run.
+            model.query("compilerSourceDiagnosticRanges", document.uri).then((facts) => {
+                // Keep all diagnostic families on the same snapshot and never
+                // publish into a reopened document with a reused version.
+                if (!isCurrentDocument() || compilerAnalysis.getModel(document.uri) !== model) return;
+                const ranges = facts?.inactive, overrides = facts?.lexical, unreachable = facts?.unreachable;
+                publish(Array.isArray(ranges) ? ranges : [],
+                    Array.isArray(overrides?.remIdentifierOffsets) ? overrides.remIdentifierOffsets : [],
+                    Array.isArray(overrides?.remKeywordDisabledLineOffsets)
+                        ? overrides.remKeywordDisabledLineOffsets : [],
+                    Array.isArray(overrides?.defaultEscapedStringRanges)
+                        ? overrides.defaultEscapedStringRanges : [],
+                    Array.isArray(unreachable) ? unreachable : []);
             }).catch(() => {});
         } else {
             const overrides = model.compilerBracketMaskOverrides(document.uri);
@@ -123,7 +145,8 @@ function activate(context) {
                 model.compilerInactiveSourceRanges(document.uri),
                 overrides.remIdentifierOffsets,
                 overrides.remKeywordDisabledLineOffsets,
-                overrides.defaultEscapedStringRanges
+                overrides.defaultEscapedStringRanges,
+                model.compilerUnreachableSourceRanges(document.uri)
             );
         }
     };
@@ -162,6 +185,7 @@ function activate(context) {
         diagnosticCollection,
         bracketDiagnostics,
         inactiveCodeDiagnostics,
+        unreachableCodeDiagnostics,
         fileWatcher,
         workspaceIndex,
         compilerAnalysis,
@@ -173,6 +197,16 @@ function activate(context) {
         }),
         vscode.commands.registerCommand("freebasic.selectCompilerContext", () => compilerAnalysis.selectContext(vscode.window.activeTextEditor?.document)),
         vscode.commands.registerCommand("freebasic.showPreprocessed", () => compilerAnalysis.showExpanded(vscode.window.activeTextEditor?.document)),
+        vscode.commands.registerCommand("freebasic.goToBaseMethod", async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor || editor.document.languageId !== LANGUAGE_ID) return null;
+            const position = editor.selection.active;
+            const locations = await features.baseDefinition.provideDefinition(editor.document, position);
+            /* Do not move the cursor after the user has already moved on. */
+            if (!locations || vscode.window.activeTextEditor !== editor || !editor.selection.active.isEqual(position)) return null;
+            return vscode.commands.executeCommand("editor.action.goToLocations", editor.document.uri, position,
+                locations, "goto", "No compiler-confirmed base method at the cursor.");
+        }),
         vscode.commands.registerCommand("freebasic.showExpressionType", async () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) return null;
@@ -291,12 +325,12 @@ function activate(context) {
             }
 
             workspaceIndex.refreshDocument(document);
-            if (/\.(bas|bi)$/i.test(document.uri.fsPath) && vscode.workspace.getConfiguration("freebasic", document.uri).get("analysis.run", "off") === "onSave") {
+            if (compilerAnalysis.isCompilerSource(document.uri, document.languageId) && vscode.workspace.getConfiguration("freebasic", document.uri).get("analysis.run", "off") === "onSave") {
                 await compilerAnalysis.check(document, false);
             }
             if (compilerService.shouldCheckOnSave(document)) {
                 if (/\.bas$/i.test(document.uri.fsPath)) await compilerService.checkSelectedContext(document);
-                else if (/\.bi$/i.test(document.uri.fsPath)) {
+                else if (compilerAnalysis.isCompilerSource(document.uri, document.languageId)) {
                     await workspaceIndex.ensureInitialized();
                     const affected = new Set(workspaceIndex.getDependentModules(document.uri).map((uri) => uri.toString()));
                     for (const uri of compilerService.getDependentModules(document.uri)) affected.add(uri.toString());
@@ -310,6 +344,7 @@ function activate(context) {
         vscode.workspace.onDidCloseTextDocument((document) => {
             bracketDiagnostics.delete(document.uri);
             inactiveCodeDiagnostics.delete(document.uri);
+            unreachableCodeDiagnostics.delete(document.uri);
             if (document.languageId === LANGUAGE_ID) compilerAnalysis.documentClosed(document);
             if (document.uri.scheme === "untitled") {
                 workspaceIndex.removeUri(document.uri);
@@ -331,6 +366,9 @@ function activate(context) {
             */
             if (event.affectsConfiguration("freebasic.index")) {
                 workspaceIndex.invalidateWorkspace();
+            }
+            if (event.affectsConfiguration("freebasic.inlayHints")) {
+                workspaceIndex.notifyChange();
             }
             if (event.affectsConfiguration("freebasic.includePaths") || event.affectsConfiguration("freebasic.compiler") ||
                 event.affectsConfiguration("freebasic.analysis.activeContext") || event.affectsConfiguration("freebasic.analysis.projectContexts")) {

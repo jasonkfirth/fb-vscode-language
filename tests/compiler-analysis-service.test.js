@@ -182,6 +182,133 @@ test("workspace symbol settings respect window and resource configuration scopes
     assert.equal(result.roots.size, 1);
 });
 
+test("workspace symbols select the active build and reject changed selections", async (t) => {
+    for (const mode of ["normal", "alternate", "all", "invalid", "malformed", "changed"]) {
+        const fixture = setup(t);
+        fixture.workspace.workspaceFolders = [{ name: "project", uri: fixture.vscode.Uri.file(fixture.directory) }];
+        fixture.values["analysis.projectContexts"] = [
+            { name: "normal", modules: ["main.bas", "other.bas"] },
+            { name: "alternate", modules: ["main.bas", "other.bas"], arguments: ["-d", "ALTERNATE"] }
+        ];
+        fixture.values["analysis.activeContext"] = mode === "all" ? null : mode === "malformed" ? { name: "normal" }
+            : { name: mode === "invalid" ? "missing" : mode === "alternate" ? "alternate" : "normal", module: "main.bas" };
+        const jobs = [], discarded = [], messages = [];
+        fixture.service.output = { appendLine: (message) => messages.push(message) };
+        const worker = {
+            async beginWorkspace() { return { workspaceId: "pass" }; },
+            async indexWorkspace(job) {
+                jobs.push([job.name, path.basename(job.filePath)]);
+                if (mode === "changed") fixture.values["analysis.activeContext"] = { name: "alternate", module: "main.bas" };
+                return { entries: [] };
+            },
+            async finishWorkspace() {},
+            discardWorkspace(id) { discarded.push(id); },
+            async waitForIdle() {}, cancelAll() {}, async dispose() {}
+        };
+        fixture.service.analysisWorker = worker;
+        fixture.service.getWorkspaceWorkers = () => [worker];
+        const result = await fixture.service.workspaceSymbols("value");
+        const expected = mode === "normal" ? [["normal", "main.bas"], ["normal", "other.bas"]]
+            : mode === "alternate" ? [["alternate", "main.bas"], ["alternate", "other.bas"]]
+                : mode === "all" ? [["normal", "main.bas"], ["normal", "other.bas"], ["alternate", "main.bas"], ["alternate", "other.bas"]]
+                    : mode === "changed" ? [["normal", "main.bas"]] : [];
+        assert.deepEqual(jobs, expected, mode);
+        assert.deepEqual(result.symbols, []);
+        if (mode === "changed") assert.ok(messages.some((message) => /contexts changed/.test(message)), messages.join("\n"));
+        assert.deepEqual(discarded, ["invalid", "malformed"].includes(mode) ? [] : ["pass"], mode);
+    }
+});
+
+test("custom FreeBASIC header modes participate in overlays, contexts and invalidation", async (t) => {
+    let headerText = "Type HeaderValue As Double\n";
+    const fixture = setup(t, (options, result) => {
+        assert.equal(options.overlays.get(headerPath), headerText);
+        return { ...result, dependencies: [fixture.filePath, headerPath] };
+    });
+    const headerPath = path.join(fixture.directory, "types.inc");
+    fs.writeFileSync(headerPath, "Type HeaderValue As Long\n");
+    const header = { uri: fixture.vscode.Uri.file(headerPath), languageId: "freebasic", version: 1, isDirty: true, getText: () => headerText };
+    const unrelated = { uri: fixture.vscode.Uri.file(path.join(fixture.directory, "notes.txt")), languageId: "plaintext", getText: () => "unrelated" };
+    fixture.workspace.textDocuments.push(header, unrelated);
+    fixture.values["analysis.projectContexts"] = [{ name: "normal", modules: ["main.bas"] }];
+    fixture.values["analysis.activeContext"] = { name: "normal", module: "main.bas" };
+    assert.equal(fixture.service.captureBuffers().get(headerPath), headerText);
+    assert.equal(fixture.service.captureBuffers().has(unrelated.uri.fsPath), false);
+    assert.equal(fixture.service.contextFor(header.uri).filePath, fixture.filePath);
+    assert.equal(fixture.service.shouldCheckWithAnalysis(header), true);
+    assert.equal(await fixture.service.check(header, false), true);
+    assert.equal(fixture.service.snapshots.size, 1);
+    headerText = "Type HeaderValue As String\n";
+    header.version++;
+    fixture.service.documentChanged(header);
+    assert.equal(fixture.service.snapshots.size, 0, "a custom-header edit retires captured facts");
+    assert.equal(await fixture.service.check(header, false), true);
+    fixture.workspace.textDocuments = fixture.workspace.textDocuments.filter((document) => document !== header);
+    header.isClosed = true;
+    fixture.service.documentClosed(header);
+    assert.equal(fixture.service.snapshots.size, 0, "discarding an unsaved custom header retires its overlay");
+    assert.equal(fs.readFileSync(headerPath, "utf8"), "Type HeaderValue As Long\n");
+});
+
+for (const remote of [false, true]) test(`stale source queries preserve unrelated compiler snapshots (remote=${remote})`, async (t) => {
+    const fixture = setup(t, (options) => ({ text: options.overlays.get(options.filePath), dependencies: [options.filePath],
+        origins: [{ filePath: options.filePath, line: 0, generated: false }] }));
+    const secondPath = path.join(fixture.directory, "other.bas"), secondText = "Dim other As Long\n";
+    fs.writeFileSync(secondPath, secondText);
+    const second = { uri: fixture.vscode.Uri.file(secondPath), languageId: "freebasic", version: 1, getText: () => secondText };
+    fixture.workspace.textDocuments.push(second);
+    assert.equal(await fixture.service.check(fixture.document, false), true);
+    assert.equal(await fixture.service.check(second, false), true);
+    const firstSnapshot = fixture.service.snapshotFor(fixture.document.uri), secondSnapshot = fixture.service.snapshotFor(second.uri);
+    const models = new Set(["first", "second"]), released = [];
+    let cancelled = 0;
+    if (remote) {
+        for (const [snapshot, id] of [[firstSnapshot, "first"], [secondSnapshot, "second"]]) {
+            snapshot.model = { remote: true, snapshotId: id, available: () => models.has(id) };
+        }
+        fixture.service.analysisWorker = { releaseModel(id) { released.push(id); models.delete(id); }, cancelAll() { cancelled++; }, async dispose() {} };
+    }
+    const retained = secondSnapshot.model;
+    fixture.document.getText = () => "Dim value As Double\n";
+    fixture.document.version++;
+    // Queries can observe the changed buffer before its delayed editor event.
+    assert.equal(fixture.service.getModel(fixture.document.uri), null);
+    assert.equal(fixture.service.getModel(second.uri), retained);
+    assert.equal(fixture.service.snapshots.size, 1);
+    assert.equal(fixture.service.expanded.has(firstSnapshot.uri.toString()), false);
+    assert.equal(fixture.service.expanded.has(secondSnapshot.uri.toString()), true);
+    assert.equal(cancelled, 0, "unrelated native work must not be globally cancelled");
+    assert.deepEqual(released, remote ? ["first"] : []);
+});
+
+for (const sidecar of [false, true]) test(`native stale-source expiry retains an independent worker model (${sidecar ? "sidecar" : "bridge"})`,
+    { skip: !process.env[sidecar ? "FBC_EXECUTABLE" : "FBC_EDITOR_EXECUTABLE"] }, async (t) => {
+    const { CompilerAnalysisWorker } = require("../lib/compiler-worker");
+    const fixture = setup(t);
+    fixture.values["analysis.compilerPath"] = sidecar ? "" : process.env.FBC_EDITOR_EXECUTABLE;
+    fixture.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+    fixture.service.backgroundModels = true;
+    fixture.service.analysisWorker = new CompilerAnalysisWorker();
+    const secondPath = path.join(fixture.directory, "other.bas"), secondText = "Dim other As Long\nPrint other\n";
+    fs.writeFileSync(secondPath, secondText);
+    const second = { uri: fixture.vscode.Uri.file(secondPath), languageId: "freebasic", version: 1, getText: () => secondText };
+    fixture.workspace.textDocuments.push(second);
+    const firstModel = await fixture.service.getModelForEditor(fixture.document, null, true);
+    const secondModel = await fixture.service.getModelForEditor(second, null, true);
+    assert.ok(firstModel?.remote && secondModel?.remote);
+    fixture.document.getText = () => "Dim value As Double\n";
+    fixture.document.version++;
+    fixture.document.isDirty = true;
+    assert.equal(fixture.service.getModel(fixture.document.uri), null);
+    assert.equal(fixture.service.getModel(second.uri), secondModel);
+    assert.equal(fixture.service.analysisWorker.models.has(firstModel.snapshotId), false);
+    assert.equal(fixture.service.analysisWorker.models.has(secondModel.snapshotId), true);
+    const expression = await secondModel.expressionAt(second.uri, { line: 1, character: 6 }, { line: 1, character: 11 });
+    assert.match(expression?.typeName || "", /^long$/i, "the retained graph must still answer native queries without reanalysis");
+    assert.equal(fixture.service.getModel(second.uri).snapshotId, secondModel.snapshotId);
+    assert.equal(fs.readFileSync(fixture.filePath, "utf8"), "Dim value As Long\n");
+});
+
 test("untrusted and unnamed documents never launch compiler analysis", async (t) => {
     const fixture = setup(t);
     fixture.workspace.isTrusted = false;
@@ -374,6 +501,7 @@ test("on-demand analysis stays opt-out and retries failed inputs only after thei
 
     const failed = setup(t, () => { throw new Error("compiler is not ready"); });
     assert.equal(await failed.service.getModelForEditor(failed.document), null);
+    assert.equal(failed.service.onDemandFailures.get(failed.document)?.message, "compiler is not ready");
     assert.equal(await failed.service.getModelForEditor(failed.document), null);
     assert.equal(failed.calls(), 1, "the same failed request must be throttled instead of retried for every provider call");
 
@@ -382,15 +510,53 @@ test("on-demand analysis stays opt-out and retries failed inputs only after thei
     assert.equal(failed.calls(), 2, "a new document version must be eligible for a fresh compiler attempt");
 });
 
+test("on-demand status retains bounded background failures after compatibility preparation", async (t) => {
+    const fixture = setup(t);
+    fixture.service.backgroundModels = true;
+    const message = "The configured fbc semantic sidecar can only analyze saved inputs;\nchanged buffer /project/header.bi requires the editor bridge.\n" + "x".repeat(1000);
+    fixture.service.analysisWorker = { analyze: async () => { throw new Error(message); }, cancelAll() {}, async dispose() {} };
+    const model = await fixture.service.getModelForEditor(fixture.document, null, false, true);
+    assert.equal(model, null);
+    const failure = fixture.service.onDemandFailures.get(fixture.document);
+    assert.ok(failure?.retryAfter > Date.now());
+    assert.equal(failure.message.length, 512);
+    assert.doesNotMatch(failure.message, /[\r\n\t]/);
+    assert.match(failure.message, /changed buffer \/project\/header\.bi/);
+});
+
+for (const extension of ["bi", "inc"]) test(`stock sidecar failure identifies a changed included ${extension} buffer without saving it`, {
+    skip: !process.env.FBC_EXECUTABLE
+}, async (t) => {
+    const { CompilerAnalysisWorker } = require("../lib/compiler-worker");
+    const fixture = setup(t);
+    const headerPath = path.join(fixture.directory, `header.${extension}`);
+    const root = `#include "header.${extension}"\nDim value As HeaderValue\n`;
+    const diskHeader = "Type HeaderValue As Long\n";
+    fs.writeFileSync(fixture.filePath, root);
+    fs.writeFileSync(headerPath, diskHeader);
+    const header = { uri: fixture.vscode.Uri.file(headerPath), languageId: "freebasic", version: 1, isDirty: true,
+        getText: () => "Type HeaderValue As Double\n" };
+    fixture.workspace.textDocuments.push(header);
+    fixture.values["analysis.compilerPath"] = "";
+    fixture.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+    fixture.service.backgroundModels = true;
+    fixture.service.analysisWorker = new CompilerAnalysisWorker();
+    assert.equal(await fixture.service.getModelForEditor(fixture.document, null, false, true), null);
+    const failure = fixture.service.onDemandFailures.get(fixture.document);
+    assert.match(failure?.message || "", /sidecar can only analyze saved inputs/);
+    assert.ok(failure.message.includes(headerPath), "the menu must identify the compiler-consumed unsaved dependency");
+    assert.equal(fs.readFileSync(headerPath, "utf8"), diskHeader);
+    assert.equal(header.isDirty, true, "status and analysis must not save buffers");
+});
+
 test("on-demand failures retry when an included header has been edited and saved", async (t) => {
-    let header;
     const fixture = setup(t, (_options, result) => {
         if (header.version === 1) throw new Error("Header export failed.");
         return { ...result, dependencies: [fixture.filePath, header.uri.fsPath] };
     });
     const filePath = path.join(fixture.directory, "header.bi");
     fs.writeFileSync(filePath, "Type IncompleteHeader\n");
-    header = { uri: fixture.vscode.Uri.file(filePath), version: 1, isDirty: false,
+    const header = { uri: fixture.vscode.Uri.file(filePath), version: 1, isDirty: false,
         getText: () => fs.readFileSync(filePath, "utf8") };
     fixture.workspace.textDocuments.push(header);
     assert.equal(await fixture.service.getModelForEditor(fixture.document), null);
@@ -554,9 +720,8 @@ test("configuration refresh cancels only analyses using obsolete settings", asyn
 });
 
 test("configuration refresh retains the original header's resource context", async (t) => {
-    let header;
     const fixture = setup(t, (options, result) => ({ ...result, dependencies: [fixture.filePath, header.uri.fsPath] }));
-    header = headerContext(fixture);
+    const header = headerContext(fixture);
     fixture.workspace.getConfiguration = (_section, uri) => ({
         get: (name, fallback) => name === "compiler.arguments" && uri.fsPath === header.uri.fsPath
             ? ["-d", "HEADER_RESOURCE"] : fixture.values[name] ?? fallback
@@ -1522,9 +1687,8 @@ test("repeated unsaved edits cancel stale analyses and publish only the newest b
 });
 
 test("new compiler-only dependencies require a second verified pass", async (t) => {
-    let dependency;
     const fixture = setup(t, (_options, result) => ({ ...result, dependencies: [...result.dependencies, dependency] }));
-    dependency = path.join(fixture.directory, "defines.bi");
+    const dependency = path.join(fixture.directory, "defines.bi");
     fs.writeFileSync(dependency, "#define FEATURE 1\n");
     assert.equal(await fixture.service.check(fixture.document), true);
     assert.equal(fixture.calls(), 2);
@@ -1534,9 +1698,8 @@ test("new compiler-only dependencies require a second verified pass", async (t) 
 
 test("trust lost during native work prevents snapshot publication and invalidates queued analysis", async (t) => {
     let finish;
-    let dependency;
     const fixture = setup(t, (_options, result) => new Promise((resolve) => { finish = () => resolve({ ...result, dependencies: [...result.dependencies, dependency] }); }));
-    dependency = path.join(fixture.directory, "discovered.bi");
+    const dependency = path.join(fixture.directory, "discovered.bi");
     fs.writeFileSync(dependency, "Dim discoveredValue As Long\n");
     let cancelled = 0;
     fixture.service.analysisWorker = { cancelAll: () => cancelled++, dispose() {} };
@@ -1571,14 +1734,13 @@ test("on-change debounce retains affected modules across header edits and invali
 });
 
 test("selected headers use module options and immutable overlays with a closed module editor", async (t) => {
-    let header;
     const fixture = setup(t, (options, result) => {
         assert.equal(options.filePath, fixture.filePath);
         assert.deepEqual(options.compilerArguments, ["-d", "DOUBLE_VALUE"]);
         assert.equal(options.overlays.get(header.uri.fsPath), header.getText());
         return { ...result, dependencies: [...result.dependencies, header.uri.fsPath] };
     });
-    header = headerContext(fixture);
+    const header = headerContext(fixture);
     fixture.workspace.textDocuments = [header];
     assert.equal(await fixture.service.check(header), true);
     const model = fixture.service.getModel(header.uri);
@@ -1687,6 +1849,54 @@ test("analysis and rename share validated build contexts without silently changi
     values["analysis.projectContexts"].pop();
     values["analysis.projectContexts"][0].arguments = "-g";
     assert.throws(() => projectContexts(configuration, root), /arrays/);
+});
+
+test("opening the preprocessed view follows one snapshot replacement without following ended requests", async () => {
+    for (const phase of ["open", "language", "show"]) for (const mode of ["replacement", "repeat", "edit", "context", "trust"]) {
+        const uri = (name) => ({ toString: () => name });
+        const document = { uri: uri("source"), version: 1, isClosed: false };
+        const snapshots = [0, 1, 2].map((index) => ({ uri: uri(`expanded:${index}`), context: { signature: "same" } }));
+        let current = snapshots[0], opened = 0;
+        const shown = [];
+        const workspace = { isTrusted: true,
+            async openTextDocument(expandedUri) {
+                opened++;
+                change("open");
+                return { uri: expandedUri };
+            } };
+        const service = Object.create(CompilerAnalysisService.prototype);
+        service.vscode = { workspace,
+            languages: { async setTextDocumentLanguage() { change("language"); } },
+            window: { async showTextDocument(expanded) { shown.push(expanded.uri.toString()); change("show"); } } };
+        service.expanded = new Map([[current.uri.toString(), "first"]]);
+        service.getModel = () => ({});
+        service.snapshotFor = () => current;
+        service.checkCurrent = async () => assert.fail("a published successor must not require another compiler pass");
+        let changes = 0;
+        function change(at) {
+            if (at !== phase || changes && mode !== "repeat") return;
+            changes++;
+            service.expanded.delete(current.uri.toString());
+            current = snapshots[Math.min(changes, 2)];
+            service.expanded.set(current.uri.toString(), "next");
+            if (mode === "edit") document.version++;
+            if (mode === "context") current.context.signature = "other";
+            if (mode === "trust") workspace.isTrusted = false;
+        }
+        await service.showExpanded(document);
+        const label = `${phase}: ${mode}`;
+        assert.ok(opened <= 2, label);
+        if (mode === "replacement") assert.equal(shown.at(-1), "expanded:1", label);
+        else if (mode === "repeat") assert.ok(shown.length <= (phase === "show" ? 2 : 0), label);
+        else assert.ok(shown.length <= (phase === "show" ? 1 : 0), label);
+    }
+});
+
+test("an empty preprocessed snapshot is content, not an expired snapshot", () => {
+    const service = Object.create(CompilerAnalysisService.prototype);
+    const uri = { toString: () => "empty-expanded" };
+    service.expanded = new Map([[uri.toString(), ""]]);
+    assert.equal(service.provideTextDocumentContent(uri), "");
 });
 
 /* end of tests/compiler-analysis-service.test.js */

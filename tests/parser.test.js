@@ -32,17 +32,58 @@ const {
     findDeclarationByName,
     findFoldingRanges,
     findIdentifierOccurrences,
+    getCodeContextDetails,
     maskFreeBasicComments,
     maskFreeBasicText,
     parseFreeBasicText,
     splitDimVariables,
-    stripComments
+    stripComments,
+    typedConstructorOpeningToken
 } = require("../lib/freebasic-parser");
 const { loadGrammarSourceFile } = require("../lib/grammar-data");
+
+test("folding uses native REM policy to distinguish block comments from region markers", () => {
+    const text = "Sub Main()\nREM = 1 /' block\n' #region fake\n' notes\n' #endregion\n'/\nPrint 1\nEnd Sub\n";
+    const ranges = findFoldingRanges(text, null, [], [text.indexOf("REM")]);
+    assert.ok(ranges.some((range) => range.kind === "comment" && range.startLine === 1 && range.endLine === 5));
+    assert.equal(ranges.some((range) => range.kind === "region"), false);
+});
 
 function readFixture(name) {
     return fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8");
 }
+
+test("type completion slots respect declarations, continuations, and expression boundaries", () => {
+    for (const text of ["Dim value As ", "Dim value As Const ", "Dim value As Unsigned L", "Dim As TypeSpa.T",
+        "Declare Sub Apply(ByVal value As ", "Declare Function Factory() As ", "Type AliasName As ", "field As ",
+        "Dim value As TypeSpace.", "Dim value As .TypeSpace.TypeN", "Dim value As ..TypeN",
+        "Dim value As Long Ptr Const P", "Dim value As Boolean Byte", "Dim value As Boolean I",
+        "Dim As Const ", "Declare Sub Open(ByVal name As TypeNa", "name As TypeNa",
+        "Dim value As _\r\n    TypeNa", "Dim value _ ' continuation\n    As TypeNa", "Print 1: Dim value As TypeNa",
+        "/' As not code '/ Dim value As TypeNa", "/' multiline\n comment '/ Dim value As TypeNa",
+        "Dim callback As Function(ByVal As TypeNa"]) {
+        assert.equal(getCodeContextDetails(text, text.length).typeCompletionContext, "type", text);
+    }
+    for (const text of ["Type Derived Extends ", "Type Derived Extends NameSpa.", "Type Derived Extends _\n    BaseTy"]) {
+        assert.equal(getCodeContextDetails(text, text.length).typeCompletionContext, "base", text);
+    }
+    for (const text of ["Dim value As Long\nPr", "Dim value As Long: Pr", "Dim value As TypeName = BuildVa",
+        "Dim value As Typeof(BuildVa", "Dim value As Typeof(BuildValue())", "Dim text As String * lengthVa",
+        "Dim callback As Function ", "Dim callback As Function Cd", "Dim callback As Sub Pa",
+        "Declare Sub Apply(ByVal value As Long = defaultVa", "Dim As Long variableNa", "Dim As Long C", "Dim As Long ",
+        "Print \"As TypeNa", "' As TypeNa", "/' As TypeNa", "Dim value As TypeMacro(elementVa",
+        'Open "file" As ', 'Open "C:\\file" For Binary As handleNa', 'Open "file" As _\n handleNa',
+        'If ready Then Open "file" For Binary As handleNa', 'Name "old" As newNa', "Select Case As ",
+        "Select Case As Const ", 'Dim result = Open(GetFileName() For Binary As handleNa',
+        "Option NoKeyword As\nUse As", "#if 0\nOption NoKeyword As\n#endif\nDim value As TypeNa",
+        "Option NoKeyword Extends\nType Derived Extends BaseNa"]) {
+        assert.equal(getCodeContextDetails(text, text.length).typeCompletionContext, null, text);
+    }
+    const oversized = "Dim value As " + " ".repeat(65536) + "TypeNa";
+    assert.equal(getCodeContextDetails(oversized, oversized.length).typeCompletionContext, null);
+    const resumed = oversized + "\nDim nextValue As TypeNa";
+    assert.equal(getCodeContextDetails(resumed, resumed.length).typeCompletionContext, "type");
+});
 
 test("operator declarations retain result types without borrowing constructor parameter types", () => {
     const parsed = parseFreeBasicText("Type Value\nnumber As Long\nDeclare Operator Cast() As Long\n" +
@@ -323,6 +364,38 @@ test("parseFreeBasicText preserves namespace containers", () => {
     assert.equal(buildPerson.parameters[0].typeName, "String");
 });
 
+test("thread-local declarations preserve names, storage modifiers and physical locations", () => {
+    const lines = [
+        "Thread Local Dim Shared requestCount As Integer = 0",
+        "Private Thread Local Dim Shared privateCount As Long",
+        "Thread _",
+        "    Local Dim Shared As Long firstCount, secondCount",
+        'Thread Local Extern externalCount Alias "external_count" As Long',
+        "Namespace Worker",
+        "    Thread Local Dim Shared nestedCount As Integer",
+        "End Namespace",
+        "Dim thread As Long, local As Long",
+        "Thread Local NotADeclaration",
+        "' Thread Local Dim Shared commentedCount As Long",
+        'Print "Thread Local Dim Shared quotedCount As Long"'
+    ];
+    const parsed = parseFreeBasicText(lines.join("\r\n"));
+    const variables = parsed.declarations.filter((declaration) => ["variable", "extern"].includes(declaration.type));
+    assert.deepEqual(variables.map((declaration) => declaration.name), [
+        "requestCount", "privateCount", "firstCount", "secondCount", "externalCount", "nestedCount", "thread", "local"
+    ]);
+    for (const declaration of variables) {
+        assert.equal(lines[declaration.line].slice(declaration.startColumn, declaration.endColumn), declaration.name);
+        assert.equal(declaration.modifiers.includes("THREAD LOCAL"), !["thread", "local"].includes(declaration.name));
+    }
+    assert.deepEqual(variables[1].modifiers, ["PRIVATE", "THREAD LOCAL", "SHARED"]);
+    assert.equal(variables[2].typeName, "Long");
+    assert.equal(variables[3].typeName, "Long");
+    assert.equal(variables[4].type, "extern");
+    assert.equal(variables[4].typeName, "Long");
+    assert.equal(variables[5].containerName, "Worker");
+});
+
 test("parseFreeBasicText traces nested members and continued signatures", () => {
     const parsed = parseFreeBasicText([
         "Namespace Tools",
@@ -411,6 +484,7 @@ test("Signature Help recognizes bare calls without changing navigation call cont
         ["receiver->Work 1, ", "Work", 1],
         ["receiver . Work 1, ", "Work", 1],
         ["If condition Then Work 1, ", "Work", 1],
+        ["If condition Then service.Then.Work 1, ", "service.Then.Work", 1],
         ['If condition Then Work 1, "then,else" Else Other 2, ', "Other", 1]
     ]) {
         const context = findSignatureCallContext(text, text.length);
@@ -424,6 +498,107 @@ test("Signature Help recognizes bare calls without changing navigation call cont
     }
     const nested = "Work Nested(1, ";
     assert.equal(findSignatureCallContext(nested, nested.length)?.name, "Nested");
+});
+
+test("bare compound and WITH signature contexts preserve argument positions", () => {
+    for (const text of [".Apply 1, ", "MakeService().Apply 1, ", "services(0).Apply 1, ",
+        "(*servicePointer).Apply 1, ", "MakeServicePointer()->Apply 1, ",
+        "Call Factory(Nested(1, 2)) . Apply 1, ", "If ready Then .Apply 1, ", ".Apply 1, _\n 2, "]) {
+        const context = findSignatureCallContext(text, text.length);
+        assert.equal(context?.expressionCallee, true, text);
+        assert.equal(context.bare, true);
+        assert.equal(context.activeParameter, text.includes("2, ") ? 2 : 1);
+        assert.equal(text[context.calleeEndOffset - 1], "y");
+        assert.equal(findCallContext(text, text.length), null);
+    }
+    for (const text of [".value = 1, ", "Factory().value += 1, ", "Factory() + other.Apply 1, ",
+        "' .Apply 1, ", "Factory().Apply", 'Print "Factory().Apply 1,"',
+        "Factory(" + "1,".repeat(9000) + "1).Apply 1, "]) {
+        assert.notEqual(findSignatureCallContext(text, text.length)?.expressionCallee, true, text);
+    }
+});
+
+test("Signature Help recognizes compound callees without changing navigation contexts", () => {
+    for (const [text, callee, activeParameter] of [
+        ["Print callbackArray(0)(1, ", "callbackArray(0)", 1],
+        ["Print callbacks[0](1, ", "callbacks[0]", 1],
+        ["Print GetCallback(1)(1, ", "GetCallback(1)", 1],
+        ["Print (*callbackPointer)(1, ", "(*callbackPointer)", 1],
+        ["Print (callback)(1, ", "(callback)", 1],
+        ["Print GetHandlers().callback(1, ", "GetHandlers().callback", 1],
+        ["Outer(callbackArray(0)(1, Nested(2, 3), ", "callbackArray(0)", 2]
+    ]) {
+        const context = findSignatureCallContext(text, text.length);
+        assert.equal(context?.expressionCallee, true, text);
+        assert.equal(context.calleeEndOffset, text.indexOf(callee) + callee.length);
+        assert.equal(context.activeParameter, activeParameter);
+        assert.notEqual(findCallContext(text, text.length)?.expressionCallee, true);
+    }
+    const separateStatements = "callbackArray(0)\n(1, ";
+    assert.notEqual(findSignatureCallContext(separateStatements, separateStatements.length)?.expressionCallee, true,
+        "a physical newline must not join separate statements into a compound call");
+});
+
+test("Signature Help recognizes compound index receivers without changing navigation contexts", () => {
+    for (const text of ["Print MakeValue()[", "Print values(0)[", "Print (*pointerValue)[", "Print (value)["]) {
+        const context = findSignatureCallContext(text, text.length);
+        assert.equal(context?.expressionCallee, true, text);
+        assert.equal(context.indexing, true, text);
+        assert.equal(context.calleeEndOffset, text.length - 1, text);
+        assert.equal(context.activeParameter, 0);
+        assert.notEqual(findCallContext(text, text.length)?.expressionCallee, true);
+    }
+});
+
+test("Signature Help distinguishes typed construction from its enclosing call", () => {
+    for (const callee of ["Type<Sample>", "Type<Scope.Alias>", "Type < TypeOf(Scope.Alias) >",
+        "Type<TypeOf(IIf(a > b, first, second))>"]) {
+        const text = `Consume(${callee}(Nested(1, 2), `;
+        const context = findSignatureCallContext(text, text.length);
+        assert.equal(context?.typedConstructor, true, text);
+        assert.equal(context.name, "Type");
+        assert.equal(context.calleeStartOffset, "Consume(".length);
+        assert.equal(context.calleeEndOffset, text.indexOf(callee) + callee.length);
+        assert.equal(context.activeParameter, 1);
+        assert.notEqual(findCallContext(text, text.length)?.typedConstructor, true);
+    }
+    const context = findSignatureCallContext("If a > (1, ", "If a > (1, ".length);
+    assert.notEqual(context?.typedConstructor, true, "a comparison is not a typed construction");
+});
+
+test("Signature Help recognizes sized integer casts without changing navigation contexts", () => {
+    for (const [source, name] of [["CInt<16>(", "CInt"], ["CUInt<128>(1", "CUInt"],
+        ["Print Scale(CInt<(8 Shl 1)>(", "CInt"], ["CInt<BITS>(Nested(1, 2),", "CInt"]]) {
+        const context = findSignatureCallContext(source, source.length);
+        assert.equal(context?.name, name, source);
+        assert.equal(context.sizedCast, true);
+        assert.equal(context.typedConstructor, undefined);
+        assert.equal(context.activeParameter, source.endsWith(",") ? 1 : 0);
+        assert.equal(source.slice(context.calleeStartOffset, context.calleeStartOffset + name.length), name);
+    }
+    assert.equal(findCallContext("CInt<16>(", "CInt<16>(".length), null);
+    assert.equal(findSignatureCallContext("CInt<16>(1)", "CInt<16>(1)".length), null);
+    assert.equal(findSignatureCallContext("object.CInt<16>(", "object.CInt<16>(".length), null);
+    assert.equal(findSignatureCallContext("object->CInt<16>(", "object->CInt<16>(".length), null);
+    assert.equal(findSignatureCallContext("NotCInt<16>(", "NotCInt<16>(".length), null);
+    const outer = "Scale(CInt<16>(1),";
+    assert.equal(findSignatureCallContext(outer, outer.length).name, "Scale");
+    assert.equal(findSignatureCallContext(outer, outer.length).activeParameter, 1);
+});
+
+test("typed constructor opening lookup skips TYPEOF operand calls and stays bounded", () => {
+    const { tokenize } = require("../lib/semantic-model");
+    for (const text of ["Consume(Type<Sample>(Nested(1, 2), 3))",
+        "Consume(Type<TypeOf(IIf(a > b, first, second))>(Nested(1, 2), 3))"]) {
+        const document = { text, ...tokenize(text) };
+        const callee = document.tokens.find((token) => token.key === "type");
+        assert.equal(typedConstructorOpeningToken(document, callee)?.offset, text.lastIndexOf(">(") + 1);
+    }
+    for (const text of ["Type<Sample", "Type<" + " ".repeat(17 * 1024) + "Sample>(1)"]) {
+        const document = { text, ...tokenize(text) };
+        assert.equal(typedConstructorOpeningToken(document, document.tokens[0]), null,
+            "missing openers and type clauses beyond the 16-KiB window stay unavailable");
+    }
 });
 
 test("call context counts only top-level arguments", () => {

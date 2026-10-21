@@ -8,7 +8,7 @@ sections or cover texts identified by the source manual. The complete license
 is in [fdl-1.2.txt](fdl-1.2.txt).
 
 The original manual is available at <https://www.freebasic.net/wiki/>. The
-1.20.4 source used for this edition is maintained at
+1.20.5 source used for this edition is maintained at
 <https://github.com/jasonkfirth/fbc>. Each reference entry names its source
 file. Public API declarations also come from the headers identified there.
 
@@ -17,6 +17,11 @@ edition in 2026. It removes wiki markup, selects short reference sections,
 and represents callable signatures and parameter information as JSON. The
 JSON is the editable, transparent form of the excerpts. Rebuild it with
 `npm run build:reference` using the matching FreeBASIC source checkout.
+
+Generated metadata records the committed input revision, a content hash, and
+modified or untracked reference-input paths. Excerpts from those paths are
+labelled as working-copy snapshots. Unchanged source files retain their
+committed reference links; compiler-only edits do not change that provenance.
 
 The extension's own source code remains under its MIT license. The original
 documentation authors do not endorse the extension or these adaptations.

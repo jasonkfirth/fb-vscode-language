@@ -10,8 +10,13 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { CompilerProcessSupervisor } = require("../lib/compiler-process-supervisor");
 
+/* Startup includes the runner process and its first IPC event. Offline tests
+   allow competing CPU work without changing compiler or editor deadlines. */
+const PROCESS_START_TIMEOUT_MS = 30 * 1000;
+
 async function waitForPid(readPid) {
-    for (let attempt = 0; attempt < 200; attempt++) {
+    const deadline = Date.now() + PROCESS_START_TIMEOUT_MS;
+    while (Date.now() < deadline) {
         const pid = readPid();
         if (pid) return pid;
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -89,8 +94,9 @@ test("supervised cancellation and timeout reap compiler children before replying
     assertReaped(timedOutPid);
 });
 
-test("disposing the process supervisor cancels and reaps its active compiler", async () => {
+test("disposing the process supervisor cancels and reaps its active compiler", async (t) => {
     const supervisor = new CompilerProcessSupervisor();
+    t.after(async () => supervisor.dispose());
     const controller = new AbortController();
     let pid = null;
     const pending = supervisor.execute({

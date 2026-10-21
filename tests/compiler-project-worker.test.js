@@ -12,6 +12,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { CompilerAnalysisWorker } = require("../lib/compiler-worker");
+const { verifyProjectSources } = require("../lib/compiler-project-transaction");
 
 const native = { skip: !process.env.FBC_EDITOR_EXECUTABLE };
 
@@ -30,6 +31,25 @@ function fixture(t) {
     const options = { root, jobs, compilerPath: process.env.FBC_EDITOR_EXECUTABLE, selectedKey: `${header}:5:17`, oldName: "AdjustValue", newName: "ScaleValue", overlays: new Map(), timeoutMs: 30000 };
     return { worker, options, root, header, caller, implementation, sources };
 }
+
+test("project publication keeps missing consumed sources and new buffers strict", (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "fb-project-buffer-verification-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const missing = path.join(root, "closed.bi");
+    const key = process.platform === "win32" ? missing.toLowerCase() : missing;
+    const verification = { root, physicalRoot: fs.realpathSync(root), targets: new Map(), disk: new Map(),
+        buffers: new Map([[missing, "' captured source\n"]]), consumedFiles: new Set([key]) };
+    assert.throws(() => verifyProjectSources(verification, new Map(), () => {}), { code: "ENOENT" },
+        "a missing consumed header must not be treated as an unrelated closed buffer");
+    verification.consumedFiles.clear();
+    assert.doesNotThrow(() => verifyProjectSources(verification, new Map(), () => {}));
+    fs.writeFileSync(missing, "' changed disk source\n");
+    assert.throws(() => verifyProjectSources(verification, new Map(), () => {}), /buffers changed/,
+        "the exception must not ignore changed existing sources");
+    verification.buffers.clear();
+    assert.throws(() => verifyProjectSources(verification, new Map([[path.join(root, "new.bi"), "' new buffer\n"]]), () => {}),
+        { code: "ENOENT" }, "newly opened buffers must retain the existing publication checks");
+});
 
 test("worker project validation returns only edit records and consumes its freshness ticket once", native, async (t) => {
     const { worker, options, sources } = fixture(t);
@@ -58,6 +78,15 @@ test("worker rename validates unsaved BOM-prefixed roots and headers without sav
     assert.equal(headerEdit.occurrences[0].startColumn, 17);
     assert.equal((await worker.verifyProject(reply.projectId, options.overlays)).verified, true);
     for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+});
+
+test("closing a deleted unrelated buffer does not invalidate project rename", native, async (t) => {
+    const { worker, options } = fixture(t);
+    const unused = path.join(options.root, "unrelated.bi");
+    options.overlays.set(unused, "' An open named buffer not consumed by any configured module.\n");
+    const reply = await worker.project(options);
+    assert.equal((await worker.verifyProject(reply.projectId, new Map())).verified, true,
+        "an unused closed buffer has no disk source to validate and must not veto project edits");
 });
 
 test("disk changes after native validation cannot pass the publication check", native, async (t) => {

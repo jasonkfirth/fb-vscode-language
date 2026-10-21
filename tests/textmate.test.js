@@ -53,7 +53,7 @@ test("actual TextMate tokenization keeps strings and nested comments bounded", a
         'If Inkey$ <> "" Then Print "ready"',
         '/\' outer /\' nested \'/ still a comment',
         '\'/ Dim value As Long',
-        'Print !"a\\\"b", value',
+        'Print !"a' + String.fromCharCode(92) + '"b", value',
         'Print value'
     ]);
     assert.ok(scopes(0, 28).some((scope) => scope.startsWith("string")));
@@ -83,6 +83,25 @@ test("actual TextMate tokenization recognizes opt-in serialization names", async
         assert.ok(scopes(line, 6).includes("support.function.freebasic"),
             "both public macros and compiler intrinsic spellings should be colored as callable names");
     }
+});
+
+test("actual TextMate tokenization recognizes current thread storage and drop events", async () => {
+    const lines = [
+        "Thread Local Dim Shared currentRequest As Integer = 0",
+        "If eventType = FB.EVENT_DROP Then Print currentRequest"
+    ];
+    const scopes = await scopesFor(lines);
+    assert.ok(scopes(0, 1).includes("keyword.control.freebasic"));
+    assert.ok(scopes(0, lines[0].indexOf("currentRequest")).includes("variable.other.readwrite.freebasic"));
+    assert.ok(scopes(1, lines[1].indexOf("EVENT_DROP")).includes("constant.other.freebasic"));
+});
+
+test("actual TextMate tokenization recognizes new gfxlib3 screen transfers", async () => {
+    const lines = ["Print FB.Gfx3ScreenCapture(destination, 0, 0, 32, 32)",
+        "Print Gfx3SurfaceCopyFromScreen(surface, 0, 0, 32, 32, 4, 4)"];
+    const scopes = await scopesFor(lines);
+    for (let line = 0; line < lines.length; line++) assert.ok(
+        scopes(line, lines[line].indexOf("Gfx3")).includes("support.function.freebasic"), lines[line]);
 });
 
 /* end of tests/textmate.test.js */

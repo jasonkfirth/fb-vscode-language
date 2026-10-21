@@ -14,6 +14,7 @@
         - distinguish local, module, and aggregate names
         - verify aliases, namespaces, inheritance, and member chains
         - protect reference and cursor coordinates through source edits
+        - reject project rename when a source model is workspace-scoped
 
     This file intentionally does NOT contain:
 
@@ -73,10 +74,12 @@ test("callable identities preserve pointer depth and array dimensions across mat
 });
 
 test("primitive type classification excludes aggregates and unresolved type expressions", () => {
-    for (const name of ["Long", "Const Integer", "Double Ptr", "Any Pointer", "ZString * 32", "Const WString Ptr"]) {
+    for (const name of ["Long", "Const Integer", "Double Ptr", "Any Pointer", "ZString * 32", "Const WString Ptr",
+        "Integer<8>", "UInteger<64>", "Integer<128>", "Const UInteger<128> Ptr", "Integer < 128 >"]) {
         assert.equal(isPrimitiveTypeName(name), true, name);
     }
-    for (const name of ["", "Object", "Object Ptr", "ValueAlias", "Geometry.Point", "Typeof(BuildValue())"]) {
+    for (const name of ["", "Object", "Object Ptr", "ValueAlias", "Geometry.Point", "Typeof(BuildValue())",
+        "Integer128", "UInteger128", "Integer<96>", "Object<128>"]) {
         assert.equal(isPrimitiveTypeName(name), false, name);
     }
 });
@@ -107,6 +110,25 @@ test("fields and locals with equal names have distinct reference sets", () => {
     assert.equal(local.declaration.line, 5);
     assert.deepEqual(model.references(field).map((entry) => entry.occurrence.line), [1, 6, 8]);
     assert.deepEqual(model.references(local).map((entry) => entry.occurrence.line), [5, 6]);
+});
+
+test("thread-local globals keep declaration identity separate from shadowing locals", () => {
+    const lines = [
+        "Thread Local Dim Shared requestCount As Integer = 0",
+        "Sub Work()",
+        "    Dim requestCount As Long",
+        "    Print requestCount",
+        "End Sub",
+        "Print requestCount"
+    ];
+    const { model, resolve } = modelFor(lines.join("\n"));
+    const global = resolve(5, lines[5].indexOf("requestCount"))[0];
+    const local = resolve(3, lines[3].indexOf("requestCount"))[0];
+    assert.equal(global?.declaration.line, 0);
+    assert.equal(local?.declaration.line, 2);
+    assert.notEqual(global.id, local.id);
+    assert.deepEqual(model.references(global).map((entry) => entry.occurrence.line), [0, 5]);
+    assert.deepEqual(model.references(local).map((entry) => entry.occurrence.line), [2, 3]);
 });
 
 test("block scope shadowing resolves to the nearest declaration", () => {
@@ -148,6 +170,45 @@ test("namespace imports, aliases, and pointer members use the declared type", ()
     ].join("\n"));
     assert.deepEqual(members(9, 10), ["x"]);
     assert.equal(resolve(8, 11)[0].declaration.line, 2);
+});
+
+test("global qualifiers bypass local shadows without replacing WITH receivers", () => {
+    const lines = [
+        "Declare Sub GlobalHandler(ByVal value As Long)",
+        "Namespace CallbackScope", " Declare Sub ComputeScoped(ByVal value As Long)", "End Namespace",
+        "Sub Inspect()", " Dim CallbackScope As Long", " Dim GlobalHandler As Long", " Dim unrelated As Long",
+        " Dim callback = @.CallbackScope.ComputeScoped", " Dim direct = @.GlobalHandler", " Print .Glob",
+        " Print .CallbackScope.Comp", "End Sub",
+        "Type Holder", " CallbackScope As Long", "End Type", "Dim holderValue As Holder", "With holderValue",
+        " Print .CallbackScope", " Print .CallbackScope.Comp", " Dim callback = @..CallbackScope.ComputeScoped",
+        " Print ..Glob", "End With", "With unknownReceiver", " Print .Glob", "End With"
+    ];
+    const { members, resolve } = modelFor(lines.join("\n"));
+    assert.equal(resolve(8, lines[8].indexOf("CallbackScope") + 2)[0]?.declaration.line, 1);
+    for (const line of [8, 20]) assert.equal(resolve(line, lines[line].indexOf("ComputeScoped") + 2)[0]?.declaration.line, 2);
+    assert.equal(resolve(9, lines[9].indexOf("GlobalHandler") + 2)[0]?.declaration.line, 0);
+    assert.equal(resolve(18, lines[18].indexOf("CallbackScope") + 2)[0]?.declaration.line, 14);
+    for (const line of [10, 21]) {
+        const names = members(line, lines[line].length);
+        assert.ok(names.includes("GlobalHandler"));
+        assert.ok(names.includes("CallbackScope"));
+        assert.equal(names.includes("unrelated"), false, "global lookup must not offer procedure locals");
+    }
+    assert.deepEqual(members(11, lines[11].length), ["ComputeScoped"]);
+    assert.deepEqual(members(19, lines[19].length), [], "a scalar WITH field must not become a global namespace");
+    assert.deepEqual(members(24, lines[24].length), [], "an unresolved WITH receiver must not become global lookup");
+    const keywordReceiver = modelFor('Option NoKeyword Print\nDeclare Sub GlobalHandler()\nDim Print As Long\nPrint .Glob');
+    assert.deepEqual(keywordReceiver.members(3, "Print .Glob".length), [],
+        "a declared keyword receiver must not become a global completion context");
+});
+
+test("type lookup does not borrow a later namespace import", () => {
+    const { model } = modelFor(["Namespace Types", "Type Item", "value As Long", "End Type", "End Namespace",
+        "Dim early As Item", "Using Types", "Dim later As Item"].join("\n"));
+    const early = model.entries.find((entry) => entry.name === "early");
+    const later = model.entries.find((entry) => entry.name === "later");
+    assert.deepEqual(model.typeEntries(early), [], "the declaration precedes its required USING");
+    assert.equal(model.typeEntries(later)[0]?.qualifiedName, "types.item");
 });
 
 test("inheritance includes public base fields and hides private members", () => {
@@ -227,6 +288,12 @@ test("rename rejects block capture and inherited member collisions", () => {
     ].join("\n"));
     assert.match(model.renameProblem(resolve(4, 2)[0], "taken"), /inherited/);
     assert.match(model.renameProblem(resolve(10, 10)[0], "outerValue"), /capture/);
+});
+
+test("workspace-scoped source models refuse rename without complete project analysis", () => {
+    const { model, resolve } = modelFor("Sub Work()\n Dim localValue As Long\n Print localValue\nEnd Sub");
+    model.workspaceComplete = false;
+    assert.match(model.renameProblem(resolve(2, 8)[0], "renamedValue"), /complete project contexts/);
 });
 
 test("lookup follows transitive includes and excludes unrelated modules", () => {

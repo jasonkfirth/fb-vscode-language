@@ -13,8 +13,9 @@ const path = require("path");
 const os = require("os");
 const { CompilerAnalysisService } = require("../lib/compiler-analysis-service");
 const { CompilerProject, projectContexts } = require("../lib/compiler-project");
-const { collectProjectEdits, generatedSymbolEdit } = require("../lib/compiler-project-bindings");
+const { collectProjectEdits, collectProjectReferences, generatedSymbolEdit } = require("../lib/compiler-project-bindings");
 const { executeBoundedProcess } = require("../lib/compiler-diagnostics");
+const { analyzeSavedModule } = require("../lib/compiler-analysis");
 const supportsIntelInlineAssembly = ["ia32", "x64"].includes(process.arch);
 
 function fixture(t) {
@@ -109,6 +110,1207 @@ test("project references join exact compiler-bound sites across configured modul
     assert.equal(fs.readFileSync(headerPath, "utf8"), header);
     assert.equal(fs.readFileSync(context.document.uri.fsPath, "utf8"), caller);
     assert.equal(fs.readFileSync(otherPath, "utf8"), other);
+});
+
+test("project constructor references join native headers and selected calls across modules", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "constructors.bi");
+        const implementationPath = path.join(context.root, "implementation.bas");
+        const otherPath = path.join(context.root, "other.bas");
+        const header = ["#ifndef PROJECT_CTORS_BI", "#define PROJECT_CTORS_BI", "Namespace ProjectApi",
+            "Type ProjectItem", "    payload As Long", "    Declare Constructor(ByVal value As Long)",
+            "    Declare Constructor(ByVal value As String)", "    Declare Destructor()", "End Type", "End Namespace", "#endif", ""].join("\n");
+        const implementation = ['#include "constructors.bi"', "Constructor ProjectApi.ProjectItem(ByVal value As Long)",
+            "    This.payload = value", "End Constructor", "Constructor ProjectApi.ProjectItem(ByVal value As String)",
+            "    This.payload = Len(value)", "End Constructor", "Destructor ProjectApi.ProjectItem()", "End Destructor", ""].join("\n");
+        const caller = ['#include "constructors.bi"', "Sub Caller()",
+            "    Dim directValue As ProjectApi.ProjectItem = ProjectApi.ProjectItem(1)",
+            '    Dim otherValue As ProjectApi.ProjectItem = ProjectApi.ProjectItem("x")', "End Sub", ""].join("\n");
+        const other = ['#include "constructors.bi"', "Sub Other()", "#ifdef ALTERNATE",
+            "    Dim alternateValue As ProjectApi.ProjectItem = ProjectApi.ProjectItem(2)", "#else",
+            "    Dim ordinary As ProjectApi.ProjectItem = ProjectApi.ProjectItem(3)", "#endif",
+            "    Dim allocated As ProjectApi.ProjectItem Ptr = New ProjectApi.ProjectItem(5)",
+            "End Sub", "Sub Accept(ByVal value As ProjectApi.ProjectItem)", "End Sub", "Accept(4)", ""].join("\n");
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation],
+            [context.document.uri.fsPath, caller], [otherPath, other]]) fs.writeFileSync(file, text);
+        context.values["analysis.projectContexts"] = [
+            { name: "constructors", modules: ["implementation.bas", "caller.bas", "other.bas"] },
+            { name: "alternate", modules: ["implementation.bas", "caller.bas", "other.bas"], arguments: ["-d", "ALTERNATE"] }
+        ];
+        context.values["analysis.activeContext"] = { name: "constructors", module: "caller.bas" };
+        const references = await context.project.references(context.document,
+            { line: 2, character: caller.split("\n")[2].indexOf("ProjectItem(1)") + 1 }, true, undefined, false, true);
+        assert.ok(Array.isArray(references), "constructor headers must provide a project identity");
+        const sites = references.map((reference) => [reference.uri.fsPath, reference.range.start.line,
+            reference.range.start.character, reference.range.end.line, reference.range.end.character]);
+        const expected = [];
+        for (const [file, text, line, spelling] of [
+            [headerPath, header, 5, "Constructor"], [implementationPath, implementation, 1, "Constructor"],
+            [context.document.uri.fsPath, caller, 2, "directValue"],
+            [context.document.uri.fsPath, caller, 2, "ProjectItem(1)"],
+            [otherPath, other, 3, "alternateValue"], [otherPath, other, 5, "ordinary"],
+            [otherPath, other, 3, "ProjectItem(2)"], [otherPath, other, 5, "ProjectItem(3)"],
+            [otherPath, other, 7, "ProjectItem(5)"], [otherPath, other, 11, "(4)"]
+        ]) {
+            const column = text.split("\n")[line].indexOf(spelling);
+            const length = spelling.startsWith("ProjectItem") ? "ProjectItem".length : spelling.length;
+            expected.push([file, line, column, line, column + length]);
+        }
+        const keys = (values) => values.map((site) => JSON.stringify(site)).sort();
+        assert.deepEqual(keys(sites), keys(expected),
+            "references must join only the selected overload, retain implicit uses, and exclude namespace qualifiers");
+        assert.equal(sites.filter(([file, line]) => file === headerPath && line === 6 ||
+            file === implementationPath && line === 4 || file === context.document.uri.fsPath && line === 3).length, 0,
+        "the String overload must not join the selected Long constructor");
+        assert.equal(new Set(sites.map((site) => JSON.stringify(site))).size, sites.length,
+            "shared headers and repeated build contexts must not duplicate physical sites");
+        const headerDocument = { languageId: "freebasic", uri: context.service.vscode.Uri.file(headerPath), getText: () => header };
+        context.service.vscode.workspace.textDocuments.push(headerDocument);
+        for (const [build, activeLine] of [["constructors", 5], ["alternate", 3]]) {
+            context.values["analysis.activeContext"] = { name: build, module: "caller.bas" };
+            const incoming = await context.project.incomingCalls(headerDocument,
+                { line: 5, character: header.split("\n")[5].indexOf("Constructor") + 1 }, null, null, "constructor");
+            assert.ok(Array.isArray(incoming), "native constructor callers must be available across modules");
+            assert.deepEqual(incoming.map((entry) => [entry.uri.fsPath, entry.declaration.type, entry.declaration.line,
+                [...new Set(entry.fromRanges.map((range) => range.line))]]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+            [[context.document.uri.fsPath, "sub", 1, [2]], [otherPath, "sub", 1, [activeLine, 7]], [otherPath, "module", 0, [11]]]
+                .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+            "native owners must exclude the String overload and the inactive constructor call");
+        }
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation],
+            [context.document.uri.fsPath, caller], [otherPath, other]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("project destructor references join native cleanup across modules without unrelated types", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "cleanup.bi");
+        const implementationPath = path.join(context.root, "implementation.bas");
+        const callerPath = path.join(context.root, "caller.bas");
+        const otherPath = path.join(context.root, "other.bas");
+        const header = ["Namespace CleanupApi", "Type Managed", "    payload As Long", "    Declare Destructor()",
+            "End Type", "Type Unrelated", "    payload As Long", "    Declare Destructor()", "End Type", "End Namespace", ""].join("\n");
+        const implementation = ['#include "cleanup.bi"', "Destructor CleanupApi.Managed()", "    payload = 0", "End Destructor",
+            "Destructor CleanupApi.Unrelated()", "End Destructor", ""].join("\n");
+        const caller = ['#include "cleanup.bi"', "Sub Caller()", "    Dim localValue As CleanupApi.Managed", "End Sub",
+            "Sub UnrelatedCaller()", "    Dim otherValue As CleanupApi.Unrelated", "End Sub", ""].join("\n");
+        const other = ['#include "cleanup.bi"', "Sub Release()", "    Dim allocated As CleanupApi.Managed Ptr = New CleanupApi.Managed",
+            "    Delete allocated", "End Sub", "Sub Early()", "    Dim earlyValue As CleanupApi.Managed", "    Return", "End Sub",
+            "Sub ExplicitRelease(ByVal pointerValue As CleanupApi.Managed Ptr)", "    pointerValue->Destructor()", "End Sub", ""].join("\n");
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation],
+            [callerPath, caller], [otherPath, other]]) fs.writeFileSync(file, text);
+        context.document.uri = { scheme: "file", fsPath: headerPath, toString: () => `file://${headerPath}` };
+        context.document.getText = () => header;
+        context.values["analysis.projectContexts"] = [{ name: "cleanup", modules: ["implementation.bas", "caller.bas", "other.bas"] }];
+        context.values["analysis.activeContext"] = { name: "cleanup", module: "caller.bas" };
+        const references = await context.project.references(context.document,
+            { line: 3, character: header.split("\n")[3].indexOf("Destructor") + 1 }, true, undefined, false, true);
+        assert.ok(Array.isArray(references), "a header-only destructor prototype must provide a project anchor");
+        const sites = references.map((entry) => [entry.uri.fsPath, entry.range.start.line,
+            entry.range.start.character, entry.range.end.line, entry.range.end.character]);
+        const expected = [];
+        for (const [file, text, line, spelling] of [[headerPath, header, 3, "Destructor"],
+            [implementationPath, implementation, 1, "Destructor"], [callerPath, caller, 2, "localValue"],
+            [otherPath, other, 3, "Delete"], [otherPath, other, 6, "earlyValue"],
+            [otherPath, other, 7, "Return"], [otherPath, other, 10, "Destructor"]]) {
+            const column = text.split("\n")[line].indexOf(spelling);
+            expected.push([file, line, column, line, column + spelling.length]);
+        }
+        const keys = (values) => values.map((site) => JSON.stringify(site)).sort();
+        assert.deepEqual(keys(sites), keys(expected), "only compiler-selected cleanup and explicit callee spans should be returned");
+        assert.ok(sites.every(([file, line]) => file !== headerPath || line === 3));
+        assert.ok(sites.every(([file, line]) => file !== implementationPath || line === 1));
+        assert.ok(sites.every(([file, line]) => file !== callerPath || line < 4), "unrelated type cleanup must remain separate");
+        assert.equal(new Set(sites.map((site) => JSON.stringify(site))).size, sites.length);
+        const incoming = await context.project.incomingCalls(context.document,
+            { line: 3, character: header.split("\n")[3].indexOf("Destructor") + 1 }, null, null, "destructor");
+        assert.ok(Array.isArray(incoming), "native destructor callers must be available across modules");
+        assert.deepEqual(incoming.map((entry) => [entry.uri.fsPath, entry.declaration.line,
+            entry.fromRanges.map((range) => range.line)]), [[callerPath, 1, [2]], [otherPath, 1, [3]],
+            [otherPath, 5, [6, 7]], [otherPath, 9, [10]]],
+        "native owners must retain DELETE, explicit destruction, and early cleanup without unrelated types");
+        context.document.uri = { scheme: "file", fsPath: otherPath, toString: () => `file://${otherPath}` };
+        context.document.getText = () => other;
+        context.values["analysis.activeContext"] = { name: "cleanup", module: "other.bas" };
+        const fromCall = await context.project.references(context.document,
+            { line: 10, character: other.split("\n")[10].indexOf("Destructor") + 1 }, false, undefined, false, true);
+        assert.deepEqual(keys(fromCall.map((entry) => [entry.uri.fsPath, entry.range.start.line,
+            entry.range.start.character, entry.range.end.line, entry.range.end.character])),
+        keys(expected.filter(([file]) => file !== headerPath && file !== implementationPath)),
+        "an explicit destructor call must select the same family without adding declarations");
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation],
+            [callerPath, caller], [otherPath, other]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("project operator references join selected binary and index overloads across builds", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "operators.bi");
+        const implementationPath = path.join(context.root, "implementation.bas");
+        const callerPath = path.join(context.root, "caller.bas"), otherPath = path.join(context.root, "other.bas");
+        const header = ["Type ProjectValue", "    value As Long", "    Declare Operator [](ByVal index As Long) As Long",
+            "    Declare Operator [](ByVal index As Double) As Long", "End Type",
+            "Declare Operator +(ByRef item As ProjectValue, ByVal amount As Long) As Long",
+            "Declare Operator +(ByRef item As ProjectValue, ByVal amount As Double) As Long", ""].join("\n");
+        const implementation = ['#include "operators.bi"', "Operator ProjectValue.[](ByVal index As Long) As Long",
+            "    Return index", "End Operator", "Operator ProjectValue.[](ByVal index As Double) As Long",
+            "    Return CLng(index)", "End Operator", "Operator +(ByRef item As ProjectValue, ByVal amount As Long) As Long",
+            "    Return amount", "End Operator", "Operator +(ByRef item As ProjectValue, ByVal amount As Double) As Long",
+            "    Return CLng(amount)", "End Operator", ""].join("\n");
+        const caller = ['#include "operators.bi"', "Sub Caller()", "    Dim item As ProjectValue", "    Print item + CDbl(1)",
+            "    Print item + CLng(2)", "    Print item[CDbl(3)]", "    Print item[CLng(4)]", "End Sub", ""].join("\n");
+        const other = ['#include "operators.bi"', "Sub Other()", "    Dim item As ProjectValue", "#ifdef ALTERNATE",
+            "    Print item + CDbl(2.5)", "#else", "    Print item + CDbl(3.5)", "#endif", "    Print item + CLng(5)",
+            "    Print item[CDbl(6)]", "    Print item[CLng(7)]", "End Sub", "Dim sharedItem As ProjectValue",
+            "Print sharedItem + CDbl(8)", "Print sharedItem[CDbl(9)]", ""].join("\n");
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation],
+            [callerPath, caller], [otherPath, other]]) fs.writeFileSync(file, text);
+        context.values["analysis.projectContexts"] = [
+            { name: "operators", modules: ["implementation.bas", "caller.bas", "other.bas"] },
+            { name: "alternate", modules: ["implementation.bas", "caller.bas", "other.bas"], arguments: ["-d", "ALTERNATE"] }
+        ];
+        context.values["analysis.activeContext"] = { name: "operators", module: "caller.bas" };
+        for (const [line, includeDeclaration, expected] of [[6, true, [[headerPath, 6], [implementationPath, 10],
+            [callerPath, 3], [otherPath, 4], [otherPath, 6], [otherPath, 13]]], [3, false, [[callerPath, 5], [otherPath, 9], [otherPath, 14]]]]) {
+            const references = await context.project.operatorReferences(context.document,
+                { filePath: headerPath, startLine: line + 1,
+                    startColumn: header.split("\n")[line].indexOf(line === 3 ? "[]" : "+"), kind: "procedure-prototype" }, includeDeclaration);
+            assert.ok(Array.isArray(references), "a native operator header must provide a project anchor");
+            const sites = references.map((entry) => [entry.uri.fsPath, entry.range.start.line]);
+            const keys = (values) => values.map((site) => JSON.stringify(site)).sort();
+            assert.deepEqual(keys(sites), keys(expected), `line=${line}: only the selected overload may cross module/build boundaries`);
+            assert.equal(new Set(references.map((entry) => `${entry.uri.fsPath}:${entry.range.start.line}:` +
+                `${entry.range.start.character}:${entry.range.end.line}:${entry.range.end.character}`)).size, references.length);
+        }
+        for (const [build, line, expectedLocal, expectedOther, expectedModule] of [
+            ["operators", 6, 3, 6, 13], ["alternate", 6, 3, 4, 13], ["alternate", 3, 5, 9, 14]
+        ]) {
+            context.values["analysis.activeContext"] = { name: build, module: "caller.bas" };
+            const origin = { filePath: headerPath, startLine: line + 1,
+                startColumn: header.split("\n")[line].indexOf(line === 3 ? "[]" : "+"), kind: "procedure-prototype" };
+            const incoming = await context.project.incomingCalls(context.document, { line: 0, character: 0 }, null, null, "", origin);
+            assert.deepEqual(incoming?.map((entry) => [entry.name, entry.uri.fsPath, entry.fromRanges.map((range) => range.line)]),
+                [["Caller", callerPath, [expectedLocal]], ["Other", otherPath, [expectedOther]], ["other.bas", otherPath, [expectedModule]]],
+                `${build}/header ${line}: native operator callers must keep overloads, active branches and module ownership separate`);
+        }
+        const outgoing = await context.project.outgoingCalls(context.document, { line: 1, character: 5 });
+        assert.deepEqual(outgoing?.map((entry) => [entry.declaration.line, entry.fromRanges.map((range) => range.line)])
+            .sort((left, right) => left[0] - right[0]), [[2, [6]], [3, [5]], [5, [4]], [6, [3]]],
+        "native outgoing calls must retain both binary/index overloads without source-scope supplements");
+        for (const entry of outgoing) {
+            assert.equal(entry.uri.fsPath, headerPath);
+            assert.equal(entry.declaration.signature, header.split("\n")[entry.declaration.line].trim(),
+                "native statement provenance must preserve DECLARE in the target presentation");
+        }
+        if (stock) {
+            context.project.analyze = async (options) => {
+                const analysis = await analyzeSavedModule(options);
+                assert.ok(Array.isArray(analysis.semanticCallStatements), "operator incoming requests must retain native statement ownership");
+                if (options.filePath === callerPath) {
+                    const statement = analysis.semanticCallStatements.find((entry) => entry.filePath === callerPath && entry.startLine === 4);
+                    assert.ok(statement?.mapped);
+                    statement.mapped = false;
+                }
+                return analysis;
+            };
+            assert.equal(await context.project.incomingCalls(context.document, { line: 0, character: 0 }, null, null, "", {
+                filePath: headerPath, startLine: 7, startColumn: header.split("\n")[6].indexOf("+"), kind: "procedure-prototype"
+            }), null, "a selected operator use with unmapped ownership must not return a partial project tree");
+            context.project.analyze = async (options) => {
+                const analysis = await analyzeSavedModule(options);
+                if (options.filePath === callerPath) {
+                    const operation = analysis.semanticOperations.find((entry) => entry.operatorCode === "add");
+                    const other = analysis.semanticOperations.find((entry) => entry.operatorCode === "add" && entry.target !== operation.target);
+                    assert.ok(other);
+                    analysis.semanticOperations.push({ ...operation, target: other.target });
+                }
+                return analysis;
+            };
+            await assert.rejects(context.project.outgoingCalls(context.document, { line: 1, character: 5 }), /could not be mapped/,
+                "ambiguous overload receipts are not proof of multiple implicit calls at one site");
+        }
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation],
+            [callerPath, caller], [otherPath, other]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("project memory operator references retain native macro invocation anchors", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "memory.bi");
+        const otherPath = path.join(context.root, "other.bas");
+        const callerPath = context.document.uri.fsPath;
+        const header = ["Type ManagedValue", "    value As Long",
+            "    Declare Operator New(ByVal bytes As UInteger) As Any Ptr",
+            "    Declare Operator New[](ByVal bytes As UInteger) As Any Ptr",
+            "    Declare Operator Delete(ByVal storage As Any Ptr)",
+            "    Declare Operator Delete[](ByVal storage As Any Ptr)", "End Type",
+            "Operator ManagedValue.New(ByVal bytes As UInteger) As Any Ptr", "    Return Allocate(bytes)", "End Operator",
+            "Operator ManagedValue.New[](ByVal bytes As UInteger) As Any Ptr", "    Return Allocate(bytes)", "End Operator",
+            "Operator ManagedValue.Delete(ByVal storage As Any Ptr)", "    Deallocate(storage)", "End Operator",
+            "Operator ManagedValue.Delete[](ByVal storage As Any Ptr)", "    Deallocate(storage)", "End Operator",
+            "Declare Sub DefaultUser(ByVal item As ManagedValue Ptr = New ManagedValue)",
+            "Type Holder", "    item As ManagedValue Ptr = New ManagedValue", "End Type",
+            "#Define MAKE_ONE() New ManagedValue", "#Define WRAP_ONE() MAKE_ONE()",
+            "#Define MAKE_MANY() New ManagedValue[2]", "#Define DROP_ONE(item) Delete item",
+            "#Define DROP_MANY(item) Delete[] item", "#Macro MAKE_PAIR()",
+            "    Dim generatedScalar As ManagedValue Ptr = New ManagedValue",
+            "    Dim generatedArray As ManagedValue Ptr = New ManagedValue[2]", "#EndMacro",
+            "#Macro DROP_PAIR()", "    Delete generatedScalar", "    Delete[] generatedArray", "#EndMacro", ""].join("\n");
+        const caller = ['#include "memory.bi"', "Sub Caller()",
+            "    Dim one As ManagedValue Ptr = MAKE_ONE()",
+            "    Dim many As ManagedValue Ptr = MAKE_MANY()",
+            "    Dim nested As ManagedValue Ptr = WRAP_ONE()", "    DROP_ONE(one)", "    DROP_MANY(many)",
+            "    Dim builtIn As Long Ptr = New Long", "    Delete builtIn",
+            "    Dim storage(0 To 255) As UByte", "    Dim placed As ManagedValue Ptr = New (@storage(0)) ManagedValue",
+            "    MAKE_PAIR()", "    DROP_PAIR()", "End Sub", "Sub QueryOnly()", "    Print SizeOf(MAKE_ONE())", "End Sub", ""].join("\n");
+        const other = ['#include "memory.bi"', "Sub Other()", "    Dim direct As ManagedValue Ptr = New ManagedValue",
+            '#Line 700 "logical-memory-only.bas"', "    /' λ😀 '/ Dim nested As ManagedValue Ptr = WRAP_ONE()", "End Sub", ""].join("\n");
+        for (const [file, text] of [[headerPath, header], [callerPath, caller], [otherPath, other]]) fs.writeFileSync(file, text);
+        context.values["analysis.projectContexts"] = [{ name: "memory", modules: ["caller.bas", "other.bas"] }];
+        context.values["analysis.activeContext"] = { name: "memory", module: "caller.bas" };
+        const headerDocument = { uri: context.service.vscode.Uri.file(headerPath), languageId: "freebasic", version: 1, getText: () => header };
+        context.service.vscode.workspace.textDocuments.push(headerDocument);
+        const headerModel = await context.service.getModelForEditor(headerDocument, null, true, true);
+        assert.ok(headerModel, "a cold header reference request must acquire its configured translation unit");
+        const selected = await headerModel.query("compilerSidecarOperatorDeclarationAt", headerDocument.uri, {
+            position: { line: 2, character: header.split("\n")[2].indexOf("New") }, kind: "procedure-prototype"
+        }, null, headerDocument.uri);
+        assert.equal(selected?.targetSymbols?.length, 1, JSON.stringify(selected));
+        const keys = (sites) => sites.map((site) => JSON.stringify(site)).sort();
+        for (const [line, expected] of [[2, [[headerPath, 19], [headerPath, 21], [callerPath, 2],
+            [callerPath, 4], [callerPath, 11], [callerPath, 15], [otherPath, 2], [otherPath, 4]]],
+        [3, [[callerPath, 3], [callerPath, 11]]], [4, [[callerPath, 5], [callerPath, 12]]], [5, [[callerPath, 6], [callerPath, 12]]]]) {
+            const references = await context.project.operatorReferences(headerDocument, {
+                filePath: headerPath, startLine: line + 1, startColumn: header.split("\n")[line].indexOf(line < 4 ? "New" : "Delete"),
+                kind: "procedure-prototype"
+            }, false);
+            assert.ok(Array.isArray(references));
+            assert.deepEqual(keys(references.map((entry) => [entry.uri.fsPath, entry.range.start.line])), keys(expected),
+                `header ${line}: references must include source-only uses, not macro bodies or built-in/placement allocations`);
+            for (const entry of references) {
+                const text = new Map([[headerPath, header], [callerPath, caller], [otherPath, other]]).get(entry.uri.fsPath);
+                assert.ok(entry.range.end.character > entry.range.start.character);
+                assert.match(text.split("\n")[entry.range.start.line].slice(entry.range.start.character, entry.range.end.character),
+                    /^(?:New|MAKE_ONE|MAKE_MANY|WRAP_ONE|DROP_ONE|DROP_MANY|MAKE_PAIR|DROP_PAIR)/,
+                    "read-only source uses must point to the compiler's physical invocation, not its logical replacement");
+            }
+        }
+        for (const [file, text] of [[headerPath, header], [callerPath, caller], [otherPath, other]]) {
+            assert.equal(fs.readFileSync(file, "utf8"), text, "references must leave saved source untouched");
+        }
+    });
+});
+
+test("project operator navigation follows the active guarded implementation", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "navigation.bi");
+        const implementationPath = path.join(context.root, "implementation.bas");
+        const header = ["Type NavigationValue", "    value As Long", "    Declare Operator [](ByVal index As Double) As Long", "End Type",
+            "Declare Operator +(ByRef item As NavigationValue, ByVal amount As Long) As Long",
+            "Declare Operator +(ByRef item As NavigationValue, ByVal amount As Double) As Long", ""].join("\n");
+        const binary = "Operator +(ByRef item As NavigationValue, ByVal amount As Double) As Long";
+        const indexed = "Operator NavigationValue.[](ByVal index As Double) As Long";
+        const implementation = ['#include "navigation.bi"', "Operator +(ByRef item As NavigationValue, ByVal amount As Long) As Long",
+            "    Return amount", "End Operator", "#ifdef ALTERNATE", binary, "    Return CLng(amount) + 1", "End Operator",
+            indexed, "    Return CLng(index) + 1", "End Operator", "#else", binary, "    Return CLng(amount)", "End Operator",
+            indexed, "    Return CLng(index)", "End Operator", "#endif", ""].join("\n");
+        const caller = '#include "navigation.bi"\nDim item As NavigationValue\nPrint item + CDbl(1)\nPrint item[CDbl(2)]\n';
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [context.document.uri.fsPath, caller]]) {
+            fs.writeFileSync(file, text);
+        }
+        context.values["analysis.projectContexts"] = [
+            { name: "normal", modules: ["implementation.bas", "caller.bas"] },
+            { name: "alternate", modules: ["implementation.bas", "caller.bas"], arguments: ["-d", "ALTERNATE"] }
+        ];
+        const origin = (line, spelling) => ({ filePath: headerPath, startLine: line + 1,
+            startColumn: header.split("\n")[line].indexOf(spelling), kind: "procedure-prototype" });
+        const binaryOrigin = origin(5, "+"), indexOrigin = origin(2, "[]");
+        const bodyLine = (spelling, alternate) => implementation.split("\n").flatMap((line, index) => line === spelling ? [index] : [])[alternate ? 0 : 1];
+        for (const [name, operation, selected, expectedFile, expectedLine] of [
+            ["normal", "implementation", binaryOrigin, implementationPath, bodyLine(binary, false)],
+            ["normal", "declaration", binaryOrigin, headerPath, 5],
+            ["alternate", "definition", binaryOrigin, implementationPath, bodyLine(binary, true)],
+            ["alternate", "implementation", indexOrigin, implementationPath, bodyLine(indexed, true)],
+            [null, "implementation", binaryOrigin, implementationPath, bodyLine(binary, false)]
+        ]) {
+            context.values["analysis.activeContext"] = name === null ? null : { name, module: "caller.bas" };
+            let locations;
+            try { locations = await context.project.operatorNavigation(context.document, selected, operation); }
+            catch (error) { throw new Error(`${name}: ${operation}, header line ${selected.startLine}: ${error.message}`, { cause: error }); }
+            assert.deepEqual(locations?.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[expectedFile, expectedLine]],
+                `${name}: ${operation} must not include inactive bodies or sibling overloads`);
+        }
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [context.document.uri.fsPath, caller]]) {
+            assert.equal(fs.readFileSync(file, "utf8"), text);
+        }
+    });
+});
+
+test("project lifetime navigation follows selected constructors and destructors in the active build", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "lifetime.bi");
+        const implementationPath = path.join(context.root, "implementation.bas");
+        const callerPath = context.document.uri.fsPath;
+        const header = ["Type LifetimeValue", "    value As Long", "    Declare Constructor(ByVal amount As Long)",
+            "    Declare Constructor(ByVal amount As String)", "    Declare Destructor()", "End Type", ""].join("\n");
+        const numeric = "Constructor LifetimeValue(ByVal amount As Long)", destructor = "Destructor LifetimeValue()";
+        const branch = (alternate) => [numeric, `    value = amount + ${alternate ? 1 : 0}`, "End Constructor",
+            "Constructor LifetimeValue(ByVal amount As String)", "    value = Len(amount)", "End Constructor",
+            destructor, "End Destructor"];
+        const implementation = ['#include "lifetime.bi"', "#ifdef ALTERNATE", ...branch(true), "#else", ...branch(false), "#endif", ""].join("\n");
+        const caller = ['#include "lifetime.bi"', "Sub Consume(ByVal item As LifetimeValue)", "End Sub",
+            "Dim value As LifetimeValue = LifetimeValue(17)", "Consume(19)", ""].join("\n");
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [callerPath, caller]]) fs.writeFileSync(file, text);
+        context.values["analysis.projectContexts"] = [
+            { name: "normal", modules: ["caller.bas", "implementation.bas"] },
+            { name: "alternate", modules: ["caller.bas", "implementation.bas"], arguments: ["-d", "ALTERNATE"] }
+        ];
+        const bodyLine = (spelling, alternate) => implementation.split("\n").flatMap((line, index) => line === spelling ? [index] : [])[alternate ? 0 : 1];
+        for (const alternate of [false, true]) {
+            context.values["analysis.activeContext"] = { name: alternate ? "alternate" : "normal", module: "caller.bas" };
+            for (const [line, column, operation, expectedFile, expectedLine] of [
+                [3, caller.split("\n")[3].lastIndexOf("LifetimeValue") + 1, "implementation", implementationPath, bodyLine(numeric, alternate)],
+                [4, "Consume(".length, "definition", implementationPath, bodyLine(numeric, alternate)]
+            ]) {
+                const locations = await context.project.lifetimeNavigation(context.document, { line, character: column }, operation);
+                assert.deepEqual(locations?.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[expectedFile, expectedLine]],
+                    `${operation}: ${alternate}: written and argument constructors must retain the selected Long overload`);
+            }
+            const headerDocument = { ...context.document, uri: { scheme: "file", fsPath: headerPath, toString: () => `file://${headerPath}` },
+                getText: () => header };
+            const locations = await context.project.lifetimeNavigation(headerDocument, { line: 4, character: "    Declare ".length + 1 }, "implementation");
+            assert.deepEqual(locations?.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[implementationPath, bodyLine(destructor, alternate)]],
+                "a destructor prototype must join only the active build's body");
+        }
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [callerPath, caller]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("ordinary project navigation uses the active build while references retain all builds", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "api.bi"), implementationPath = path.join(context.root, "implementation.bas");
+        const header = "Declare Function AdjustValue(ByVal value As Long) As Long\n";
+        const implementation = ['#include "api.bi"', "#ifdef ALTERNATE", "Function AdjustValue(ByVal value As Long) As Long",
+            "    Return value + 1", "End Function", "#else", "Function AdjustValue(ByVal value As Long) As Long",
+            "    Return value", "End Function", "#endif", ""].join("\n");
+        const caller = '#include "api.bi"\nPrint AdjustValue(1)\n';
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [context.document.uri.fsPath, caller]]) fs.writeFileSync(file, text);
+        const position = { line: 1, character: "Print ".length + 1 };
+        for (const [name, operation, file, line] of [["normal", "definition", implementationPath, 6],
+            ["alternate", "implementation", implementationPath, 2], ["alternate", "declaration", headerPath, 0],
+            [null, "definition", implementationPath, 6]]) {
+            context.values["analysis.activeContext"] = name === null ? null : { name, module: "caller.bas" };
+            const locations = await context.project.navigation(context.document, position, operation);
+            assert.deepEqual(locations?.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[file, line]],
+                `${name}: ${operation} must not include inactive function bodies`);
+        }
+        const references = await context.project.references(context.document, position, true);
+        const keys = (values) => values.map((value) => JSON.stringify(value)).sort();
+        assert.deepEqual(keys(references.map((entry) => [entry.uri.fsPath, entry.range.start.line])),
+            keys([[headerPath, 0], [implementationPath, 2], [implementationPath, 6], [context.document.uri.fsPath, 1]]),
+            "Find References must still include both configured implementations");
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [context.document.uri.fsPath, caller]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("project navigation classifies qualified function and method bodies by their native terminal token", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "api.bi"), implementationPath = path.join(context.root, "implementation.bas");
+        const header = ["Namespace Api", "Declare Function Adjust Overload(ByVal value As Long) As Long",
+            "Declare Function Adjust Overload(ByVal value As Double) As Long", "Type Worker", "    value As Long",
+            "    Declare Function Adjust(ByVal value As Long) As Long", "End Type", "End Namespace",
+            "Namespace Other", "Declare Function Adjust(ByVal value As Long) As Long", "End Namespace", ""].join("\n");
+        const signatures = ["Api.Adjust(ByVal value As Long)", "Api.Adjust(ByVal value As Double)",
+            "Api.Worker.Adjust(ByVal value As Long)", "Other.Adjust(ByVal value As Long)"];
+        const implementation = ['#include "api.bi"', ...signatures.flatMap((signature) =>
+            [`Function ${signature} As Long`, "    Return CLng(value)", "End Function"]), ""].join("\n");
+        const caller = '#include "api.bi"\nPrint Api.Adjust(CLng(1))\nDim item As Api.Worker\nPrint item.Adjust(2)\n';
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [context.document.uri.fsPath, caller]]) fs.writeFileSync(file, text);
+        context.values["analysis.projectContexts"] = [{ name: "qualified", modules: ["caller.bas", "implementation.bas"] }];
+        context.values["analysis.activeContext"] = { name: "qualified", module: "caller.bas" };
+        for (const [callLine, prototypeLine, bodyLine] of [[1, 1, 1], [3, 5, 7]]) {
+            const position = { line: callLine, character: caller.split("\n")[callLine].indexOf("Adjust") + 1 };
+            for (const operation of ["definition", "declaration", "implementation"]) {
+                let locations;
+                try { locations = await context.project.navigation(context.document, position, operation); }
+                catch (error) { throw new Error(`${error.message}: ${JSON.stringify([...context.service.snapshots.values()].flatMap((snapshot) => snapshot.diagnostics || []))}`, { cause: error }); }
+                const declaration = operation === "declaration";
+                const text = declaration ? header : implementation;
+                const line = declaration ? prototypeLine : bodyLine;
+                const column = text.split("\n")[line].indexOf("Adjust");
+                assert.deepEqual(locations?.map((entry) => [entry.uri.fsPath, entry.range.start.line,
+                    entry.range.start.character, entry.range.end.character]),
+                [[declaration ? headerPath : implementationPath, line, column, column + "Adjust".length]],
+                `${operation}: qualified source spelling must not hide the selected body or admit siblings`);
+            }
+        }
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [context.document.uri.fsPath, caller]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("project implementation follows override descendants across modules without changing static queries", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "api.bi"), implementationPath = path.join(context.root, "implementation.bas");
+        const callerPath = context.document.uri.fsPath;
+        const header = ["Type BasePicker Extends Object", "Declare Virtual Function Pick Overload(ByVal value As Long) As Long",
+            "Declare Virtual Function Pick Overload(ByVal value As Double) As Long", "End Type", "Type ChildPicker Extends BasePicker",
+            "Declare Virtual Function Pick(ByVal value As Long) As Long Override", "End Type", "Type LeafPicker Extends ChildPicker",
+            "Declare Function Pick(ByVal value As Long) As Long Override", "End Type", "Type UnrelatedPicker Extends Object",
+            "Declare Virtual Function Pick(ByVal value As Long) As Long", "End Type", ""].join("\n");
+        const caller = ['#include "api.bi"', "Function BasePicker.Pick(ByVal value As Long) As Long", "Return value", "End Function",
+            "Function BasePicker.Pick(ByVal value As Double) As Long", "Return CLng(value)", "End Function", "Dim basePointer As BasePicker Ptr",
+            "Print basePointer->Pick(CLng(1))", "Print basePointer->Pick(CDbl(2))", "Dim childPointer As ChildPicker Ptr", "Print childPointer->Pick(CLng(3))", ""].join("\n");
+        const implementation = ['#include "api.bi"', "#ifdef ALTERNATE", "Function ChildPicker.Pick(ByVal value As Long) As Long", "Return value + 1", "End Function",
+            "#else", "Function ChildPicker.Pick(ByVal value As Long) As Long", "Return value", "End Function", "#endif",
+            "Function LeafPicker.Pick(ByVal value As Long) As Long", "Return value", "End Function",
+            "Function UnrelatedPicker.Pick(ByVal value As Long) As Long", "Return value", "End Function", ""].join("\n");
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [callerPath, caller]]) fs.writeFileSync(file, text);
+        const point = (line) => ({ line, character: caller.split("\n")[line].indexOf("Pick") + 1 });
+        for (const [name, operation, line, expected] of [
+            ["normal", "implementation", 8, [[callerPath, 1], [implementationPath, 6], [implementationPath, 10]]],
+            ["alternate", "implementation", 8, [[callerPath, 1], [implementationPath, 2], [implementationPath, 10]]],
+            ["alternate", "implementation", 11, [[implementationPath, 2], [implementationPath, 10]]],
+            ["alternate", "implementation", 9, [[callerPath, 4]]],
+            ["alternate", "definition", 8, [[callerPath, 1]]], ["alternate", "declaration", 8, [[headerPath, 1]]]
+        ]) {
+            context.values["analysis.activeContext"] = { name, module: "caller.bas" };
+            const locations = await context.project.navigation(context.document, point(line), operation);
+            const keys = (values) => values.map((value) => JSON.stringify(value)).sort();
+            assert.deepEqual(keys(locations?.map((entry) => [entry.uri.fsPath, entry.range.start.line]) || []), keys(expected),
+                `${name}: ${operation}: descendants must remain directional and overload-specific`);
+        }
+        const references = await context.project.references(context.document, point(8), false);
+        assert.deepEqual(references.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[callerPath, 8]],
+            "ordinary references must not become a virtual-family union");
+        const headerDocument = { languageId: "freebasic", uri: context.service.vscode.Uri.file(headerPath), getText: () => header };
+        context.service.vscode.workspace.textDocuments.push(headerDocument);
+        for (const name of ["normal", "alternate"]) {
+            context.values["analysis.activeContext"] = { name, module: "caller.bas" };
+            const locations = await context.project.baseMethodNavigation(headerDocument,
+                { line: 8, character: header.split("\n")[8].indexOf("Pick") + 1 });
+            assert.deepEqual(locations.map((entry) => [entry.uri.fsPath, entry.range.start.line]),
+                [[implementationPath, name === "normal" ? 6 : 2]],
+                "the immediate parent's body must follow the active build, not select the origin or root");
+        }
+        for (const [file, text] of [[headerPath, header], [implementationPath, implementation], [callerPath, caller]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("project type hierarchy finds only direct subtypes in the active build", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) {
+            context.values["analysis.compilerPath"] = "";
+            context.values["compiler.path"] = process.env.FBC_EXECUTABLE;
+        }
+        const headerPath = path.join(context.root, "api.bi"), otherPath = path.join(context.root, "implementation.bas");
+        const header = ["Type BaseRoot", "number As Long", "End Type", "Type OtherRoot", "number As Long", "End Type",
+            "Type RootAlias As BaseRoot", ""].join("\n");
+        const caller = '#include "api.bi"\nType LocalChild Extends BaseRoot\nEnd Type\n';
+        const other = ['#include "api.bi"', "#ifdef ALTERNATE", "Type RemoteChild Extends OtherRoot", "#else",
+            "Type RemoteChild Extends RootAlias", "#endif", "End Type", "Type RemoteLeaf Extends RemoteChild", "End Type", ""].join("\n");
+        for (const [file, text] of [[headerPath, header], [otherPath, other], [context.document.uri.fsPath, caller]]) fs.writeFileSync(file, text);
+        const documentFor = (filePath, text) => ({ languageId: "freebasic", uri: context.service.vscode.Uri.file(filePath), getText: () => text });
+        const headerDocument = documentFor(headerPath, header), otherDocument = documentFor(otherPath, other);
+        context.service.vscode.workspace.textDocuments.push(headerDocument, otherDocument);
+        const names = (entries) => entries.map((entry) => entry.name).sort();
+        for (const name of ["normal", "alternate"]) {
+            context.values["analysis.activeContext"] = { name, module: "caller.bas" };
+            assert.deepEqual(names(await context.project.subtypes(headerDocument, { line: 0, character: 6 })),
+                name === "normal" ? ["LocalChild", "RemoteChild"] : ["LocalChild"],
+                "the root must exclude grandchildren and inactive inheritance edges");
+            assert.deepEqual(names(await context.project.subtypes(headerDocument, { line: 0, character: 6 }, null, true)),
+                name === "normal" ? ["LocalChild", "RemoteChild", "RemoteLeaf"] : ["LocalChild"],
+                "type implementations include transitive children but not the selected root");
+            if (name === "normal") assert.deepEqual(names(await context.project.subtypes(headerDocument, { line: 6, character: 6 }, null, true)),
+                ["LocalChild", "RemoteChild", "RemoteLeaf"], "an alias origin must select its compiler-confirmed base type");
+            assert.deepEqual(names(await context.project.subtypes(headerDocument, { line: 3, character: 6 })),
+                name === "alternate" ? ["RemoteChild"] : [], "unrelated roots must stay separate");
+            const line = name === "normal" ? 4 : 2;
+            const leaves = await context.project.subtypes(otherDocument, { line, character: 6 });
+            assert.deepEqual(names(leaves), ["RemoteLeaf"], "a derived tree item can expand independently");
+            assert.deepEqual(leaves.map((entry) => [entry.uri.fsPath, entry.declaration.line]), [[otherPath, 7]]);
+        }
+        for (const [file, text] of [[headerPath, header], [otherPath, other], [context.document.uri.fsPath, caller]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("native call hierarchy uses the current module without enabling implicit projects", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) for (const standalone of [false, true]) {
+        await t.test(`${stock ? "stock" : "bridge"}/${standalone ? "standalone" : "workspace"}`, async (t) => {
+            const context = fixture(t);
+            if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+            if (standalone) context.service.vscode.workspace.getWorkspaceFolder = () => undefined;
+            context.values["analysis.projectContexts"] = [];
+            const headerPath = path.join(context.root, "api.bi");
+            const header = "Declare Sub SelectedTarget(ByVal value As Long)\n";
+            const lines = ['#include "api.bi"', "Sub LocalCaller()", "#ifdef ALTERNATE", "SelectedTarget(CLng(1))",
+                "#else", "SelectedTarget(CLng(2))", "#endif", "End Sub", "SelectedTarget(CLng(3))", ""];
+            const source = lines.join("\n");
+            const unrelatedPath = path.join(context.root, "unrelated.bas");
+            const unrelated = 'This is deliberately invalid FreeBASIC\nSelectedTarget(CLng(99))\n';
+            for (const [file, text] of [[headerPath, header], [context.document.uri.fsPath, source], [unrelatedPath, unrelated]]) fs.writeFileSync(file, text);
+            for (const alternate of [false, true]) {
+                context.values["compiler.arguments"] = alternate ? ["-d", "ALTERNATE"] : [];
+                const activeLine = alternate ? 3 : 5;
+                const incoming = await context.project.incomingCalls(context.document, { line: 8, character: 1 });
+                assert.deepEqual(incoming?.map((entry) => [entry.uri.fsPath, entry.declaration.type, entry.fromRanges.map((range) => range.line)]),
+                    [[context.document.uri.fsPath, "sub", [activeLine]], [context.document.uri.fsPath, "module", [8]]],
+                    "the default context must retain compiler flags and must not discover unrelated modules");
+                const outgoing = await context.project.outgoingCalls(context.document, { line: 1, character: 5 });
+                assert.deepEqual(outgoing?.map((entry) => [entry.name, entry.uri.fsPath, entry.fromRanges.map((range) => range.line)]),
+                    [["SelectedTarget", headerPath, [activeLine]]]);
+                assert.equal(context.project.hasProjectContexts(context.document.uri), false);
+                assert.equal(context.project.hasCallHierarchyContext(context.document.uri), true);
+            }
+            await assert.rejects(context.project.prepare(context.document, { line: 8, character: 1 }), /disabled|workspace folder|requires the editor bridge/,
+                "read-only hierarchy must not enable project rename");
+            context.values["analysis.run"] = "off";
+            assert.equal(context.project.hasCallHierarchyContext(context.document.uri), false);
+            await assert.rejects(context.project.incomingCalls(context.document, { line: 8, character: 1 }), /disabled|off/);
+            context.values["analysis.run"] = "onDemand";
+            context.values["analysis.projectContexts"] = [{ name: "bad", modules: ["*.bas"] }];
+            assert.equal(context.project.hasCallHierarchyContext(context.document.uri), false);
+            await assert.rejects(context.project.incomingCalls(context.document, { line: 8, character: 1 }), /explicit.*paths|globs/,
+                "invalid explicit contexts must not silently become a default single-module lookup");
+            for (const [file, text] of [[headerPath, header], [context.document.uri.fsPath, source], [unrelatedPath, unrelated]]) {
+                assert.equal(fs.readFileSync(file, "utf8"), text);
+            }
+        });
+    }
+});
+
+test("project procedure references retain selected macro uses and unevaluated inputs", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+        const headerPath = path.join(context.root, "api.bi"), otherPath = path.join(context.root, "other.bas");
+        const header = "Declare Function Work Overload(ByVal value As Long) As Long\n" +
+            "Declare Function Work Overload(ByVal value As Double) As Long\n" +
+            "Declare Function Auxiliary(ByVal value As Long) As Long\n" +
+            "#define WorkAddress() @Work\n#define Glue(prefix, suffix, value) prefix##suffix(value)\n" +
+            "#define BothWork() Work(CLng(8)) + Auxiliary(CLng(9))\n#define LongResult Work(CLng(10))\n";
+        const source = ['#include "api.bi"', "#define UseWork(value) Work(value)", "#define RelayWork(value) UseWork(value)",
+            "Sub Caller()", '    Print "é😀" : Print UseWork(CLng(1))', "    Print UseWork(CDbl(2))", "    Print RelayWork(CLng(3))",
+            "    Dim query As TypeOf(UseWork(CLng(4)))", "    Dim address As Function(ByVal value As Long) As Long = @Work",
+            "    Dim macroAddress As Function(ByVal value As Long) As Long = WorkAddress()", "    Print Work(CLng(5))",
+            "    Print Glue(Wo, rk, CLng(8))", "    Print BothWork()", "    Print LongResult",
+            "End Sub", "Function Work(ByVal value As Long) As Long", "    Work = value", "End Function",
+            "#if 0", "Print UseWork(CLng(7))", "#endif", ""].join("\n");
+        const other = ['#include "api.bi"', "#define RemoteWork() Work(CLng(6))",
+            '#Line 700 "logical-procedure-references.bas"', "Print RemoteWork()", "Print Work(CLng(11))", ""].join("\n");
+        const sources = [[headerPath, header], [context.document.uri.fsPath, source], [otherPath, other]];
+        for (const [file, text] of sources) fs.writeFileSync(file, text);
+        context.values["analysis.projectContexts"] = [{ name: "macro-references", modules: ["caller.bas", "other.bas"] }];
+        context.values["analysis.activeContext"] = { name: "macro-references", module: "caller.bas" };
+        const references = await context.project.references(context.document, { line: 10, character: source.split("\n")[10].indexOf("Work") }, false);
+        assert.ok(Array.isArray(references), "a fixed macro replacement can select several overloads without making source uses ambiguous");
+        const sites = (values) => values.map((entry) => JSON.stringify(entry)).sort();
+        assert.deepEqual(sites(references.map((entry) => [entry.uri.fsPath, entry.range.start.line])),
+            sites([4, 6, 7, 8, 9, 10, 11, 12, 13, 16].map((line) => [context.document.uri.fsPath, line]).concat([[otherPath, 3], [otherPath, 4]])),
+            "references must keep each selected invocation, including TYPEOF, without reporting the ambiguous replacement spelling");
+        for (const reference of references) {
+            const text = sources.find(([file]) => file === reference.uri.fsPath)[1].split("\n")[reference.range.start.line];
+            assert.match(text.slice(reference.range.start.character, reference.range.end.character),
+                /^(?:Work|UseWork|RelayWork|WorkAddress|Glue|BothWork|LongResult|RemoteWork)\b/,
+                "native macro reporting locations must retain physical UTF-16 columns");
+        }
+        const headerDocument = { uri: context.service.vscode.Uri.file(headerPath), languageId: "freebasic", version: 1, getText: () => header };
+        context.service.vscode.workspace.textDocuments.push(headerDocument);
+        const doubleReferences = await context.project.references(headerDocument,
+            { line: 1, character: header.split("\n")[1].indexOf("Work") }, false);
+        assert.deepEqual(doubleReferences?.map((entry) => [entry.uri.fsPath, entry.range.start.line]),
+            [[context.document.uri.fsPath, 5]], "the sibling overload must retain its own macro invocation");
+        const incoming = await context.project.incomingCalls(context.document,
+            { line: 10, character: source.split("\n")[10].indexOf("Work") });
+        assert.deepEqual(sites(incoming?.flatMap((entry) => entry.fromRanges.map((range) => [entry.uri.fsPath, range.line])) || []),
+            sites([4, 6, 10, 11, 12, 13].map((line) => [context.document.uri.fsPath, line]).concat([[otherPath, 3], [otherPath, 4]])),
+            "TYPEOF/address references are not runtime callers; source-remapped macro calls retain their physical locations");
+        for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("bridge procedure references preserve a macro-generated declaration anchor", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
+    const context = fixture(t);
+    const source = ["#macro DeclareWork(name)", "Function name(ByVal value As Long) As Long", "    Return value", "End Function",
+        "#endmacro", "DeclareWork(GeneratedWork)", "Print GeneratedWork(CLng(1))", ""].join("\n");
+    fs.writeFileSync(context.document.uri.fsPath, source);
+    context.values["analysis.projectContexts"] = [{ name: "generated-references", modules: ["caller.bas"] }];
+    context.values["analysis.activeContext"] = { name: "generated-references", module: "caller.bas" };
+    const worker = context.service.analysisWorker, project = worker.project.bind(worker);
+    const passes = [];
+    worker.project = async (options) => {
+        const result = await project({ ...options, procedureReferences: false });
+        passes.push(result.compilerPasses);
+        return result;
+    };
+    const previous = await context.project.references(context.document,
+        { line: 6, character: source.split("\n")[6].indexOf("GeneratedWork") }, true);
+    assert.deepEqual(previous?.map((entry) => entry.range.start.line), [5, 6], "the bridge control must have a generated family to preserve");
+    worker.project = async (options) => {
+        const result = await project(options);
+        passes.push(result.compilerPasses);
+        return result;
+    };
+    const references = await context.project.references(context.document,
+        { line: 6, character: source.split("\n")[6].indexOf("GeneratedWork") }, true);
+    assert.deepEqual(references?.map((entry) => entry.range.start.line), [5, 6],
+        "native procedure reads must preserve the compiler-proven macro argument declaration anchor");
+    assert.ok(Number.isSafeInteger(passes[0]) && passes[0] > 0);
+    assert.equal(passes[1], passes[0], "generated-family fallback must reuse captured facts without another compiler pass");
+    assert.equal(fs.readFileSync(context.document.uri.fsPath, "utf8"), source);
+});
+
+test("project hierarchy retains native macro calls across modules without editable callee bindings", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+        const headerPath = path.join(context.root, "api.bi"), otherPath = path.join(context.root, "other.bas");
+        const header = "Declare Function Work Overload(ByVal value As Long) As Long\n" +
+            "Declare Function Work Overload(ByVal value As Double) As Long\nDeclare Function Other(ByVal value As Long) As Long\n";
+        const source = ['#include "api.bi"', "#define Invoke(name, value) name(value)",
+            "#define Relay(name, value) Invoke(name, value)", "#define FixedCall() Work(CLng(1))",
+            "#define Pair(first, second) first(CLng(1)) + second(CLng(2))", "Sub Caller()",
+            '    Print "é😀" : Print Invoke(Work, CLng(1))', "    Print Relay(Work, CDbl(1))", "    Print FixedCall()",
+            "    Print Pair(Work, Other)", "    Dim query As TypeOf(Invoke(Work, CLng(2)))", "#if 0",
+            "    Print Invoke(Work, CLng(3))", "#endif", "    Print Work(CLng(9))", "End Sub", ""].join("\n");
+        const other = ['#include "api.bi"', "#define Remote(name) name(CLng(1))", "Print Remote(Work)",
+            "#define Glue(prefix, suffix) prefix##suffix(CLng(1))", "Print Glue(Wo, rk)", ""].join("\n");
+        for (const [file, text] of [[headerPath, header], [context.document.uri.fsPath, source], [otherPath, other]]) fs.writeFileSync(file, text);
+        context.values["analysis.projectContexts"] = [{ name: "macro-calls", modules: ["caller.bas", "other.bas"] }];
+        context.values["analysis.activeContext"] = { name: "macro-calls", module: "caller.bas" };
+        const incoming = await context.project.incomingCalls(context.document, { line: 14, character: 11 });
+        assert.deepEqual(incoming?.map((entry) => [path.basename(entry.uri.fsPath), entry.fromRanges.map((range) => range.line)]),
+            [["caller.bas", [6, 8, 9, 14]], ["other.bas", [2, 4]]]);
+        assert.equal(incoming.flatMap((entry) => entry.fromRanges).filter((range) => range.macroInvocation === true).length, 5);
+        for (const entry of incoming) for (const range of entry.fromRanges) {
+            if (!range.macroInvocation) continue;
+            const line = (entry.uri.fsPath === otherPath ? other : source).split("\n")[range.line];
+            assert.match(line.slice(range.startColumn, range.endColumn), /^(?:Invoke|FixedCall|Pair|Remote|Glue)\(.*\)$/,
+                "native reporting anchors must use UTF-16 columns and include their physical argument lists");
+        }
+        const outgoing = await context.project.outgoingCalls(context.document, { line: 5, character: 5 });
+        assert.deepEqual(outgoing?.map((entry) => [entry.declaration.line, entry.fromRanges.map((range) => range.line)])
+            .sort((first, second) => first[0] - second[0]), [[0, [6, 8, 9, 14]], [1, [7]], [2, [9]]],
+            "one expansion can call two native targets, while TYPEOF and inactive calls remain absent");
+        for (const [file, text] of [[headerPath, header], [context.document.uri.fsPath, source], [otherPath, other]]) {
+            assert.equal(fs.readFileSync(file, "utf8"), text);
+        }
+    });
+});
+
+test("saved native hierarchy separates unevaluated queries from runtime calls", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+        context.values["analysis.projectContexts"] = [];
+        const source = ["Declare Function Factory() As Long", "Declare Function TextFactory() As String",
+            "#define FactoryType(name) TypeOf(name())", "Sub Caller()", "    Dim first As TypeOf(Factory())",
+            "    Print SizeOf(Factory())", "    Dim nested As TypeOf(CLng(SizeOf(Factory())))",
+            "    Dim expanded As FactoryType(Factory)", "    Print Factory()", "    Print Len(TextFactory())",
+            "    ' A second ordinary runtime use", "    Print Factory()", "End Sub",
+            "Type QueryBox", "    value As Long", "    Declare Constructor()", "    Declare Operator Cast() As Long",
+            "    Declare Operator [](ByVal index As Long) As Long", "End Type", "Sub QueryOnly()",
+            "    Dim converted As TypeOf(CLng(Type<QueryBox>()))", "    Dim instance As QueryBox = Any",
+            "    Dim indexed As TypeOf(instance[0])", "End Sub", "Sub RuntimeCalls()", "    Dim instance As QueryBox",
+            "    Print CLng(instance)", "    Print instance[0]", "End Sub", ""].join("\n");
+        fs.writeFileSync(context.document.uri.fsPath, source);
+        const outgoing = await context.project.outgoingCalls(context.document, { line: 3, character: 5 });
+        assert.deepEqual(outgoing?.flatMap((entry) => entry.fromRanges.map((range) => range.line)).sort((a, b) => a - b), [8, 9, 11]);
+        const incoming = await context.project.incomingCalls(context.document, { line: 0, character: 19 });
+        assert.deepEqual(incoming?.flatMap((entry) => entry.fromRanges.map((range) => range.line)), [8, 11]);
+        assert.deepEqual(await context.project.outgoingCalls(context.document, { line: 19, character: 5 }), [],
+            "constructor, cast and index selection inside TYPEOF must not produce runtime edges");
+        const evaluated = await context.project.outgoingCalls(context.document, { line: 24, character: 5 });
+        assert.deepEqual(evaluated?.flatMap((entry) => entry.fromRanges.map((range) => range.line)).sort((a, b) => a - b), [25, 26, 27],
+            "the same implicit operations remain in the evaluated runtime body");
+        const construction = await context.project.incomingCalls(context.document, { line: 15, character: 12 }, null, null, "constructor");
+        assert.deepEqual(construction?.flatMap((entry) => entry.fromRanges.map((range) => range.line)), [25]);
+        assert.equal(fs.readFileSync(context.document.uri.fsPath, "utf8"), source);
+    });
+});
+
+test("header hierarchy queries use a known module context without enabling header guessing", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+        context.values["analysis.projectContexts"] = [];
+        const headerPath = path.join(context.root, "calls.bi");
+        const lines = ["Sub HeaderTarget(ByVal value As Long)", "End Sub", "Sub HeaderCaller()", "#ifdef ALTERNATE",
+            "HeaderTarget(CLng(1))", "#else", "HeaderTarget(CLng(2))", "#endif", "End Sub", ""];
+        const header = lines.join("\n"), source = '#include "calls.bi"\nHeaderCaller()\n';
+        fs.writeFileSync(headerPath, header);
+        fs.writeFileSync(context.document.uri.fsPath, source);
+        const documentFor = (filePath, text) => ({ languageId: "freebasic", uri: context.service.vscode.Uri.file(filePath), getText: () => text });
+        const headerDocument = documentFor(headerPath, header);
+        context.service.vscode.workspace.textDocuments.push(headerDocument);
+        for (const alternate of [false, true]) {
+            context.values["compiler.arguments"] = alternate ? ["-d", "ALTERNATE"] : [];
+            const activeLine = alternate ? 4 : 6;
+            const incoming = await context.project.incomingCalls(headerDocument, { line: 0, character: 5 }, null, context.document);
+            assert.deepEqual(incoming?.map((entry) => [entry.uri.fsPath, entry.fromRanges.map((range) => range.line)]), [[headerPath, [activeLine]]]);
+            const outgoing = await context.project.outgoingCalls(headerDocument, { line: 2, character: 5 }, null, "", null, context.document);
+            assert.deepEqual(outgoing?.map((entry) => [entry.uri.fsPath, entry.name, entry.fromRanges.map((range) => range.line)]),
+                [[headerPath, "HeaderTarget", [activeLine]]]);
+            const parents = await context.project.incomingCalls(headerDocument, { line: 2, character: 5 }, null, context.document);
+            assert.deepEqual(parents?.map((entry) => [entry.uri.fsPath, entry.declaration.type, entry.fromRanges.map((range) => range.line)]),
+                [[context.document.uri.fsPath, "module", [1]]]);
+            assert.equal(context.project.hasCallHierarchyContext(headerDocument.uri), false,
+                "the known root must not become a global header-context guess");
+        }
+        context.values["compiler.arguments"] = [];
+        const otherPath = path.join(context.root, "other-root.bas"), otherSource = "#define ALTERNATE\n" + source;
+        fs.writeFileSync(otherPath, otherSource);
+        const otherDocument = documentFor(otherPath, otherSource);
+        context.service.vscode.workspace.textDocuments.push(otherDocument);
+        for (const rootDocument of [context.document, otherDocument, context.document]) {
+            const incoming = await context.project.incomingCalls(headerDocument, { line: 0, character: 5 }, null, rootDocument);
+            assert.deepEqual(incoming?.flatMap((entry) => entry.fromRanges.map((range) => range.line)),
+                rootDocument === otherDocument ? [4] : [6], "the same header must not borrow the last analyzed module's defines");
+        }
+        const foreignPath = path.join(context.root, "foreign.bi"), foreign = "Sub ForeignTarget()\nEnd Sub\n";
+        fs.writeFileSync(foreignPath, foreign);
+        const foreignDocument = documentFor(foreignPath, foreign);
+        context.service.vscode.workspace.textDocuments.push(foreignDocument);
+        await assert.rejects(context.project.incomingCalls(foreignDocument, { line: 0, character: 5 }, null, context.document),
+            /directly represented native symbol/, "a context hint must not make an unconsumed header part of its native graph");
+        for (const [file, text] of [[headerPath, header], [context.document.uri.fsPath, source], [foreignPath, foreign]]) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("native module outgoing projection separates files, routine bodies and inactive calls", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+        context.values["analysis.projectContexts"] = [];
+        const headerPath = path.join(context.root, "calls.bi");
+        const header = "Sub ModuleFirst()\nEnd Sub\nSub ModuleSecond()\nEnd Sub\nModuleFirst()\n";
+        const source = ['#include "calls.bi"', "Sub ProcedureCaller()", "ModuleSecond()", "End Sub", "#ifdef ALTERNATE",
+            "ModuleSecond()", "#else", "ModuleFirst()", "#endif", "Dim callback As Sub() = @ModuleSecond", "Print 1", ""].join("\n");
+        fs.writeFileSync(headerPath, header);
+        fs.writeFileSync(context.document.uri.fsPath, source);
+        const headerDocument = { languageId: "freebasic", uri: context.service.vscode.Uri.file(headerPath), getText: () => header };
+        context.service.vscode.workspace.textDocuments.push(headerDocument);
+        for (const alternate of [false, true]) {
+            context.values["compiler.arguments"] = alternate ? ["-d", "ALTERNATE"] : [];
+            const calls = await context.project.moduleOutgoingCalls(context.document);
+            assert.deepEqual(calls?.map((entry) => [entry.name, entry.uri.fsPath, entry.fromRanges.map((range) => range.line)]),
+                [[alternate ? "ModuleSecond" : "ModuleFirst", headerPath, [alternate ? 5 : 7]]],
+                "a file node must exclude calls owned by routines, includes and inactive branches, and exclude address-taking");
+            const included = await context.project.moduleOutgoingCalls(headerDocument, null, context.document);
+            assert.deepEqual(included?.map((entry) => [entry.name, entry.uri.fsPath, entry.fromRanges.map((range) => range.line)]),
+                [["ModuleFirst", headerPath, [4]]], "an included file node must keep its physical ranges and root context");
+        }
+        const empty = '#include "calls.bi"\nSub ProcedureCaller()\nModuleSecond()\nEnd Sub\nDim callback As Sub() = @ModuleSecond\nPrint 1\n';
+        fs.writeFileSync(context.document.uri.fsPath, empty);
+        assert.deepEqual(await context.project.moduleOutgoingCalls(context.document), [],
+            "a valid empty module projection needs no fabricated procedure symbol");
+        assert.equal(fs.readFileSync(context.document.uri.fsPath, "utf8"), empty);
+        fs.writeFileSync(context.document.uri.fsPath, "Print 1\n");
+        assert.deepEqual(await context.project.moduleOutgoingCalls(context.document), [],
+            "a runtime-only file with no user procedures still has a valid module context");
+        assert.equal(fs.readFileSync(context.document.uri.fsPath, "utf8"), "Print 1\n");
+        const initialized = fs.readFileSync(path.join(__dirname, "fixtures/namespace-initializer-calls.bas"), "utf8");
+        fs.writeFileSync(context.document.uri.fsPath, initialized);
+        const initializedCalls = await context.project.moduleOutgoingCalls(context.document);
+        assert.ok(Array.isArray(initializedCalls), "native ordinary calls must remain available alongside namespace construction");
+        assert.equal(initializedCalls.filter((entry) => entry.name === "ModuleAction").length, 1);
+        const construction = initializedCalls.filter((entry) => entry.declaration.type === "constructor");
+        assert.equal(construction.length, 1, "the native module graph must include namespace shared initialization");
+        const sharedLines = initialized.split("\n").flatMap((line, index) => /\bDim Shared \w+ As TrackedValue =/.test(line) ? [index] : []);
+        assert.deepEqual([...new Set(construction[0].fromRanges.map((range) => range.line))], sharedLines,
+            "procedure-owned construction must not enter the module's native edges");
+        assert.equal(initializedCalls.some((entry) => entry.name === "RecordInitialization"), false,
+            "a constructor's internal call must not leak into its module");
+        assert.equal(fs.readFileSync(context.document.uri.fsPath, "utf8"), initialized);
+        assert.equal(fs.readFileSync(headerPath, "utf8"), header);
+        assert.deepEqual(context.values["analysis.projectContexts"], []);
+    });
+});
+
+test("module outgoing collection uses native module ownership without a symbol family", () => {
+    const root = { scheme: "file", fsPath: "/workspace/main.bas" }, header = { scheme: "file", fsPath: "/workspace/api.bi" };
+    const callee = (name) => ({ name, uri: header, declaration: { name, type: "sub", line: 0, startColumn: 4, endColumn: 4 + name.length } });
+    const binding = (uri, name = "First") => ({ id: 0, kind: "reference", name,
+        physical: { uri, occurrence: { name, offset: 0, end: 5, line: 0, startColumn: 0, endColumn: 5 } }, callee: callee(name) });
+    const unit = { declarations: [], bindings: [binding(root), binding(header)] };
+    const collect = () => collectProjectReferences([unit], "", "main.bas", false, (value) => value, () => {},
+        { outgoingCalls: true, moduleOutgoingFile: root.fsPath });
+    assert.deepEqual(collect()?.map((site) => [site.filePath, site.callee.name]), [[root.fsPath, "First"]]);
+    unit.bindings = [binding(header)];
+    assert.deepEqual(collect(), []);
+    unit.bindings = [{ ...binding(root), callee: null }];
+    assert.equal(collect(), null, "unmapped module targets must keep the result unavailable, not complete and empty");
+    unit.bindings = [binding(root), binding(root, "Second")];
+    assert.equal(collect(), null, "conflicting native targets at one physical site must remain ambiguous");
+});
+
+test("project incoming calls use native callee and caller ownership across modules", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+        const headerPath = path.join(context.root, "api.bi"), otherPath = path.join(context.root, "other.bas");
+        const implementationPath = path.join(context.root, "implementation.bas");
+        const header = "Declare Sub ProjectCallTarget Overload(ByVal value As Long)\nDeclare Sub ProjectCallTarget Overload(ByVal value As Double)\n";
+        const caller = ['#include "api.bi"', "Sub LocalCaller()", "ProjectCallTarget(CLng(1))", "End Sub",
+            "ProjectCallTarget(CLng(2))", "Dim callback As Sub(ByVal As Long) = @ProjectCallTarget", ""].join("\n");
+        const other = ['#include "api.bi"', "#ifdef ALTERNATE", "Sub AlternateCaller()", "#else", "Sub RemoteCaller()", "#endif",
+            "ProjectCallTarget(CLng(3))", "End Sub", "Type CallOwner", "number As Long", "Declare Constructor()", "End Type",
+            "Constructor CallOwner()", "ProjectCallTarget(CLng(4))", "End Constructor", "ProjectCallTarget(CDbl(5))", ""].join("\n");
+        const implementation = '#include "api.bi"\nSub ProjectCallTarget(ByVal value As Long)\nEnd Sub\nSub ProjectCallTarget(ByVal value As Double)\nEnd Sub\n';
+        const sources = [[headerPath, header], [otherPath, other], [implementationPath, implementation], [context.document.uri.fsPath, caller]];
+        for (const [file, text] of sources) fs.writeFileSync(file, text);
+        context.values["analysis.projectContexts"] = [{ name: "normal", modules: ["caller.bas", "other.bas", "implementation.bas"] },
+            { name: "alternate", modules: ["caller.bas", "other.bas", "implementation.bas"], arguments: ["-d", "ALTERNATE"] }];
+        for (const name of ["normal", "alternate"]) {
+            context.values["analysis.activeContext"] = { name, module: "caller.bas" };
+            const calls = await context.project.incomingCalls(context.document, { line: 2, character: 1 });
+            assert.ok(Array.isArray(calls), "complete named calls must produce a project hierarchy");
+            const actual = calls.map((entry) => [entry.uri.fsPath, entry.declaration.type, entry.declaration.line,
+                entry.fromRanges.map((site) => site.line)]).map(JSON.stringify).sort();
+            const expected = [[context.document.uri.fsPath, "sub", 1, [2]], [context.document.uri.fsPath, "module", 0, [4]],
+                [otherPath, "sub", name === "normal" ? 4 : 2, [6]], [otherPath, "constructor", 12, [13]]].map(JSON.stringify).sort();
+            assert.deepEqual(actual, expected, "native ownership must exclude address-taking, other overloads, and inactive callers");
+            const otherDocument = { languageId: "freebasic", uri: context.service.vscode.Uri.file(otherPath), getText: () => other };
+            const outgoing = await context.project.outgoingCalls(otherDocument, { line: name === "normal" ? 4 : 2, character: 6 });
+            assert.deepEqual(outgoing?.map((entry) => [entry.name, entry.uri.fsPath, entry.declaration.line, entry.fromRanges.map((site) => site.line)]),
+                [["ProjectCallTarget", headerPath, 0, [6]]], "conditional caller bodies use native owner identity for outgoing calls");
+        }
+        assert.equal(await context.project.outgoingCalls(context.document, { line: 2, character: 1 }), null,
+            "a call whose body is in another file must not return ranges against the caller document");
+        for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("native outgoing ownership covers constructor, destructor and operator bodies", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+        const headerPath = path.join(context.root, "api.bi");
+        const header = ["Declare Sub TraceLong(ByVal value As Long)", "Declare Sub TraceDouble(ByVal value As Double)",
+            "Type CallOwner", "number As Long", "Declare Constructor(ByVal initial As Long)",
+            "Declare Destructor()", "Declare Operator Cast() As Long", "End Type", ""].join("\n");
+        const lines = ['#include "api.bi"', "#ifdef ALTERNATE", "Constructor CallOwner(ByVal alternateValue As Long)",
+            "#else", "Constructor CallOwner(ByVal initial As Long)", "#endif", "TraceLong(CLng(1))",
+            "Dim callback As Sub(ByVal As Double) = @TraceDouble", "End Constructor", "Destructor CallOwner()",
+            "#ifdef ALTERNATE", "TraceDouble(CDbl(2))", "#else", "TraceLong(CLng(2))", "#endif", "End Destructor",
+            "Operator CallOwner.Cast() As Long", "TraceLong(CLng(3))", "Return number", "End Operator", ""];
+        const source = lines.join("\n");
+        fs.writeFileSync(headerPath, header);
+        fs.writeFileSync(context.document.uri.fsPath, source);
+        context.values["analysis.projectContexts"] = [{ name: "normal", modules: ["caller.bas"] },
+            { name: "alternate", modules: ["caller.bas"], arguments: ["-d", "ALTERNATE"] }];
+        for (const name of ["normal", "alternate"]) {
+            context.values["analysis.activeContext"] = { name, module: "caller.bas" };
+            for (const [kind, line, target, site] of [["constructor", name === "normal" ? 4 : 2, "TraceLong", 6],
+                ["destructor", 9, name === "normal" ? "TraceLong" : "TraceDouble", name === "normal" ? 13 : 11],
+                ["operator", 16, "TraceLong", 17]]) {
+                const origin = kind === "operator" ? { filePath: context.document.uri.fsPath,
+                    kind: "procedure-definition", startLine: line + 1, startColumn: 0 } : null;
+                const character = kind === "operator" ? 1 : lines[line].indexOf("CallOwner") + 1;
+                const outgoing = await context.project.outgoingCalls(context.document, { line, character }, null, kind, origin);
+                assert.deepEqual(outgoing?.map((entry) => [entry.name, entry.uri.fsPath, entry.fromRanges.map((range) => range.line)]),
+                    [[target, headerPath, [site]]], `${kind}/${name}: native caller identity must exclude inactive calls and address-taking`);
+            }
+        }
+        const headerDocument = { languageId: "freebasic", uri: context.service.vscode.Uri.file(headerPath), getText: () => header };
+        context.service.vscode.workspace.textDocuments.push(headerDocument);
+        for (const [kind, line] of [["constructor", 4], ["destructor", 5]]) {
+            assert.equal(await context.project.outgoingCalls(headerDocument, { line, character: 9 }, null, kind), null,
+                "a prototype must not receive outgoing ranges from its implementation file");
+        }
+        assert.equal(fs.readFileSync(headerPath, "utf8"), header);
+        assert.equal(fs.readFileSync(context.document.uri.fsPath, "utf8"), source);
+    });
+});
+
+test("native lifetime incoming uses statement ownership and refuses ambiguous ranges", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+        const source = fs.readFileSync(path.join(__dirname, "fixtures/destructor-hierarchy.bas"), "utf8");
+        fs.writeFileSync(context.document.uri.fsPath, source);
+        context.values["analysis.projectContexts"] = [];
+        const point = { line: 22, character: 1 };
+        const incoming = () => context.project.incomingCalls(context.document, point, null, null, "destructor");
+        const calls = await incoming();
+        assert.deepEqual(calls?.map((entry) => [entry.name, entry.fromRanges.map((range) => range.line)]),
+            [["ReleaseOne", [28]], ["LeaveScope", [32]], ["LeaveEarly", [36, 37]], ["caller.bas", [58]]],
+        "temporary, scope-exit and local cleanup belong to the native caller, not the receipt's object owner");
+        const rangeKey = (range) => `${range.line}:${range.startColumn}:${range.endLine ?? range.line}:${range.endColumn}`;
+        for (const caller of calls) {
+            const outgoing = caller.declaration.type === "module" ? await context.project.moduleOutgoingCalls(context.document)
+                : await context.project.outgoingCalls(context.document, { line: caller.declaration.line, character: caller.declaration.startColumn });
+            assert.ok(Array.isArray(outgoing), `${caller.name}: native implicit outgoing calls must be available`);
+            const cleanup = outgoing.filter((entry) => entry.declaration.type === "destructor");
+            assert.equal(cleanup.length, 1, "unrelated cleanup must not enter the selected caller");
+            assert.deepEqual(cleanup[0].fromRanges.map(rangeKey).sort(), caller.fromRanges.map(rangeKey).sort(),
+                "native incoming/outgoing lifetime edges must agree on their physical ranges");
+            const construction = outgoing.filter((entry) => entry.declaration.type === "constructor");
+            assert.equal(construction.length, 1, "native outgoing calls must retain initialization and temporary construction");
+            assert.equal(new Set(construction[0].fromRanges.map(rangeKey)).size, construction[0].fromRanges.length,
+                "ordinary and implicit receipts for one construction must not duplicate its physical range");
+        }
+        if (stock) for (const mode of ["unmapped", "conflicting", "missing"]) {
+            context.project.analyze = async (options) => {
+                const analysis = await analyzeSavedModule(options);
+                assert.ok(analysis.semanticCallStatements?.length);
+                const statement = analysis.semanticCallStatements.find((entry) =>
+                    entry.filePath === context.document.uri.fsPath && entry.startLine === 33);
+                assert.ok(statement?.mapped);
+                if (mode === "missing") delete analysis.semanticCallStatements;
+                else if (mode === "unmapped") statement.mapped = false;
+                else analysis.semanticCallStatements.push({ ...statement, caller: 0 });
+                return analysis;
+            };
+            if (mode === "missing") await assert.rejects(incoming(), /could not be mapped/);
+            else assert.equal(await incoming(), null, `${mode}: an incomplete native graph must not return a partial tree`);
+        }
+        assert.equal(fs.readFileSync(context.document.uri.fsPath, "utf8"), source);
+    });
+});
+
+test("project incoming calls separate namespace functions and property accessors", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const stock of [false, true]) await t.test(stock ? "stock" : "bridge", async (t) => {
+        const context = fixture(t);
+        if (stock) { context.values["analysis.compilerPath"] = ""; context.values["compiler.path"] = process.env.FBC_EXECUTABLE; }
+        const headerPath = path.join(context.root, "api.bi"), otherPath = path.join(context.root, "other.bas");
+        const implementationPath = path.join(context.root, "implementation.bas");
+        const header = ['Namespace CallApi', 'Declare Function ReadValue() As Long', 'End Namespace', 'Type Meter', 'number As Long',
+            'Declare Property Value() As Long', 'Declare Property Value(ByVal amount As Long)', 'End Type', ''].join('\n');
+        const caller = '#include "api.bi"\nDim item As Meter\nPrint CallApi.ReadValue(), item.Value\nitem.Value = 1\n';
+        const other = '#include "api.bi"\nNamespace Client\nSub Collect(ByRef item As Meter)\nPrint CallApi.ReadValue()\nPrint item.Value\nitem.Value = 2\nEnd Sub\nEnd Namespace\n';
+        const implementation = '#include "api.bi"\nFunction CallApi.ReadValue() As Long\nReturn 1\nEnd Function\n' +
+            'Property Meter.Value() As Long\nReturn number\nEnd Property\nProperty Meter.Value(ByVal amount As Long)\nnumber = amount\nEnd Property\n';
+        const sources = [[headerPath, header], [otherPath, other], [implementationPath, implementation], [context.document.uri.fsPath, caller]];
+        for (const [file, text] of sources) fs.writeFileSync(file, text);
+        context.values["analysis.projectContexts"] = [{ name: "calls", modules: ["caller.bas", "other.bas", "implementation.bas"] }];
+        context.values["analysis.activeContext"] = { name: "calls", module: "caller.bas" };
+        for (const [line, name, remoteLine] of [[2, "ReadValue", 3], [2, "Value", 4], [3, "Value", 5]]) {
+            const column = caller.split('\n')[line].lastIndexOf(name) + 1;
+            const calls = await context.project.incomingCalls(context.document, { line, character: column });
+            assert.ok(Array.isArray(calls), `${name}: native project callers must be available`);
+            assert.deepEqual(calls.map((entry) => [entry.uri.fsPath, entry.fromRanges.map((site) => site.line)]),
+                [[context.document.uri.fsPath, [line]], [otherPath, [remoteLine]]], "getter and setter calls must not become one property family");
+            const remote = calls.find((entry) => entry.uri.fsPath === otherPath);
+            assert.equal(remote.callableKind, "function", "a namespace-owned Sub is not a UDT method");
+        }
+        const otherDocument = { languageId: "freebasic", uri: context.service.vscode.Uri.file(otherPath), getText: () => other };
+        const outgoing = await context.project.outgoingCalls(otherDocument, { line: 2, character: 5 });
+        assert.deepEqual(outgoing?.map((entry) => [entry.uri.fsPath, entry.declaration.line, entry.fromRanges.map((site) => site.line)])
+            .sort((first, second) => first[1] - second[1]), [[headerPath, 1, [3]], [headerPath, 5, [4]], [headerPath, 6, [5]]],
+        "outgoing callee identities keep namespace functions and property accessors separate");
+        for (const [file, text] of sources) assert.equal(fs.readFileSync(file, "utf8"), text);
+    });
+});
+
+test("project incoming collector requires unambiguous native caller anchors", () => {
+    const uri = { scheme: "file", fsPath: "/project/api.bi" };
+    const caller = { name: "Caller", uri: { scheme: "file", fsPath: "/project/caller.bas" },
+        declaration: { type: "sub", line: 0, startColumn: 4, endColumn: 10 } };
+    const call = { id: 7, kind: "reference", name: "Target", caller, physical: { uri: caller.uri,
+        occurrence: { name: "Target", line: 1, startColumn: 0, endColumn: 6, offset: 20, end: 26 } } };
+    const unit = { declarations: [{ name: "Target", uri, compilerSymbolId: 7, declaration: { line: 0, endColumn: 6 } }], bindings: [call] };
+    const collect = () => collectProjectReferences([unit], "/project/api.bi:0:0", "Target", false,
+        (value) => value, () => {}, { incomingCalls: true });
+    assert.equal(collect()[0].caller, caller);
+    call.caller = null;
+    assert.equal(collect(), null, "a selected call with unprojectable ownership must not produce a partial tree");
+    call.caller = caller;
+    unit.bindings.push({ ...call, caller: { ...caller, name: "DifferentCaller" } });
+    assert.equal(collect(), null, "conflicting owners at one physical site are not merged");
+});
+
+test("project outgoing collector requires unambiguous native callee anchors", () => {
+    const uri = { scheme: "file", fsPath: "/project/caller.bas" };
+    const callee = { name: "Target", uri: { scheme: "file", fsPath: "/project/api.bi" },
+        declaration: { type: "sub", line: 0, startColumn: 12, endColumn: 18 } };
+    const binding = { id: 7, kind: "reference", name: "Target", callee, physical: { uri,
+        occurrence: { name: "Target", line: 1, startColumn: 0, endColumn: 6, offset: 20, end: 26 } } };
+    const unit = { declarations: [{ name: "Caller", uri, compilerSymbolId: 7, declaration: { line: 0, endColumn: 6 } }], bindings: [binding] };
+    const collect = () => collectProjectReferences([unit], "/project/caller.bas:0:0", "Caller", false,
+        (value) => value, () => {}, { outgoingCalls: true });
+    assert.equal(collect()[0].callee, callee);
+    binding.callee = null;
+    assert.equal(collect(), null);
+    binding.callee = callee;
+    unit.bindings.push({ ...binding, callee: { ...callee, name: "DifferentTarget" } });
+    assert.equal(collect(), null, "conflicting targets at one physical call site must not be collapsed");
+    unit.bindings[1].implicitCall = true;
+    assert.deepEqual(collect().map((entry) => entry.callee.name), ["Target", "DifferentTarget"],
+        "compiler-proven implicit calls can share a physical span with another callee");
+    unit.bindings.push({ ...binding, implicitCall: true });
+    assert.equal(collect().length, 2, "ordinary and implicit evidence of the same callee is deduplicated");
+    unit.bindings.push({ ...binding, callee: { ...callee, name: "DifferentTarget" } });
+    assert.equal(collect(), null, "implicit evidence must not weaken ordinary CALL target conflict checks");
+});
+
+test("project subtype collector keeps one level and rejects unanchored direct children", () => {
+    const uri = { scheme: "file", fsPath: "/project/types.bi" };
+    const unit = { declarations: [1, 2, 3, 4].map((id) => ({ uri, name: `Type${id}`, compilerSymbolId: id,
+        declaration: { line: id, endColumn: 5 } })),
+    bindings: [1, 2, 3, 4].map((id) => ({ id, kind: "declaration", name: `Type${id}`,
+        physical: { uri, occurrence: { name: `Type${id}`, line: id, startColumn: 0, endColumn: 5, offset: id * 10, end: id * 10 + 5 } } })),
+    inheritance: [{ id: 2, base: 1 }, { id: 3, base: 1 }, { id: 4, base: 2 }] };
+    const collect = (id, transitive = false) => collectProjectReferences([unit], `/project/types.bi:${id}:0`, `Type${id}`, true,
+        (data) => data, () => {}, { declarationsOnly: true, typeHierarchy: transitive ? "transitive" : "direct" });
+    assert.deepEqual(collect(1).map((entry) => entry.name), ["Type2", "Type3"]);
+    assert.deepEqual(collect(2).map((entry) => entry.name), ["Type4"]);
+    assert.deepEqual(collect(4), []);
+    assert.deepEqual(collect(1, true).map((entry) => entry.name), ["Type2", "Type3", "Type4"]);
+    unit.inheritance.push({ id: 99, base: 2 });
+    assert.deepEqual(collect(1).map((entry) => entry.name), ["Type2", "Type3"], "an unanchored grandchild does not erase a complete first level");
+    assert.equal(collect(2), null, "an unanchored direct child makes this level incomplete");
+    assert.equal(collect(1, true), null, "transitive implementations must not silently omit an unanchored descendant");
+});
+
+test("project implementation collector is directional and rejects unanchored descendants", () => {
+    const uri = { scheme: "file", fsPath: "/project/types.bi" };
+    const unit = { declarations: [1, 2, 3, 4].map((id) => ({ uri, name: "Pick", compilerSymbolId: id,
+        declaration: { line: id, endColumn: 4 } })),
+    bindings: [1, 2, 3, 4].map((id) => ({ id, kind: "declaration", name: "Pick", generatedParts: null,
+        physical: { uri: { scheme: "file", fsPath: "/project/bodies.bas" }, occurrence: {
+            name: "Pick", line: id, startColumn: 0, endColumn: 4, offset: id * 10, end: id * 10 + 4
+        } } })), dispatch: [{ id: 2, overridden: 1 }, { id: 3, overridden: 1 }, { id: 4, overridden: 2 }] };
+    const collect = (id, includeOverrides = true) => collectProjectReferences([unit], `/project/types.bi:${id}:0`, "Pick", true,
+        (data) => data, () => {}, { declarationsOnly: true, includeOverrides });
+    assert.deepEqual(collect(2).map((entry) => entry.occurrence.line), [2, 4]);
+    assert.deepEqual(collect(1, false).map((entry) => entry.occurrence.line), [1], "ordinary queries must not join dispatch families");
+    unit.dispatch.push({ id: 99, overridden: 3 });
+    assert.equal(collect(1), null, "a reachable native override without a physical anchor makes the project result incomplete");
+    assert.deepEqual(collect(2).map((entry) => entry.occurrence.line), [2, 4], "an unrelated incomplete branch does not erase a derived subtree");
+});
+
+test("read-only project references preserve multiline occurrences and reject reversed spans", () => {
+    const uri = { scheme: "file", fsPath: "/project/header.bi" };
+    const entry = { uri, name: "Constructor", compilerSymbolId: 7, declaration: { line: 1, endColumn: 15 } };
+    const occurrence = { line: 4, startColumn: 20, endLine: 5, endColumn: 2, offset: 100, end: 110 };
+    const unit = { declarations: [entry], bindings: [{ id: 7, kind: "reference", name: "", physical: {
+        uri: { scheme: "file", fsPath: "/project/caller.bas" }, occurrence
+    } }] };
+    const collect = () => collectProjectReferences([unit], "/project/header.bi:1:4", "Constructor", false,
+        (value) => value, () => {});
+    assert.deepEqual(collect()?.[0].occurrence, { line: 4, startColumn: 20, endLine: 5, endColumn: 2 });
+    const conflicting = { declarations: [{ ...entry, compilerSymbolId: 9, declaration: { line: 2, endColumn: 15 } }],
+        bindings: [{ ...unit.bindings[0], id: 9 }] };
+    assert.equal(collectProjectReferences([unit, conflicting], "/project/header.bi:1:4", "Constructor", false,
+        (value) => value, () => {}), null, "one physical call cannot select unrelated constructor families across builds");
+    occurrence.endLine = 3;
+    assert.equal(collect(), null, "reversed multiline spans must fail closed");
+});
+
+test("native macro reporting anchors remain confined to read-only project references", (t) => {
+    const context = fixture(t), headerPath = path.join(context.root, "api.bi");
+    const callerPath = context.document.uri.fsPath, source = context.sources["caller.bas"];
+    const occurrence = { name: "AdjustValue", line: 1, startColumn: 6, endColumn: 17,
+        offset: source.indexOf("AdjustValue"), end: source.indexOf("AdjustValue") + "AdjustValue".length };
+    for (const [option, marker] of [["operatorReferences", "nativeMemoryMacroReference"],
+        ["procedureReferences", "nativeMacroProcedureReference"]]) {
+        const unit = {
+            symbols: [], procedureIds: new Map(), dispatch: [], preprocessorReferences: [],
+            nonRenameableProcedures: [], nonRenameableSymbols: [],
+            declarations: [7, 9].map((id, line) => ({ compilerSymbolId: id, name: "operator",
+                uri: { scheme: "file", fsPath: headerPath }, declaration: { line, endColumn: 12 } })),
+            bindings: [7, 9].map((id) => ({ id, kind: "reference", name: "", [marker]: true,
+                physical: { uri: { scheme: "file", fsPath: callerPath }, occurrence } }))
+        };
+        const collect = (enabled, line = 0) => collectProjectReferences([unit], `${headerPath}:${line}:4`, "operator", false,
+            (value) => value, () => {}, { [option]: enabled });
+        assert.equal(collect(false), null, "ordinary references retain one-family-per-spelling checks");
+        for (const line of [0, 1]) assert.equal(collect(true, line)?.length, 1,
+            "each compiler-proven target can report the same macro invocation exactly once");
+        unit.bindings[1][marker] = false;
+        assert.equal(collect(true), null, "one native anchor must not bless an unproven competing family");
+        unit.bindings[1][marker] = true;
+        assert.throws(() => collectProjectEdits([unit], `${headerPath}:0:4`, "operator", "changed",
+            new Map([[callerPath, source]]), context.root, (value) => value, () => {}), /binds to different declarations/,
+            "reporting-anchor metadata must never relax rename's editable-token checks");
+    }
 });
 
 test("project references preserve the compiler-selected overload across modules", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
@@ -745,6 +1947,49 @@ test("real project rename joins shared prototypes and validates all configuratio
     assert.equal(new Set(edit.edits.map((entry) => path.basename(entry.uri.fsPath))).size, 3);
     assert.ok(edit.edits.every((entry) => entry.newText === "ScaleValue"));
     for (const [name, text] of Object.entries(context.sources)) assert.equal(fs.readFileSync(path.join(context.root, name), "utf8"), text);
+});
+
+test("project TLS references and rename retain shared identity across build contexts", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
+    const context = fixture(t);
+    const sources = {
+        "api.bi": ["#ifdef ALTERNATE", "Type TlsNumber As Double", "#else", "Type TlsNumber As Long", "#endif",
+            "Thread Local Extern tlsState As TlsNumber", ""].join("\n"),
+        "implementation.bas": ['#include "api.bi"', "Thread Local Dim Shared tlsState As TlsNumber = 7",
+            "Sub TouchTlsState()", "    tlsState += 1", "End Sub", ""].join("\n"),
+        "caller.bas": '#include "api.bi"\nPrint tlsState\n'
+    };
+    for (const [name, text] of Object.entries(sources)) fs.writeFileSync(path.join(context.root, name), text);
+    const position = { line: 1, character: "Print t".length };
+    const references = await context.project.references(context.document, position, true);
+    assert.equal(references.length, 4, "extern, definition and both uses must share one TLS identity");
+    assert.equal(new Set(references.map((entry) => path.basename(entry.uri.fsPath))).size, 3);
+    const edit = await context.project.rename(context.document, position, "renamedTlsState");
+    assert.equal(edit.edits.length, 4);
+    assert.ok(edit.edits.every((entry) => entry.newText === "renamedTlsState"));
+    for (const [name, text] of Object.entries(sources)) assert.equal(fs.readFileSync(path.join(context.root, name), "utf8"), text,
+        "compiler validation must not save the proposed TLS rename");
+});
+
+test("current bridge validates project rename across signed and unsigned 128-bit builds", {
+    skip: !process.env.FBC_INTEGER128_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    const context = fixture(t);
+    const sources = {
+        "api.bi": ["#ifdef ALTERNATE", "Type WideNumber As UInteger<128>", "#else", "Type WideNumber As Integer<128>",
+            "#endif", "Declare Function WideIncrement(ByVal value As WideNumber) As WideNumber", ""].join("\n"),
+        "implementation.bas": ['#include "api.bi"', "Function WideIncrement(ByVal value As WideNumber) As WideNumber",
+            "    Return value + 1", "End Function", ""].join("\n"),
+        "caller.bas": '#include "api.bi"\nDim result As WideNumber = WideIncrement(1)\nPrint SizeOf(result)\n'
+    };
+    for (const [name, text] of Object.entries(sources)) fs.writeFileSync(path.join(context.root, name), text);
+    const line = sources["caller.bas"].split("\n")[1];
+    const edit = await context.project.rename(context.document,
+        { line: 1, character: line.indexOf("WideIncrement") + 1 }, "WideAdvance");
+    assert.equal(edit.edits.length, 3);
+    assert.equal(new Set(edit.edits.map((entry) => path.basename(entry.uri.fsPath))).size, 3);
+    assert.ok(edit.edits.every((entry) => entry.newText === "WideAdvance"));
+    for (const [name, text] of Object.entries(sources)) assert.equal(fs.readFileSync(path.join(context.root, name), "utf8"), text,
+        "both native 128-bit build contexts must validate without saving the proposed rename");
 });
 
 test("project type rename preserves constructor relationships across twelve target ABI profiles", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
@@ -3432,6 +4677,26 @@ test("worker rename rejects editor and context changes before publishing its pre
         worker.project = async (options) => { const reply = await project(options); change(); return reply; };
         await assert.rejects(context.project.rename(context.document, { line: 1, character: 8 }, "ScaleValue"), /changed|cancelled/);
         assert.equal(worker.projects.size, 0);
+    }
+});
+
+test("worker publication ignores an unrelated closure but rejects a consumed buffer closing", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {
+    for (const consumed of [false, true]) {
+        const context = fixture(t);
+        const unusedPath = path.join(context.root, "unused.bi");
+        fs.writeFileSync(unusedPath, "' unrelated saved buffer\n");
+        const unused = { uri: context.service.vscode.Uri.file(unusedPath), getText: () => "' unrelated saved buffer\n" };
+        context.service.vscode.workspace.textDocuments.push(unused);
+        const worker = context.service.analysisWorker;
+        const verify = worker.verifyProject.bind(worker);
+        worker.verifyProject = async (...args) => {
+            const result = await verify(...args);
+            context.service.vscode.workspace.textDocuments = consumed ? [unused] : [context.document];
+            return result;
+        };
+        const pending = context.project.rename(context.document, { line: 1, character: 8 }, "ScaleValue");
+        if (consumed) await assert.rejects(pending, /buffers changed/);
+        else assert.equal((await pending).edits.length, 3);
     }
 });
 

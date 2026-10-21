@@ -26,6 +26,7 @@ const assert = require("node:assert/strict");
 
 const { createDocumentFormattingProvider, createDocumentRangeFormattingProvider } = require("../lib/editor-features");
 const { formatFreeBasicIndentation } = require("../lib/freebasic-formatter");
+const { parseFreeBasicText } = require("../lib/freebasic-parser");
 
 function applyIndentationEdits(text, edits) {
     const lines = text.split(/\r\n|\n|\r/);
@@ -34,6 +35,50 @@ function applyIndentationEdits(text, edits) {
     }
     return lines.join(text.match(/\r\n|\n|\r/)?.[0] || "\n");
 }
+
+test("formatter uses native escaped-string context for code and following comments", () => {
+    const source = String.raw`Sub Main()
+Print "inside \" /' still quoted"
+' keep comment
+If 1 Then
+Print 1
+End If
+End Sub
+`;
+    const escapes = [{ start: 0, end: source.length }];
+    const parsed = parseFreeBasicText(source, null, escapes);
+    const expected = source.split("\n");
+    for (const line of [1, 2, 3, 5]) expected[line] = "    " + expected[line];
+    expected[4] = "        " + expected[4];
+    assert.equal(applyIndentationEdits(source, formatFreeBasicIndentation(source, parsed)), expected.join("\n"));
+});
+
+test("formatter uses native REM line policy when the option originates outside the file", () => {
+    const source = "Sub Main()\nIf 1 Then\nRem = 1 : End If\nPrint 2\nEnd Sub\n";
+    const lexical = { remKeywordDisabledLineOffsets: [source.indexOf("Rem")], remIdentifierOffsets: [], defaultEscapedStringRanges: [] };
+    const expected = "Sub Main()\n    If 1 Then\nRem = 1 : End If\n    Print 2\nEnd Sub\n";
+    assert.equal(applyIndentationEdits(source, formatFreeBasicIndentation(source, parseFreeBasicText(source), {}, [], lexical)), expected);
+    assert.deepEqual(formatFreeBasicIndentation(expected), [], "missing native REM facts must not make repeat formatting undo the correct result");
+});
+
+test("formatter leaves compiler-inactive text unchanged and ignores its block structure", () => {
+    const source = ["Sub Main()", "#if 0", "  End Sub", " If ignored Then ' \u{1f600}", "#endif", "If 1 Then", "Print 1", "End If", "End Sub", ""].join("\r\n");
+    const inactive = { start: source.indexOf("  End Sub"), end: source.indexOf("#endif") };
+    const expected = ["Sub Main()", "    #if 0", "  End Sub", " If ignored Then ' \u{1f600}", "    #endif", "    If 1 Then", "        Print 1", "    End If", "End Sub", ""].join("\r\n");
+    const edits = formatFreeBasicIndentation(source, null, {}, [inactive, inactive]);
+    assert.equal(applyIndentationEdits(source, edits), expected);
+    assert.equal(edits.some((edit) => edit.line === 2 || edit.line === 3), false);
+    assert.deepEqual(formatFreeBasicIndentation(expected), [],
+        "without current branch facts a repeat format must not guess across conditional block boundaries");
+});
+
+test("formatter bounds inactive masks and rejects partial-line exclusions", () => {
+    const source = "Sub Main()\nPrint 1\nEnd Sub\n";
+    const partial = { start: source.indexOf("Print") + 1, end: source.indexOf("End Sub") };
+    assert.deepEqual(formatFreeBasicIndentation(source, null, {}, [partial, null, { start: -1, end: source.length }]),
+        formatFreeBasicIndentation(source));
+    assert.deepEqual(formatFreeBasicIndentation(source, null, {}, Array(5001).fill({ start: 0, end: source.length })), []);
+});
 
 test("formatter indents nested blocks and aligns alternate branches", () => {
     const source = [
@@ -113,7 +158,7 @@ test("formatter does not change blank or already formatted lines", () => {
     assert.deepEqual(formatFreeBasicIndentation(deepNesting), []);
 });
 
-test("document formatter maps indentation changes to VS Code edits", () => {
+test("document formatter maps indentation changes to VS Code edits", async () => {
     class Range {
         constructor(startLine, startCharacter, endLine, endCharacter) {
             this.start = { line: startLine, character: startCharacter };
@@ -123,19 +168,20 @@ test("document formatter maps indentation changes to VS Code edits", () => {
     const text = "Sub Main()\nPrint 1\nEnd Sub\n";
     const document = { getText: () => text };
     const provider = createDocumentFormattingProvider({
+        workspace: { isTrusted: true },
         Range,
         TextEdit: { replace: (range, newText) => ({ range, newText }) }
     }, {
         getParsedDocument: () => require("../lib/freebasic-parser").parseFreeBasicText(text)
     });
 
-    const edits = provider.provideDocumentFormattingEdits(document, { tabSize: 2, insertSpaces: true });
+    const edits = await provider.provideDocumentFormattingEdits(document, { tabSize: 2, insertSpaces: true });
     assert.equal(edits.length, 1);
     assert.deepEqual(edits[0].range, new Range(1, 0, 1, 0));
     assert.equal(edits[0].newText, "  ");
 });
 
-test("selection formatter returns edits only for selected lines", () => {
+test("selection formatter returns edits only for selected lines", async () => {
     class Range {
         constructor(startLine, startCharacter, endLine, endCharacter) {
             this.start = { line: startLine, character: startCharacter };
@@ -145,13 +191,14 @@ test("selection formatter returns edits only for selected lines", () => {
     const text = "Sub Main()\nPrint 1\nIf ready Then\nPrint 2\nEnd If\nPrint 3\nEnd Sub\n";
     const document = { getText: () => text };
     const provider = createDocumentRangeFormattingProvider({
+        workspace: { isTrusted: true },
         Range,
         TextEdit: { replace: (range, newText) => ({ range, newText }) }
     }, {
         getParsedDocument: () => require("../lib/freebasic-parser").parseFreeBasicText(text)
     });
 
-    const edits = provider.provideDocumentRangeFormattingEdits(
+    const edits = await provider.provideDocumentRangeFormattingEdits(
         document,
         new Range(2, 0, 5, 0),
         { tabSize: 2, insertSpaces: true }

@@ -940,6 +940,18 @@ test("positioned recovery retains expressions ending before the compiler error t
     assert.deepEqual(analysis.invalidLines, [2]);
 });
 
+test("unevaluated query ranges require protocol 15 and validated expanded coordinates", () => {
+    const file = path.resolve("unevaluated-range.bas");
+    const lines = ["''@fb-editor-protocol 15", marker2(file, 1, 0), "Factory()",
+        "''@fb-editor-unevaluated 1 0 1 9", "''@fb-editor-end 0 1"];
+    const result = decodePreprocessed(lines.join("\n"), process.cwd());
+    assert.equal(result.protocolVersion, 15);
+    assert.deepEqual(result.unevaluatedRanges.map((range) => [range.start.character, range.end.character]), [[0, 9]]);
+    assert.throws(() => decodePreprocessed(lines.join("\n").replace("protocol 15", "protocol 14"), process.cwd()), /protocol 15/);
+    assert.throws(() => decodePreprocessed(lines.join("\n").replace("1 0 1 9", "1 9 1 0"), process.cwd()), /unevaluated range/);
+    assert.throws(() => decodePreprocessed(lines.join("\n").replace("1 0 1 9", "2 0 2 9"), process.cwd()), /missing output line/);
+});
+
 test("native symbol graph validates edges, aliases, classes, and token positions", () => {
     const file = path.resolve("graph.bas");
     const name = Buffer.from("value").toString("hex");
@@ -1346,8 +1358,11 @@ test("native expression ranges support compiler-backed Expand Selection", { skip
     ]), [
         [2, 10, 2, 11],
         [2, 10, 2, 15],
-        [2, 6, 2, 15]
+        [2, 6, 2, 15],
+        [0, 0, 3, 7]
     ]);
+    assert.equal(results[0].at(-1).kind, "block",
+        "native expression selection should expand into its compiler-owned procedure");
 });
 
 test("native hover retains a resolved header declaration's qualified name and physical source", { skip: !process.env.FBC_EDITOR_EXECUTABLE }, async (t) => {

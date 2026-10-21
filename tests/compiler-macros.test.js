@@ -70,7 +70,11 @@ test("macro projection distinguishes contiguous copies from constructed and tran
         { id: 12, kind: "source", length: 1, sourceStart: 20, sourceEnd: 24, filePath: "two.bas" },
         { id: 13, kind: "concat", length: 4, first: 1, second: 12 },
         { id: 14, kind: "source", length: 2, sourceStart: 20, sourceEnd: 25, filePath: "two.bas" },
-        { id: 15, kind: "slice", length: 1, first: 14, offset: 1 }
+        { id: 15, kind: "slice", length: 1, first: 14, offset: 1 },
+        { id: 16, kind: "definition", length: 3, first: 1 },
+        { id: 17, kind: "argument", length: 3, first: 16 },
+        { id: 18, kind: "argument", length: 2, first: 2 },
+        { id: 19, kind: "concat", length: 5, first: 16, second: 18 }
     ];
     const project = createMacroProjector({ nodes });
     assert.deepEqual(project(3), { filePath: "one.bas", sourceStart: 5, sourceEnd: 10 });
@@ -78,6 +82,10 @@ test("macro projection distinguishes contiguous copies from constructed and tran
     assert.deepEqual(project(12), { filePath: "two.bas", sourceStart: 20, sourceEnd: 24 });
     for (const id of [0, 8, 9, 10, 11, 13, 15]) assert.equal(project(id), null);
     assert.deepEqual(project(6), project(6), "Cached projection must preserve its physical span");
+    const withRole = createMacroProjector({ nodes }, true);
+    assert.equal(withRole(6).role, "argument", "a forwarded parameter still belongs to its argument source");
+    assert.equal(withRole(17).role, "definition", "a macro expanded inside an argument still owns its replacement text");
+    assert.equal(withRole(19).role, "mixed", "a mixed physical span cannot claim one macro source role");
 });
 
 test("macro part projection separates one argument from fixed token-paste text", () => {
@@ -323,7 +331,7 @@ test("unfinished conditional directives use the compiler environment after an in
         const text = ("#include once \"compiler-defines.bi\"\n#if defined(\nPrint 1\n#endif\n").replace(/\n/g, newline);
         const analysis = await analyzeSavedModule({ compilerPath: process.env.FBC_EDITOR_EXECUTABLE, filePath, overlays: new Map([[filePath, bom + text]]), allowErrors: true });
         assert.deepEqual(analysis.completion, { errorCount: 1, reachedEnd: true });
-        assert.equal(analysis.protocolVersion, 14);
+        assert.equal(analysis.protocolVersion, 15);
         assert.equal(analysis.preprocessorGraph.contexts.length, 1);
         const sourceUri = uri(filePath);
         const headerUri = uri(headerPath);
