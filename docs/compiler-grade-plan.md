@@ -52,6 +52,34 @@ missing native support is unfinished work, not a completion condition.
 
 ## Current state
 
+### Native procedure source references checkpoint
+
+Project Find References now joins compiler-selected procedure bindings with
+native symbol-reference macro origins. Fixed, nested, pasted and object-like
+expansions retain their own overload selections, including TYPEOF operands and
+function addresses. The physical macro reporting locations can be shared by
+several independently proven callees; ordinary ambiguity and rename checks
+remain strict. Full macro provenance is requested only for explicit procedure
+reference reads, not ordinary editor snapshots or declaration-only navigation.
+
+Optional binding metadata preserves native ordinals without promoting logical
+B ranges into editable tokens. Mapped LOC records recover #LINE bindings, and
+accepted result-assignment records retain a written function-result name only
+inside its compiler-owned statement. Runtime Call Hierarchy uses the correct
+binding-index join and the same physical macro projection, while excluding
+TYPEOF operands, addresses and result assignments from callers. Generated
+declarations without a physical sidecar family anchor retain the captured
+bridge-native family; the fallback does not run the compiler again.
+
+Validation passes: seven native project checks across normal FBC and the bridge,
+130 compiler-analysis checks, 52 compiler-independent decoder checks (115 native
+checks skipped), and the collector's ordinary-ambiguity/rename controls. One
+installed check passes on each of VS Code 1.85 and 1.141, including cold prototype
+requests, closed callers and an unsaved header edit moving macro uses between
+overloads. The broader compiler-grade acceptance audit and full corpus/stress
+matrices remain open. Compiler sources/schema, production deadlines and package
+version are unchanged; the VSIX remains 1.20.5.
+
 ### Native allocation/deallocation references checkpoint
 
 Find References now consumes the existing binary model's counted

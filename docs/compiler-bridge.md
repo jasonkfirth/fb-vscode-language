@@ -1307,6 +1307,23 @@ root/include presentation index, while native receipts still choose identities.
 Configured bridge index references share binding-backed index selection with
 stock FBC; ordinary native navigation and non-project paths are unchanged.
 
+Named-procedure project references use native B declarations and symbol MR
+reference origins for source uses without an editable callee. This includes
+unevaluated operands and function addresses, not just surviving runtime CALLs.
+Mapped macro-attempt invocation LOC records take priority over logical MI/ME
+coordinates after #LINE. Native binding ordinals are retained separately from
+the compact reader's physical-binding indexes; the CALL-to-B join must not use
+one as the other. Logical bindings can contribute read-only mapped locations
+without changing their editable flag. Named function-result assignments use
+accepted result inputs and statement ownership, with source spelling verified
+only inside that proven statement.
+
+Generated procedure declarations can lack a physical sidecar family anchor.
+When that selected family cannot be joined, bridge reads reconstruct the
+existing trace-native family from captured pass data. No extra compiler pass
+or relaxed rename rule is introduced. Full macro provenance is limited to
+explicit procedure reference reads; normal editor snapshots remain compact.
+
 Operator navigation can also fill a missing native declaration/body role from
 other configured modules. It uses a declaration-only operator unit, skipping
 operation/expression collection and the reference pass's expression-export

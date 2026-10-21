@@ -27,6 +27,8 @@ const { resolveFreeBasicRoot } = require("../tools/audit-freebasic-coverage");
 
 const expandedUri = { scheme: "freebasic-preprocessed", value: "freebasic-preprocessed:/worker-test.bas", path: "/worker-test.bas" };
 const native = { skip: !process.env.FBC_EDITOR_EXECUTABLE };
+/* Large compiler retries can overlap offline source-corpus builds. */
+const LARGE_WORKER_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1000;
 const pointAt = (text, spelling, relative = 0) => {
     const offset = text.indexOf(spelling) + relative;
     assert.ok(offset >= relative, `Missing fixture text: ${spelling}`);
@@ -745,6 +747,49 @@ function setup(t, real = false) {
     const input = { uri: { scheme: "file", fsPath: filePath }, openFiles: [] };
     return { directory, filePath, worker, options, preparation, input };
 }
+
+test("native navigation retains source-remapped identifier bindings", {
+    skip: !process.env.FBC_EXECUTABLE || !process.env.FBC_EDITOR_EXECUTABLE
+}, async (t) => {
+    for (const sidecar of [true, false]) await t.test(sidecar ? "stock" : "bridge", async (t) => {
+        const { worker, filePath, options, preparation, input } = setup(t, true);
+        const text = ["Dim mappingValue As Long",
+            "Declare Function RemappedWork Overload(ByVal value As Long) As Long",
+            "Declare Function RemappedWork Overload(ByVal value As Double) As Double",
+            "Function RemappedWork(ByVal value As Long) As Long", "    Return value", "End Function",
+            "Function RemappedWork(ByVal value As Double) As Double", "    Return value", "End Function",
+            '#Line 700 "logical-only.bas"', "Print mappingValue", "Print RemappedWork(mappingValue)",
+            "Dim afterMapping As Double", "Print afterMapping",
+            "Function AfterWork(ByVal value As Long) As Long", "    Return value", "End Function", "Print AfterWork(mappingValue)",
+            "' mappingValue RemappedWork", 'Print "mappingValue RemappedWork"', ""].join("\n");
+        fs.writeFileSync(filePath, text);
+        const reply = await worker.analyze({ ...options, compilerPath: sidecar ? process.env.FBC_EXECUTABLE : options.compilerPath,
+            semanticModelOnly: sidecar, exportSemanticExpressions: true, exportSemanticBindings: true }, preparation);
+        try {
+            assert.equal(reply.partial, false);
+            for (const [line, name, declaration] of [[10, "mappingValue", 0], [11, "RemappedWork", 3],
+                [13, "afterMapping", 12], [17, "AfterWork", 14]]) {
+                const position = { line, character: text.split("\n")[line].indexOf(name) + 1 };
+                const definitions = (await worker.query(reply.snapshotId, "definition", { ...input, position })).result;
+                assert.deepEqual(definitions.map((entry) => [entry.uri.fsPath, entry.declaration.line]), [[filePath, declaration]],
+                    `${name}: native identities must survive logical source names and line numbers`);
+                const hover = (await worker.query(reply.snapshotId, "hover", { ...input, position })).result;
+                assert.ok(hover.entries.some((entry) => entry.name === name), `${name}: hover must retain the selected native declaration`);
+            }
+            for (const line of [18, 19]) {
+                const position = { line, character: text.split("\n")[line].indexOf("mappingValue") + 1 };
+                assert.deepEqual((await worker.query(reply.snapshotId, "definition", { ...input, position })).result, [],
+                    "source-name lookup must not manufacture bindings in comments or literals");
+            }
+            if (sidecar) {
+                const target = (await worker.query(reply.snapshotId, "target", { ...input,
+                    position: { line: 10, character: "Print ".length + 1 } })).result;
+                assert.deepEqual(target.entries, [], "read-only location recovery must not enable writable project targets");
+            }
+        } finally { worker.releaseModel(reply.snapshotId); }
+        assert.equal(fs.readFileSync(filePath, "utf8"), text);
+    });
+});
 
 for (const sidecar of [true, false]) test(`native folding retains physical active block boundaries (${sidecar ? "sidecar" : "bridge"})`, native, async (t) => {
     const { worker, filePath, directory, options, preparation, input } = setup(t, true);
@@ -3417,6 +3462,28 @@ test("sidecar navigation follows physical bindings omitted by the source token i
     assert.deepEqual(hover.entries.map((entry) => [entry.name, entry.declaration.typeName]),
         [["REM", "integer"]],
     "hover should reuse the compiler binding when the source parser treats the identifier as a comment");
+
+    const recovered = model.semanticBindings.map((binding) => ({ ...binding, physical: false, readOnlyLocation: true }));
+    const recoveredModel = { ...model, semanticBindings: [], semanticReadOnlyBindings: recovered };
+    const input = { uri, position: { line: 4, character: 7 } };
+    assert.deepEqual(queryCompilerModel(recoveredModel, "definition", input, () => {}), [],
+        "a recovered location must not unmask a token hidden as a comment");
+
+    const ordinary = createDocumentModel(uri, parseFreeBasicText(text.replace(/REM/g, "box")));
+    const navigationModel = { ...recoveredModel, sources: new Map([[uri.toString(), ordinary]]),
+        getDocument: () => ordinary, semanticReadOnlyBindings: recovered.map((binding) => ({ ...binding, name: "box" })) };
+    assert.deepEqual(queryCompilerModel(navigationModel, "definition", input, () => {}).map((entry) => entry.declaration.name), ["box"],
+        "a recovered native binding can navigate when its physical source token matches");
+    for (const invalid of [{ name: "different" }, { startColumn: -1 }, { endColumn: 1000 }]) {
+        const invalidModel = { ...navigationModel, semanticReadOnlyBindings: navigationModel.semanticReadOnlyBindings.map((binding) =>
+            binding.role === "reference" ? { ...binding, ...invalid } : binding) };
+        assert.deepEqual(queryCompilerModel(invalidModel, "definition", input, () => {}), [],
+            "a recovered binding must retain exact spelling and in-bounds physical coordinates");
+    }
+    const ambiguousModel = { ...navigationModel, semanticReadOnlyBindings: [...navigationModel.semanticReadOnlyBindings,
+        { ...navigationModel.semanticReadOnlyBindings[1], symbol: 2 }] };
+    assert.deepEqual(queryCompilerModel(ambiguousModel, "definition", input, () => {}), [],
+        "two recovered native identities at the same token must not choose a declaration arbitrarily");
 });
 
 function remoteFixture(t, real = false) {
@@ -11899,7 +11966,7 @@ test("prepared workers retain sidecar expression types when a trace exceeds the 
         overlays: new Map([[filePath, source]]),
         allowErrors: true,
         exportSemanticExpressions: true,
-        timeoutMs: 120000
+        timeoutMs: LARGE_WORKER_ANALYSIS_TIMEOUT_MS
     }, { requestedFile: filePath, expandedUri });
 
     assert.equal(reply.partial, false);

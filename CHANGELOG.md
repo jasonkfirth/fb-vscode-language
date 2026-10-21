@@ -2,6 +2,9 @@
 
 ## 1.20.5
 
+- Find compiler-selected procedure uses through fixed, nested, token-pasted and object-like macros, including `TypeOf`, function addresses and unsaved-header overload changes
+- Recover native binding locations after `#Line`, retain named function-result assignments, and join runtime callers by native binding ordinal without treating source-only uses as calls
+- Preserve generated-procedure bridge families from captured snapshots without another compiler pass
 - Discover standalone Windows compilers at `C:\freebasic\fbc64.exe`, `fbc32.exe`, or `fbc.exe` for diagnostics, analysis, and bundled headers; retain Linux/macOS PATH lookup and add macOS to CI verification
 - Find custom `New`, `New[]`, `Delete` and `Delete[]` references at native macro invocation locations across configured modules, including nested expansions, source-remapped uses and several selected operators sharing one invocation
 - Validate counted source-memory applications and retain default/field initializers and unevaluated uses as read-only references, without fabricating runtime callers or editable macro spellings
@@ -12,7 +15,7 @@
 - Classify compiler-accepted primitive type occurrences as `type.defaultLibrary`, including sized integers, pointer declarations and included headers, without treating aliases, disabled-keyword values or macro spellings as primitives
 - Retain primitive occurrence receipts in compact full models without enabling full macro provenance or adding editor analysis passes; preserve existing type-color fallback scopes and semantic-token modifier indices
 - Retain native macro-generated procedure calls in project Call Hierarchy using counted call-to-macro-origin receipts, selected interfaces and statement ownership; preserve nested expansion, token-pasted callees, overloads and distinct targets at one invocation without fabricating editable references
-- Request full macro provenance for explicit project hierarchy and operator-reference reads, and avoid duplicating hierarchy invocation anchors with narrower bridge argument locations
+- Request full macro provenance for explicit project hierarchy and procedure/operator reference reads, and avoid duplicating hierarchy invocation anchors with narrower bridge argument locations
 - Exclude unevaluated `TypeOf` and `SizeOf` operands from local native Call Hierarchy without dropping their references or types, including nested queries, implicit construction/indexing and repeated macro arguments; rebuild the optional bridge for protocol 15
 - Use current FBC's validated unevaluated-input receipts to remove query-only constructor, cast and index edges from full-sidecar incoming/outgoing hierarchy, preserving evaluated operations and ordinary reference lookup
 - Validate compiler-side rejected-declaration bookkeeping so normal source errors do not add a false semantic-exporter failure; the fix is included in the rebuilt optional editor bridge and the local compiler source

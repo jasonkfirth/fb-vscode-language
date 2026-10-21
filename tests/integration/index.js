@@ -1589,6 +1589,58 @@ async function run() {
             fs.rmSync(directory, { recursive: true, force: true });
         }
     });
+    if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("native navigation retains remapped identifier locations", async () => {
+        const configuration = vscode.workspace.getConfiguration("freebasic");
+        const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run", "analysis.timeoutMs",
+            "compiler.path", "compiler.arguments", "diagnostics.run"];
+        const previous = settings.map((name) => [name, configuration.get(name)]);
+        const directory = fs.mkdtempSync(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, "fb-remapped-navigation-"));
+        const filePath = path.join(directory, "main.bas");
+        const text = ["Dim mappingValue As Long",
+            "Declare Function RemappedWork Overload(ByVal value As Long) As Long",
+            "Declare Function RemappedWork Overload(ByVal value As Double) As Double",
+            "Function RemappedWork(ByVal value As Long) As Long", "    Return value", "End Function",
+            "Function RemappedWork(ByVal value As Double) As Double", "    Return value", "End Function",
+            '#Line 700 "logical-only.bas"', "Print mappingValue", "Print RemappedWork(mappingValue)",
+            "Dim afterMapping As Double", "Print afterMapping",
+            "Function AfterWork(ByVal value As Long) As Long", "    Return value", "End Function", "Print AfterWork(mappingValue)",
+            "' mappingValue RemappedWork", 'Print "mappingValue RemappedWork"', ""].join("\n");
+        try {
+            fs.writeFileSync(filePath, text);
+            for (const [name, value] of [["compiler.path", process.env.FBC_EXECUTABLE], ["compiler.arguments", []],
+                ["analysis.projectContexts", [{ name: "remapped-navigation", modules: [filePath] }]],
+                ["analysis.activeContext", { name: "remapped-navigation", module: filePath }], ["analysis.run", "onDemand"],
+                ["analysis.timeoutMs", 120000], ["diagnostics.run", "off"]]) {
+                await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            }
+            const current = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+            for (const bridge of [false, true]) {
+                await configuration.update("analysis.compilerPath", bridge ? process.env.FBC_EDITOR_EXECUTABLE : "", vscode.ConfigurationTarget.Global);
+                for (const [line, name, declaration] of [[10, "mappingValue", 0], [11, "RemappedWork", 3],
+                    [13, "afterMapping", 12], [17, "AfterWork", 14]]) {
+                    const selected = new vscode.Position(line, current.lineAt(line).text.indexOf(name) + 1);
+                    // Start with a provider request, without warming an analysis command.
+                    const definitions = await vscode.commands.executeCommand("vscode.executeDefinitionProvider", current.uri, selected);
+                    assert.deepEqual(definitions.map((entry) => [entry.uri.fsPath, entry.range.start.line]), [[filePath, declaration]],
+                        `bridge=${bridge}: ${name} must use the selected native declaration in the physical file`);
+                    const hovers = await vscode.commands.executeCommand("vscode.executeHoverProvider", current.uri, selected);
+                    const markdown = hovers.flatMap((hover) => hover.contents.map((content) => content.value)).join("\n");
+                    assert.ok(markdown.includes(name), `bridge=${bridge}: ${name} must retain its native hover`);
+                }
+                for (const line of [18, 19]) {
+                    const selected = new vscode.Position(line, current.lineAt(line).text.indexOf("mappingValue") + 1);
+                    assert.deepEqual(await vscode.commands.executeCommand("vscode.executeDefinitionProvider", current.uri, selected), [],
+                        "source remapping must not manufacture identifiers inside comments or strings");
+                }
+            }
+            assert.equal(current.isDirty, false);
+            assert.equal(fs.readFileSync(filePath, "utf8"), text);
+        } finally {
+            for (const [name, value] of previous) await configuration.update(name, value, vscode.ConfigurationTarget.Global);
+            await vscode.window.showTextDocument(document);
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
     if (process.env.FBC_EXECUTABLE && process.env.FBC_EDITOR_EXECUTABLE) await check("project procedure references retain macro overloads and unsaved header changes", async () => {
         const configuration = vscode.workspace.getConfiguration("freebasic");
         const settings = ["analysis.compilerPath", "analysis.projectContexts", "analysis.activeContext", "analysis.run", "analysis.timeoutMs",
